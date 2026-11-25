@@ -120,7 +120,7 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
     key: 'damageReduction',
     label: '受到傷害',
     min: 1,
-    max: 10,
+    max: 5,
     step: 1,
     unit: '',
     prefix: '-',
@@ -130,9 +130,9 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
   atkPct: {
     key: 'atkPct',
     label: '攻擊力',
-    min: 2,
-    max: 200,
-    step: 2,
+    min: 1,
+    max: 100,
+    step: 1,
     unit: '%',
     prefix: '+',
     weight: 13,
@@ -141,7 +141,7 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
     key: 'critPct',
     label: '暴擊率',
     min: 1,
-    max: 25,
+    max: 12,
     step: 1,
     unit: '%',
     prefix: '+',
@@ -151,7 +151,7 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
     key: 'maxHp',
     label: '血量上限',
     min: 5,
-    max: 200,
+    max: 100,
     step: 5,
     unit: '',
     prefix: '+',
@@ -161,7 +161,7 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
     key: 'goldPct',
     label: '獲得金幣',
     min: 5,
-    max: 100,
+    max: 50,
     step: 5,
     unit: '%',
     prefix: '+',
@@ -171,7 +171,7 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
     key: 'dropRatePct',
     label: '掉寶率',
     min: 1,
-    max: 30,
+    max: 15,
     step: 1,
     unit: '%',
     prefix: '+',
@@ -181,9 +181,9 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
   blockPct: {
     key: 'blockPct',
     label: '格擋率',
-    min: 3,
-    max: 15,
-    step: 3,
+    min: 2,
+    max: 8,
+    step: 2,
     unit: '%',
     prefix: '+',
     weight: 8,
@@ -192,9 +192,9 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
   eliteBossDmgPct: {
     key: 'eliteBossDmgPct',
     label: '對菁英與Boss傷害',
-    min: 5,
-    max: 50,
-    step: 5,
+    min: 2,
+    max: 25,
+    step: 1,
     unit: '%',
     prefix: '+',
     weight: 9,
@@ -202,8 +202,8 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
   moveSpeedPct: {
     key: 'moveSpeedPct',
     label: '移動速度',
-    min: 3,
-    max: 25,
+    min: 2,
+    max: 12,
     step: 1,
     unit: '%',
     prefix: '+',
@@ -212,8 +212,8 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
   critDmgPct: {
     key: 'critDmgPct',
     label: '暴擊傷害',
-    min: 10,
-    max: 80,
+    min: 5,
+    max: 40,
     step: 5,
     unit: '%',
     prefix: '+',
@@ -223,7 +223,7 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
     key: 'lifeOnKill',
     label: '擊殺回復生命',
     min: 1,
-    max: 12,
+    max: 3,
     step: 1,
     unit: ' HP',
     prefix: '+',
@@ -232,9 +232,9 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
   dashCdPct: {
     key: 'dashCdPct',
     label: '衝刺冷卻縮減',
-    min: 5,
-    max: 35,
-    step: 5,
+    min: 3,
+    max: 18,
+    step: 3,
     unit: '%',
     prefix: '+',
     weight: 6,
@@ -242,8 +242,8 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
   potionHealPct: {
     key: 'potionHealPct',
     label: '藥水回復量',
-    min: 10,
-    max: 60,
+    min: 5,
+    max: 30,
     step: 5,
     unit: '%',
     prefix: '+',
@@ -252,8 +252,8 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
   thorns: {
     key: 'thorns',
     label: '荊棘反傷',
-    min: 3,
-    max: 40,
+    min: 2,
+    max: 20,
     step: 1,
     unit: '',
     prefix: '+',
@@ -351,7 +351,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['atkPct', 'critPct', 'eliteBossDmgPct'],
     uniqueEffectId: 'ember_crit_nova',
     uniqueEffectTitle: '焚世爆擊',
-    uniqueEffectDesc: '暴擊時引發火焰衝擊波，對周圍敵人造成本次傷害 45% 的範圍灼燒。',
+    uniqueEffectDesc: '暴擊時引發火焰衝擊波，對周圍敵人造成本次傷害 22% 的範圍灼燒。',
     flavor: '殘存於灰燼王座上的焦黑王冠，仍炙燙如初。',
   },
   {
@@ -360,7 +360,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['damageReduction', 'blockPct', 'maxHp'],
     uniqueEffectId: 'aegis_block_counter',
     uniqueEffectTitle: '聖盾反震',
-    uniqueEffectDesc: '成功格擋攻擊時回復 12 HP，並震飛周圍敵人造成 25 傷害。',
+    uniqueEffectDesc: '成功格擋攻擊時回復 3 HP，並震飛周圍敵人造成 12 傷害。',
     flavor: '只要握盾者未曾退縮，誓言便永不碎裂。',
   },
   {
@@ -369,7 +369,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['goldPct', 'dropRatePct', 'maxHp'],
     uniqueEffectId: 'avarice_gold_atk',
     uniqueEffectTitle: '黃金之力',
-    uniqueEffectDesc: '身上每持有 100 金幣，額外獲得 +2% 攻擊力（最高 +80%）。',
+    uniqueEffectDesc: '身上每持有 100 金幣，額外獲得 +1% 攻擊力（最高 +40%）。',
     flavor: '杯中永遠裝不滿金幣，卻總能倒出殺意。',
   },
   {
@@ -378,7 +378,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['moveSpeedPct', 'dashCdPct', 'critPct'],
     uniqueEffectId: 'phantom_dash_crit',
     uniqueEffectTitle: '殘影斬擊',
-    uniqueEffectDesc: '衝刺後的 2 秒內，下一次攻擊必定暴擊且額外造成 +50% 傷害。',
+    uniqueEffectDesc: '衝刺後的 2 秒內，下一次攻擊必定暴擊且額外造成 +25% 傷害。',
     flavor: '敵人聽見靴聲時，劍鋒早已掠過咽喉。',
   },
   {
@@ -387,7 +387,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['atkPct', 'lifeOnKill', 'critDmgPct'],
     uniqueEffectId: 'blood_moon_leech',
     uniqueEffectTitle: '嗜血掠奪',
-    uniqueEffectDesc: '每次近戰命中回復造成傷害 6% 的生命（至少 1 HP）。',
+    uniqueEffectDesc: '每次近戰命中回復造成傷害 1.5% 的生命（未滿 1 點時累積至下次命中）。',
     flavor: '在猩紅月色下愈戰愈狂，傷口是它最好的美酒。',
   },
   {
@@ -396,7 +396,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['eliteBossDmgPct', 'critPct', 'atkPct'],
     uniqueEffectId: 'executioner_finisher',
     uniqueEffectTitle: '處決宣告',
-    uniqueEffectDesc: '對血量低於 30% 的敵人造成雙倍傷害（對 Boss 改為 +50%）。',
+    uniqueEffectDesc: '對血量低於 30% 的敵人造成 +50% 額外傷害（對 Boss 改為 +25%）。',
     flavor: '當印戒微微發燙，死刑已經寫在對方的額頭上。',
   },
   {
@@ -405,7 +405,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['potionHealPct', 'dropRatePct', 'damageReduction'],
     uniqueEffectId: 'alchemist_free_flask',
     uniqueEffectTitle: '秘藥奇蹟',
-    uniqueEffectDesc: '飲用藥水時有 35% 機率不消耗瓶數，並獲得 3 秒額外 -4 減傷護盾。',
+    uniqueEffectDesc: '飲用藥水時有 20% 機率不消耗瓶數，並獲得 3 秒額外 -2 減傷護盾。',
     flavor: '搖一搖總覺得裡面還剩最後一口。',
   },
   {
@@ -414,7 +414,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['maxHp', 'damageReduction', 'thorns', 'atkPct'],
     uniqueEffectId: 'titan_low_hp_fury',
     uniqueEffectTitle: '不屈巨人',
-    uniqueEffectDesc: '生命低於 40% 時觸發狂怒：攻擊力 +35% 且受到傷害額外 -3。',
+    uniqueEffectDesc: '生命低於 40% 時觸發狂怒：攻擊力 +18% 且受到傷害額外 -2。',
     flavor: '瀕死之際，遠古巨人的心跳會接管你的胸膛。',
   },
   {
@@ -423,7 +423,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['atkPct', 'critDmgPct', 'moveSpeedPct'],
     uniqueEffectId: 'storm_cleave_lightning',
     uniqueEffectTitle: '連鎖落雷',
-    uniqueEffectDesc: '每第 3 下橫掃重擊釋放雷電，連鎖電擊附近最多 3 名敵人造成 40% 額外傷害。',
+    uniqueEffectDesc: '每第 3 下橫掃重擊釋放雷電，連鎖電擊附近最多 3 名敵人造成 20% 額外傷害。',
     flavor: '每一次重揮都伴隨鍛爐與雷雲的低鳴。',
   },
   {
@@ -432,7 +432,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['goldPct', 'critPct'],
     uniqueEffectId: 'gambler_coin_flip',
     uniqueEffectTitle: '命運輪盤',
-    uniqueEffectDesc: '每次攻擊有 25% 機率爆發 2.2 倍超高傷害，但有 10% 機率手滑只剩 50% 傷害。',
+    uniqueEffectDesc: '每次攻擊有 25% 機率爆發 1.6 倍傷害，但有 10% 機率手滑只剩 70% 傷害。',
     flavor: '正面贏走一切，反面笑著重來。',
   },
   {
@@ -441,7 +441,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['blockPct', 'crateDmgPct', 'politeness'],
     uniqueEffectId: 'frying_pan_bonk',
     uniqueEffectTitle: '神聖噹一聲',
-    uniqueEffectDesc: '格擋率額外 +8%；成功格擋或擊殺敵人時有 25% 機率敲出額外金幣！',
+    uniqueEffectDesc: '格擋率額外 +4%；成功格擋或擊殺敵人時有 15% 機率敲出額外金幣！',
     flavor: '看似只是宿營廚具，實則擋過無數魔王必殺技。',
   },
   {
@@ -450,7 +450,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     statKeys: ['dashCdPct', 'moveSpeedPct', 'critPct', 'dropRatePct'],
     uniqueEffectId: 'chronos_cheat_death',
     uniqueEffectTitle: '時間凝滯',
-    uniqueEffectDesc: '受到致命傷害時逆轉時間抵擋死亡，回復至 40% 血量並震飛周圍敵人（每層限 1 次）。',
+    uniqueEffectDesc: '受到致命傷害時逆轉時間抵擋死亡，回復至 20% 血量並震飛周圍敵人（每層限 1 次）。',
     flavor: '砂粒倒流的瞬間，連死神也只能撲空。',
   },
 ];
@@ -518,12 +518,12 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
       },
     ],
     bonuses: [
-      { required: 2, title: '龍血沸騰', desc: '攻擊力 +25%，血量上限 +30。' },
-      { required: 3, title: '屠龍威勢', desc: '暴擊率 +10%，對菁英與 Boss 傷害 +20%。' },
+      { required: 2, title: '龍血沸騰', desc: '攻擊力 +12%，血量上限 +15。' },
+      { required: 3, title: '屠龍威勢', desc: '暴擊率 +5%，對菁英與 Boss 傷害 +10%。' },
       {
         required: 4,
         title: '龍息焚城',
-        desc: '周身燃起龍炎光環：每 3 秒自動噴發龍息火環灼燒周圍敵人，且所有攻擊附帶火焰爆裂濺射！',
+        desc: '周身燃起龍炎光環：每 3 秒自動噴發龍息火環灼燒周圍敵人，且所有攻擊附帶 14% 火焰爆裂濺射！',
       },
     ],
   },
@@ -567,12 +567,12 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
       },
     ],
     bonuses: [
-      { required: 2, title: '影步疾行', desc: '移動速度 +15%，衝刺冷卻縮減 +20%。' },
-      { required: 3, title: '要害洞察', desc: '暴擊率 +12%，暴擊傷害 +35%。' },
+      { required: 2, title: '影步疾行', desc: '移動速度 +8%，衝刺冷卻縮減 +10%。' },
+      { required: 3, title: '要害洞察', desc: '暴擊率 +6%，暴擊傷害 +18%。' },
       {
         required: 4,
         title: '虛空瞬殺',
-        desc: '周身環繞虛空光環：暴擊時立刻重置衝刺冷卻，並射出 3 道虛空飛刃自動追擊附近敵人！',
+        desc: '周身環繞虛空光環：暴擊時立刻重置衝刺冷卻，並射出 3 道虛空飛刃追擊附近敵人（造成 18% 傷害）！',
       },
     ],
   },
@@ -616,12 +616,12 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
       },
     ],
     bonuses: [
-      { required: 2, title: '日進斗金', desc: '獲得金幣 +35%，掉寶率 +10%。' },
-      { required: 3, title: '重金護體', desc: '受到傷害 -3，格擋率 +8%。' },
+      { required: 2, title: '日進斗金', desc: '獲得金幣 +18%，掉寶率 +5%。' },
+      { required: 3, title: '重金護體', desc: '受到傷害 -2，格擋率 +4%。' },
       {
         required: 4,
         title: '點石成金',
-        desc: '周身閃耀黃金輝光：擊殺敵人必定噴出額外金雨，攻擊有 30% 機率觸發「重金轟擊」造成額外傷害並爆出金幣！',
+        desc: '周身閃耀黃金輝光：擊殺敵人必定噴出額外金幣，攻擊有 20% 機率觸發「重金轟擊」造成額外傷害並爆出金幣！',
       },
     ],
   },
@@ -1034,7 +1034,7 @@ export function computeRelicSummary(equipped: RelicItem[]): RelicSummaryStats {
 
   // Unique passive stat bonuses
   if (uniqueSet.has('frying_pan_bonk')) {
-    summary.blockPct += 8;
+    summary.blockPct += 4;
   }
 
   // Compute active Set Bonuses (counts distinct named pieces per set)
@@ -1045,36 +1045,36 @@ export function computeRelicSummary(equipped: RelicItem[]): RelicSummaryStats {
 
     if (setTpl.setId === 'dragonfire') {
       if (count >= 2) {
-        summary.atkPct += 25;
-        summary.maxHp += 30;
+        summary.atkPct += 12;
+        summary.maxHp += 15;
       }
       if (count >= 3) {
-        summary.critPct += 10;
-        summary.eliteBossDmgPct += 20;
+        summary.critPct += 5;
+        summary.eliteBossDmgPct += 10;
       }
       if (count >= 4) {
         summary.activeSetIds4pc.push('dragonfire');
       }
     } else if (setTpl.setId === 'voidstalker') {
       if (count >= 2) {
-        summary.moveSpeedPct += 15;
-        summary.dashCdPct += 20;
+        summary.moveSpeedPct += 8;
+        summary.dashCdPct += 10;
       }
       if (count >= 3) {
-        summary.critPct += 12;
-        summary.critDmgPct += 35;
+        summary.critPct += 6;
+        summary.critDmgPct += 18;
       }
       if (count >= 4) {
         summary.activeSetIds4pc.push('voidstalker');
       }
     } else if (setTpl.setId === 'syndicate') {
       if (count >= 2) {
-        summary.goldPct += 35;
-        summary.dropRatePct += 10;
+        summary.goldPct += 18;
+        summary.dropRatePct += 5;
       }
       if (count >= 3) {
-        summary.damageReduction += 3;
-        summary.blockPct += 8;
+        summary.damageReduction += 2;
+        summary.blockPct += 4;
       }
       if (count >= 4) {
         summary.activeSetIds4pc.push('syndicate');
@@ -1096,9 +1096,9 @@ export function computeRelicSummary(equipped: RelicItem[]): RelicSummaryStats {
   }
 
   // Apply sensible caps on stacked stats so combat stays exciting & balanced
-  summary.blockPct = Math.min(60, summary.blockPct);
-  summary.dashCdPct = Math.min(65, summary.dashCdPct);
-  summary.moveSpeedPct = Math.min(65, summary.moveSpeedPct);
+  summary.blockPct = Math.min(35, summary.blockPct);
+  summary.dashCdPct = Math.min(40, summary.dashCdPct);
+  summary.moveSpeedPct = Math.min(40, summary.moveSpeedPct);
   summary.uniqueEffects = Array.from(uniqueSet);
 
   return summary;

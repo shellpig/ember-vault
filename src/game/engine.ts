@@ -501,6 +501,7 @@ export class EmbervaultEngine {
   private alchemistShieldTimer = 0;
   private dragonAuraTimer = 0;
   private chronosUsedThisFloor = false;
+  private bloodLeechAccum = 0;
 
   private heroX = 0;
   private heroZ = 0;
@@ -1784,6 +1785,7 @@ export class EmbervaultEngine {
       this.alchemistShieldTimer = 0;
       this.dragonAuraTimer = 0;
       this.chronosUsedThisFloor = false;
+      this.bloodLeechAccum = 0;
       this.recomputeRelicStats(false);
       this.keysPressed.clear();
       this.heroRig.body.rotation.z = 0;
@@ -2089,7 +2091,7 @@ export class EmbervaultEngine {
     if (this.isDead || this.potions <= 0 || this.hp >= effMax) return;
 
     const hasAlchemist = this.hasUnique('alchemist_free_flask');
-    const savedFlask = hasAlchemist && Math.random() < 0.35;
+    const savedFlask = hasAlchemist && Math.random() < 0.2;
     if (!savedFlask) {
       this.potions -= 1;
     }
@@ -2245,17 +2247,17 @@ export class EmbervaultEngine {
     let triggeredStorm = false;
 
     const avariceBonus = this.hasUnique('avarice_gold_atk')
-      ? Math.min(0.8, Math.floor(this.gold / 100) * 0.02)
+      ? Math.min(0.4, Math.floor(this.gold / 100) * 0.01)
       : 0;
     const titanFuryBonus =
-      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 0.35 : 0;
+      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
     const atkMult =
       1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100 + avariceBonus + titanFuryBonus;
     const critChance = Math.min(
       0.95,
       (isCleave ? 0.5 : 0.11) + this.critUpgrades * 0.02 + this.relicStats.critPct / 100
     );
-    const critMult = 1.35 + this.relicStats.critDmgPct / 100 + (usePhantomCrit ? 0.5 : 0);
+    const critMult = 1.35 + this.relicStats.critDmgPct / 100 + (usePhantomCrit ? 0.25 : 0);
     const knockMult = 1 + this.relicStats.dramaticKnockback / 100;
 
     // Damage enemies in arc
@@ -2284,17 +2286,17 @@ export class EmbervaultEngine {
         mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
       }
       if (this.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
-        mult *= enemy.isBoss ? 1.5 : 2.0;
+        mult *= enemy.isBoss ? 1.25 : 1.5;
       }
 
       let gamblerTag = '';
       if (this.hasUnique('gambler_coin_flip')) {
         const gRoll = Math.random();
         if (gRoll < 0.25) {
-          mult *= 2.2;
+          mult *= 1.6;
           gamblerTag = 'JACKPOT ';
         } else if (gRoll < 0.35) {
-          mult *= 0.5;
+          mult *= 0.7;
           gamblerTag = 'SLIP ';
         }
       }
@@ -2324,10 +2326,14 @@ export class EmbervaultEngine {
         isCrit ? 'crit' : 'damage'
       );
 
-      // Unique: Blood Moon Fang lifesteal
+      // Unique: Blood Moon Fang lifesteal (quarter strength: 1.5% with fractional accumulation)
       if (this.hasUnique('blood_moon_leech') && this.hp < effMaxHp) {
-        const leech = Math.max(1, Math.round(dmg * 0.06));
-        this.hp = Math.min(effMaxHp, this.hp + leech);
+        this.bloodLeechAccum += dmg * 0.015;
+        const leech = Math.floor(this.bloodLeechAccum);
+        if (leech >= 1) {
+          this.bloodLeechAccum -= leech;
+          this.hp = Math.min(effMaxHp, this.hp + leech);
+        }
       }
 
       for (let i = 0; i < 8; i++) {
@@ -2354,7 +2360,7 @@ export class EmbervaultEngine {
 
       // Unique: Crown of Ember Sovereign — fiery AoE nova on crit
       if (isCrit && this.hasUnique('ember_crit_nova')) {
-        const splashDmg = Math.max(4, Math.round(dmg * 0.45));
+        const splashDmg = Math.max(2, Math.round(dmg * 0.22));
         for (const other of this.enemies) {
           if (other.dead || other.id === enemy.id) continue;
           if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 2.9) {
@@ -2381,7 +2387,7 @@ export class EmbervaultEngine {
       // Unique: Stormforged Hammer — chain lightning on 3rd-hit cleave
       if (isCleave && !triggeredStorm && this.hasUnique('storm_cleave_lightning')) {
         triggeredStorm = true;
-        const arcDmg = Math.max(6, Math.round(dmg * 0.4));
+        const arcDmg = Math.max(3, Math.round(dmg * 0.2));
         let chained = 0;
         for (const other of this.enemies) {
           if (other.dead || other.id === enemy.id || chained >= 3) continue;
@@ -2394,7 +2400,7 @@ export class EmbervaultEngine {
 
       // 4pc Green Set: Dragonfire Knight — fiery splash on every attack
       if (this.hasSet4pc('dragonfire')) {
-        const fireDmg = Math.max(4, Math.round(dmg * 0.28));
+        const fireDmg = Math.max(2, Math.round(dmg * 0.14));
         for (const other of this.enemies) {
           if (other.dead || other.id === enemy.id) continue;
           if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 2.4) {
@@ -2406,7 +2412,7 @@ export class EmbervaultEngine {
       // 4pc Green Set: Voidstalker — crit resets dash & fires 3 void blades
       if (isCrit && this.hasSet4pc('voidstalker')) {
         this.dashCooldown = 0;
-        const bladeDmg = Math.max(6, Math.round(dmg * 0.35));
+        const bladeDmg = Math.max(3, Math.round(dmg * 0.18));
         let hits = 0;
         for (const other of this.enemies) {
           if (other.dead || hits >= 3) continue;
@@ -2417,9 +2423,9 @@ export class EmbervaultEngine {
         }
       }
 
-      // 4pc Green Set: Gilded Syndicate — 30% Golden Smite bonus damage + gold pop
-      if (!enemy.dead && this.hasSet4pc('syndicate') && Math.random() < 0.3) {
-        const smiteDmg = Math.max(8, Math.round(dmg * 0.35));
+      // 4pc Green Set: Gilded Syndicate — 20% Golden Smite bonus damage + gold pop
+      if (!enemy.dead && this.hasSet4pc('syndicate') && Math.random() < 0.2) {
+        const smiteDmg = Math.max(4, Math.round(dmg * 0.18));
         this.applyBonusEnemyDamage(enemy, smiteDmg, `重金轟擊 -${smiteDmg}`, 'gold', 0xffd84a);
         this.spawnLoot(
           enemy.x + (Math.random() - 0.5) * 0.6,
@@ -2706,8 +2712,8 @@ export class EmbervaultEngine {
     }
 
     const extraCoins =
-      (this.hasSet4pc('syndicate') ? 2 : 0) +
-      (this.hasUnique('frying_pan_bonk') && Math.random() < 0.25 ? 1 : 0);
+      (this.hasSet4pc('syndicate') ? 1 : 0) +
+      (this.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0);
     const coinDrops = (isGuardianEnemy(enemy.kind) ? 3 : enemy.isElite ? 3 : 1) + extraCoins;
     for (let i = 0; i < coinDrops; i++) {
       this.spawnLoot(
@@ -2975,8 +2981,8 @@ export class EmbervaultEngine {
 
       // Unique: Eternal Aegis counter-shockwave & heal on block
       if (this.hasUnique('aegis_block_counter')) {
-        this.hp = Math.min(effMaxHp, this.hp + 12);
-        this.emitFloatingText(this.heroX, 2.25, this.heroZ, '+12 HP 聖盾反震', 'heal');
+        this.hp = Math.min(effMaxHp, this.hp + 3);
+        this.emitFloatingText(this.heroX, 2.25, this.heroZ, '+3 HP 聖盾反震', 'heal');
         for (const e of this.enemies) {
           if (e.dead) continue;
           const edx = e.x - this.heroX;
@@ -2985,13 +2991,13 @@ export class EmbervaultEngine {
           if (edist <= 3.4) {
             e.vx += (edx / (edist || 1)) * 7.5;
             e.vz += (edz / (edist || 1)) * 7.5;
-            this.applyBonusEnemyDamage(e, 25, '反震 -25', 'block', 0x70e8ff);
+            this.applyBonusEnemyDamage(e, 12, '反震 -12', 'block', 0x70e8ff);
           }
         }
       }
 
       // Unique: Frying Pan bonus coin pop on block
-      if (hasPan && Math.random() < 0.25) {
+      if (hasPan && Math.random() < 0.15) {
         this.spawnLoot(this.heroX + (Math.random() - 0.5) * 0.6, this.heroZ + (Math.random() - 0.5) * 0.6, 'gold');
       }
 
@@ -3002,8 +3008,8 @@ export class EmbervaultEngine {
     // Armor % reduction + Flat Relic Damage Reduction (always minimum 1 HP per hit)
     const defMult = Math.max(0.5, 1 - this.armorUpgrades * 0.1);
     const titanFlat =
-      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 3 : 0;
-    const alchemistFlat = this.alchemistShieldTimer > 0 ? 4 : 0;
+      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 2 : 0;
+    const alchemistFlat = this.alchemistShieldTimer > 0 ? 2 : 0;
     const flatReduce = this.relicStats.damageReduction + titanFlat + alchemistFlat;
     const actualDamage = Math.max(1, Math.round(amount * defMult) - flatReduce);
 
@@ -3045,7 +3051,7 @@ export class EmbervaultEngine {
       !this.chronosUsedThisFloor
     ) {
       this.chronosUsedThisFloor = true;
-      this.hp = Math.max(10, Math.round(effMaxHp * 0.4));
+      this.hp = Math.max(10, Math.round(effMaxHp * 0.2));
       this.heroInvuln = 1.65;
       this.audio.playUpgrade();
       this.addScreenShake(0.32, 0.25);
@@ -4068,7 +4074,9 @@ export class EmbervaultEngine {
     const urgentPotionNeed = this.potions <= 2 && this.gold >= this.getPotionCost();
     const wantsMorePotions = this.potions < targetPotions && this.gold >= this.getPotionCost();
     const canAutoUpgradeStat = this.gold >= this.getUpgradeCost();
-    const hasExcessBlueRelics = this.relicBag.filter((r) => r.rarity === 'blue').length >= 4;
+    const hasSellableBagRelics = this.relicBag.some(
+      (r) => r.rarity === 'blue' || r.rarity === 'yellow'
+    );
 
     if (this.dungeon.altarPos && (canAutoUpgradeStat || wantsMorePotions)) {
       const aw = gridToWorld(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
@@ -4142,14 +4150,15 @@ export class EmbervaultEngine {
     }
 
     // 4c. Dedicated Elixir Potion Shop visit on every 3rd floor (Depth 3, 6, 9, 12...)
-    if (this.dungeon.shopPos && (wantsMorePotions || hasExcessBlueRelics)) {
+    // Auto sells all unused Blue & Yellow relics in bag and restocks potions when needed
+    if (this.dungeon.shopPos && (wantsMorePotions || hasSellableBagRelics)) {
       const sw = gridToWorld(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
       const dx = sw.x - this.heroX;
       const dz = sw.z - this.heroZ;
       const shopDist = Math.hypot(dx, dz);
 
       if (shopDist < 2.2) {
-        this.aiStatus = hasExcessBlueRelics ? 'Selling Spare Relics' : 'Buying Elixirs';
+        this.aiStatus = hasSellableBagRelics ? 'Selling Spare Relics' : 'Buying Elixirs';
         this.aiStuckTimer = 0;
         this.aiStuckCount = 0;
         this.aiNoProgressTimer = 0;
@@ -4157,7 +4166,7 @@ export class EmbervaultEngine {
         this.aiProgressAnchorZ = this.heroZ;
         this.autoUpgradeCooldown -= dt;
         if (this.autoUpgradeCooldown <= 0) {
-          if (hasExcessBlueRelics && this.sellCommonBagRelics(false) > 0) {
+          if (hasSellableBagRelics && this.sellCommonBagRelics(true) > 0) {
             this.autoUpgradeCooldown = 0.45;
             this.aiPath = [];
           } else if (this.potions < targetPotions && this.purchasePotion()) {
@@ -4179,7 +4188,12 @@ export class EmbervaultEngine {
         return { moveX: dirX, moveZ: dirZ };
       }
       this.aiRepathTimer -= dt;
-      if (this.aiPath.length === 0 || this.aiRepathTimer <= 0) {
+      const lastShopPt = this.aiPath[this.aiPath.length - 1];
+      const pathMatchesShop =
+        Boolean(lastShopPt) &&
+        lastShopPt.gx === this.dungeon.shopPos.gx &&
+        lastShopPt.gz === this.dungeon.shopPos.gz;
+      if (!pathMatchesShop || this.aiPath.length === 0 || this.aiRepathTimer <= 0) {
         this.aiRepathTimer = 0.7;
         this.aiPath = this.buildSafeGridPath(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
       }
@@ -4364,8 +4378,8 @@ export class EmbervaultEngine {
         if (nearbyEnemies.length > 0) {
           this.dragonAuraTimer = 3.0;
           const novaDmg = Math.max(
-            10,
-            Math.round((14 + this.depth * 2.2) * (1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100))
+            5,
+            Math.round((7 + this.depth * 1.1) * (1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100))
           );
           for (const e of nearbyEnemies) {
             this.applyBonusEnemyDamage(e, novaDmg, `龍息 -${novaDmg}`, 'relicOrange', 0xff5a1f);
