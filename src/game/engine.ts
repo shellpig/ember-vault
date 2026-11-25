@@ -77,7 +77,9 @@ type FloorBossKind =
   | 'boss_crystal_wyrm'
   | 'boss_fungal_king'
   | 'boss_leviathan_heart'
-  | 'boss_abyssal_brain';
+  | 'boss_abyssal_brain'
+  | 'boss_mothership_ai'
+  | 'boss_xeno_commander';
 
 type BossSkillKind = 'slam' | 'charge_slam' | 'nova_ring' | 'ranged_volley' | 'targeted_blast';
 
@@ -104,6 +106,7 @@ const DUNGEON_BOSS_ROTATION: FloorBossKind[] = [
 ];
 const CAVERN_BOSS_ROTATION: FloorBossKind[] = ['boss_crystal_wyrm', 'boss_fungal_king'];
 const FLESH_BOSS_ROTATION: FloorBossKind[] = ['boss_leviathan_heart', 'boss_abyssal_brain'];
+const ALIEN_BOSS_ROTATION: FloorBossKind[] = ['boss_mothership_ai', 'boss_xeno_commander'];
 
 function getBossForDepth(depth: number, theme: TerrainTheme): FloorBossKind {
   const bossIdx = Math.max(0, Math.floor(depth / 5) - 1);
@@ -112,6 +115,9 @@ function getBossForDepth(depth: number, theme: TerrainTheme): FloorBossKind {
   }
   if (theme === 'flesh') {
     return FLESH_BOSS_ROTATION[bossIdx % FLESH_BOSS_ROTATION.length];
+  }
+  if (theme === 'alien') {
+    return ALIEN_BOSS_ROTATION[bossIdx % ALIEN_BOSS_ROTATION.length];
   }
   return DUNGEON_BOSS_ROTATION[bossIdx % DUNGEON_BOSS_ROTATION.length];
 }
@@ -227,6 +233,38 @@ const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     skills: ['ranged_volley', 'targeted_blast', 'nova_ring'],
     projectileKind: 'bio_orb',
   },
+  // Depth 31-40 Alien Spaceship Boss #1 (3 Skills incl. Ranged: Ion Barrage + Orbital Target Lock + Quantum Nova)
+  boss_mothership_ai: {
+    name: 'OMEGA CORE AI',
+    title: 'Sovereign Starship Mainframe',
+    baseHp: 215,
+    speed: 2.38,
+    damage: 18,
+    telegraphColor: 0xff4757,
+    telegraphRadius: 3.1,
+    triggerRange: 3.4,
+    windupDuration: 0.9,
+    strikeDuration: 0.28,
+    recoverDuration: 0.98,
+    skills: ['ranged_volley', 'targeted_blast', 'nova_ring'],
+    projectileKind: 'ion_orb',
+  },
+  // Depth 31-40 Alien Spaceship Boss #2 (3 Skills incl. Ranged: Plasma Spread + Warp Lunge + EMP Ring)
+  boss_xeno_commander: {
+    name: 'XENO OVERLORD',
+    title: 'Grand Admiral of the Armada',
+    baseHp: 230,
+    speed: 2.22,
+    damage: 19,
+    telegraphColor: 0x39ff7a,
+    telegraphRadius: 3.0,
+    triggerRange: 3.15,
+    windupDuration: 0.86,
+    strikeDuration: 0.32,
+    recoverDuration: 1.0,
+    skills: ['ranged_volley', 'charge_slam', 'nova_ring'],
+    projectileKind: 'plasma_bolt',
+  },
 };
 
 function isFloorBoss(kind: EnemyKind): kind is FloorBossKind {
@@ -237,16 +275,28 @@ function isFloorBoss(kind: EnemyKind): kind is FloorBossKind {
     kind === 'boss_crystal_wyrm' ||
     kind === 'boss_fungal_king' ||
     kind === 'boss_leviathan_heart' ||
-    kind === 'boss_abyssal_brain'
+    kind === 'boss_abyssal_brain' ||
+    kind === 'boss_mothership_ai' ||
+    kind === 'boss_xeno_commander'
   );
 }
 
 function isArcherLikeRanged(kind: EnemyKind): boolean {
-  return kind === 'archer' || kind === 'cavern_spitter' || kind === 'flesh_spiner';
+  return (
+    kind === 'archer' ||
+    kind === 'cavern_spitter' ||
+    kind === 'flesh_spiner' ||
+    kind === 'alien_gunner'
+  );
 }
 
 function isMageLikeRanged(kind: EnemyKind): boolean {
-  return kind === 'mage' || kind === 'cavern_shaman' || kind === 'flesh_eye';
+  return (
+    kind === 'mage' ||
+    kind === 'cavern_shaman' ||
+    kind === 'flesh_eye' ||
+    kind === 'alien_psion'
+  );
 }
 
 function isRangedEnemy(kind: EnemyKind): boolean {
@@ -254,7 +304,12 @@ function isRangedEnemy(kind: EnemyKind): boolean {
 }
 
 function isGuardianEnemy(kind: EnemyKind): boolean {
-  return kind === 'guardian' || kind === 'cavern_warden' || kind === 'flesh_brute';
+  return (
+    kind === 'guardian' ||
+    kind === 'cavern_warden' ||
+    kind === 'flesh_brute' ||
+    kind === 'alien_mech'
+  );
 }
 
 function getRangedProjectileKind(kind: EnemyKind): ProjectileKind {
@@ -267,6 +322,10 @@ function getRangedProjectileKind(kind: EnemyKind): ProjectileKind {
       return 'bone_dart';
     case 'flesh_eye':
       return 'bio_orb';
+    case 'alien_gunner':
+      return 'plasma_bolt';
+    case 'alien_psion':
+      return 'ion_orb';
     case 'mage':
       return 'mage_orb';
     default:
@@ -502,6 +561,8 @@ export class EmbervaultEngine {
   private dragonAuraTimer = 0;
   private chronosUsedThisFloor = false;
   private bloodLeechAccum = 0;
+  private floorKills = 0;
+  private catPawHitCounter = 0;
 
   private heroX = 0;
   private heroZ = 0;
@@ -849,14 +910,20 @@ export class EmbervaultEngine {
     this.hasKey = false;
     this.doorUnlocked = false;
     this.chronosUsedThisFloor = false;
+    this.floorKills = 0;
     this.dungeon = generateDungeon(depth);
     const biome = this.dungeon.biome;
+    const isAlienDeck = biome.terrainTheme === 'alien';
 
-    // Update scene atmosphere to match biome (linear fog starts past the active room for 0% haze in main view)
+    // Update scene atmosphere to match biome (bright blue-silver sci-fi lighting for Alien Starship Deck!)
     this.scene.background = new THREE.Color(biome.fogColor);
-    this.scene.fog = new THREE.Fog(biome.fogColor, 32, 54);
+    this.scene.fog = new THREE.Fog(biome.fogColor, isAlienDeck ? 38 : 32, isAlienDeck ? 62 : 54);
     this.hemiLight.color.setHex(biome.hemiSky);
     this.hemiLight.groundColor.setHex(biome.hemiGround);
+    this.hemiLight.intensity = isAlienDeck ? 0.96 : 0.12;
+    this.rimLight.color.setHex(isAlienDeck ? 0xd8f3ff : 0x6c8cc4);
+    this.rimLight.intensity = isAlienDeck ? 0.62 : 0.09;
+    this.scene.environmentIntensity = isAlienDeck ? 0.45 : 0.07;
     this.heroLight.color.setHex(biome.torchColor);
 
     this.textures = createDungeonTextures(
@@ -935,9 +1002,11 @@ export class EmbervaultEngine {
       const floorMat = new THREE.MeshStandardMaterial({
         map: this.textures.floorMap,
         bumpMap: this.textures.floorBump,
-        bumpScale: theme === 'flesh' ? 0.055 : theme === 'cavern' ? 0.06 : 0.04,
-        roughness: theme === 'flesh' ? 0.44 : theme === 'cavern' ? 0.94 : 0.86,
-        metalness: theme === 'flesh' ? 0.1 : 0.06,
+        bumpScale:
+          theme === 'alien' ? 0.032 : theme === 'flesh' ? 0.055 : theme === 'cavern' ? 0.06 : 0.04,
+        roughness:
+          theme === 'alien' ? 0.24 : theme === 'flesh' ? 0.44 : theme === 'cavern' ? 0.94 : 0.86,
+        metalness: theme === 'alien' ? 0.58 : theme === 'flesh' ? 0.1 : 0.06,
       });
       const floorMesh = new THREE.InstancedMesh(floorGeo, floorMat, floorCoords.length);
       floorMesh.receiveShadow = true;
@@ -949,7 +1018,10 @@ export class EmbervaultEngine {
         _scale.set(1, 1, 1);
         _mat4.compose(_pos, _quat, _scale);
         floorMesh.setMatrixAt(i, _mat4);
-        const tint = 0.92 + ((gx * 17 + gz * 31) % 13) * 0.012;
+        const tint =
+          theme === 'alien'
+            ? 0.97 + ((gx * 17 + gz * 31) % 7) * 0.008
+            : 0.92 + ((gx * 17 + gz * 31) % 13) * 0.012;
         _color.setRGB(tint, tint, tint);
         floorMesh.setColorAt(i, _color);
       });
@@ -963,12 +1035,19 @@ export class EmbervaultEngine {
     const wallGeo = new THREE.BoxGeometry(TILE_SIZE, wallHeight, TILE_SIZE);
     const wallVariants = this.textures.wallVariants;
 
-    // Dark cap top on walls for clean miniature cutaway silhouette
+    // Cap top on walls for clean miniature cutaway silhouette
     const capGeo = new THREE.BoxGeometry(TILE_SIZE + 0.02, 0.14, TILE_SIZE + 0.02);
     const capMat = new THREE.MeshStandardMaterial({
-      color: theme === 'flesh' ? 0x260c21 : theme === 'cavern' ? 0x161412 : 0x13151d,
-      roughness: theme === 'flesh' ? 0.62 : 0.95,
-      metalness: 0.05,
+      color:
+        theme === 'alien'
+          ? 0x223b59
+          : theme === 'flesh'
+          ? 0x260c21
+          : theme === 'cavern'
+          ? 0x161412
+          : 0x13151d,
+      roughness: theme === 'alien' ? 0.34 : theme === 'flesh' ? 0.62 : 0.95,
+      metalness: theme === 'alien' ? 0.72 : 0.05,
     });
     const capMesh = new THREE.InstancedMesh(capGeo, capMat, wallCoords.length);
     capMesh.frustumCulled = false;
@@ -1017,9 +1096,11 @@ export class EmbervaultEngine {
       const wallMat = new THREE.MeshStandardMaterial({
         map: this.textures.wallMap,
         bumpMap: this.textures.wallBump,
-        bumpScale: theme === 'flesh' ? 0.06 : theme === 'cavern' ? 0.065 : 0.05,
-        roughness: theme === 'flesh' ? 0.48 : theme === 'cavern' ? 0.96 : 0.9,
-        metalness: theme === 'flesh' ? 0.08 : 0.04,
+        bumpScale:
+          theme === 'alien' ? 0.035 : theme === 'flesh' ? 0.06 : theme === 'cavern' ? 0.065 : 0.05,
+        roughness:
+          theme === 'alien' ? 0.26 : theme === 'flesh' ? 0.48 : theme === 'cavern' ? 0.96 : 0.9,
+        metalness: theme === 'alien' ? 0.62 : theme === 'flesh' ? 0.08 : 0.04,
       });
       const wallMesh = new THREE.InstancedMesh(wallGeo, wallMat, wallCoords.length);
       wallMesh.castShadow = true;
@@ -1042,18 +1123,21 @@ export class EmbervaultEngine {
       this.levelGroup.add(wallMesh, capMesh);
     }
 
-    // 3. Instanced Pillars (Stone Columns / Cavern Stalagmites / Organic Bone-Sinew Ribs)
+    // 3. Instanced Pillars (Stone Columns / Cavern Stalagmites / Organic Bone-Sinew Ribs / Sci-Fi Reactor Columns)
     if (pillarCoords.length > 0) {
       const shaftGeo =
         theme === 'cavern'
           ? new THREE.CylinderGeometry(0.32, 0.56, 2.5, 6)
           : theme === 'flesh'
           ? new THREE.CylinderGeometry(0.42, 0.5, 2.5, 10)
+          : theme === 'alien'
+          ? new THREE.CylinderGeometry(0.44, 0.44, 2.5, 10)
           : new THREE.CylinderGeometry(0.46, 0.52, 2.5, 8);
       const pillarMat = new THREE.MeshStandardMaterial({
         map: this.textures.pillarMap,
-        roughness: theme === 'flesh' ? 0.46 : theme === 'cavern' ? 0.92 : 0.82,
-        metalness: theme === 'flesh' ? 0.08 : 0.12,
+        roughness:
+          theme === 'alien' ? 0.22 : theme === 'flesh' ? 0.46 : theme === 'cavern' ? 0.92 : 0.82,
+        metalness: theme === 'alien' ? 0.72 : theme === 'flesh' ? 0.08 : 0.12,
       });
       const shaftInst = new THREE.InstancedMesh(shaftGeo, pillarMat, pillarCoords.length);
       shaftInst.castShadow = true;
@@ -1062,9 +1146,16 @@ export class EmbervaultEngine {
 
       const plinthGeo = new THREE.BoxGeometry(1.18, 0.28, 1.18);
       const plinthMat = new THREE.MeshStandardMaterial({
-        color: theme === 'flesh' ? 0x451a3d : theme === 'cavern' ? 0x35312c : 0x2c303a,
-        roughness: theme === 'flesh' ? 0.52 : 0.85,
-        metalness: theme === 'flesh' ? 0.08 : 0.15,
+        color:
+          theme === 'alien'
+            ? 0x2b496b
+            : theme === 'flesh'
+            ? 0x451a3d
+            : theme === 'cavern'
+            ? 0x35312c
+            : 0x2c303a,
+        roughness: theme === 'alien' ? 0.28 : theme === 'flesh' ? 0.52 : 0.85,
+        metalness: theme === 'alien' ? 0.78 : theme === 'flesh' ? 0.08 : 0.15,
       });
       const plinthInst = new THREE.InstancedMesh(plinthGeo, plinthMat, pillarCoords.length * 2);
       plinthInst.castShadow = true;
@@ -1100,7 +1191,9 @@ export class EmbervaultEngine {
       transparent: true,
       alphaTest: 0.25,
       side: THREE.DoubleSide,
-      roughness: 0.9,
+      roughness: theme === 'alien' ? 0.25 : 0.9,
+      emissive: theme === 'alien' ? new THREE.Color(0x1f9ce8) : new THREE.Color(0x000000),
+      emissiveIntensity: theme === 'alien' ? 0.58 : 0,
     });
     const propLightColor = theme === 'dungeon' ? 0xff9838 : biome.torchColor;
 
@@ -1108,13 +1201,13 @@ export class EmbervaultEngine {
       const { x, z } = gridToWorld(prop.gx, prop.gz);
 
       if (prop.type === 'brazier') {
-        const b = createBrazier(this.textures.glowMap, propLightColor);
+        const b = createBrazier(this.textures.glowMap, propLightColor, theme);
         b.root.position.set(x, 0, z);
         this.levelGroup.add(b.root);
         this.lightProps.push({
           color: propLightColor,
-          baseIntensity: 46,
-          distance: 8.8,
+          baseIntensity: theme === 'alien' ? 52 : 46,
+          distance: theme === 'alien' ? 10.5 : 8.8,
           decay: 2.1,
           phase: Math.random() * 10,
           x,
@@ -1124,7 +1217,7 @@ export class EmbervaultEngine {
           kind: 'brazier',
         });
       } else if (prop.type === 'torch') {
-        const t = createWallTorch(this.textures.glowMap, propLightColor);
+        const t = createWallTorch(this.textures.glowMap, propLightColor, theme);
         const rot = prop.facing ?? 0;
         t.root.rotation.y = rot;
         // Offset flush against north (-Z) or west (-X) wall face
@@ -1363,17 +1456,43 @@ export class EmbervaultEngine {
     let elitesSpawned = 0;
     const maxElites = Math.min(4, 1 + Math.floor(this.dungeon.rooms.length / 6));
 
-    // Biome-specific monster casts (Dungeon 1-10, Cavern 11-20, Monster Interior 21-30)
+    // Biome-specific monster casts (Dungeon 1-10, Cavern 11-20, Monster Interior 21-30, Alien Spaceship 31-40)
     const themeArcher: EnemyKind =
-      theme === 'cavern' ? 'cavern_spitter' : theme === 'flesh' ? 'flesh_spiner' : 'archer';
+      theme === 'alien'
+        ? 'alien_gunner'
+        : theme === 'cavern'
+        ? 'cavern_spitter'
+        : theme === 'flesh'
+        ? 'flesh_spiner'
+        : 'archer';
     const themeMage: EnemyKind =
-      theme === 'cavern' ? 'cavern_shaman' : theme === 'flesh' ? 'flesh_eye' : 'mage';
+      theme === 'alien'
+        ? 'alien_psion'
+        : theme === 'cavern'
+        ? 'cavern_shaman'
+        : theme === 'flesh'
+        ? 'flesh_eye'
+        : 'mage';
     const themeGuardian: EnemyKind =
-      theme === 'cavern' ? 'cavern_warden' : theme === 'flesh' ? 'flesh_brute' : 'guardian';
+      theme === 'alien'
+        ? 'alien_mech'
+        : theme === 'cavern'
+        ? 'cavern_warden'
+        : theme === 'flesh'
+        ? 'flesh_brute'
+        : 'guardian';
     const themeMeleeGuard: EnemyKind =
-      theme === 'cavern' ? 'cavern_golem' : theme === 'flesh' ? 'flesh_tendril' : 'skeleton';
+      theme === 'alien'
+        ? 'alien_trooper'
+        : theme === 'cavern'
+        ? 'cavern_golem'
+        : theme === 'flesh'
+        ? 'flesh_tendril'
+        : 'skeleton';
     const themePool: EnemyKind[] =
-      theme === 'cavern'
+      theme === 'alien'
+        ? ['alien_trooper', 'alien_gunner', 'alien_probe', 'alien_psion', 'alien_saucer']
+        : theme === 'cavern'
         ? ['cavern_beetle', 'cavern_spitter', 'cavern_golem', 'cavern_shaman', 'cavern_bat']
         : theme === 'flesh'
         ? ['flesh_tendril', 'flesh_spiner', 'flesh_cell', 'flesh_eye', 'flesh_parasite']
@@ -1558,29 +1677,38 @@ export class EmbervaultEngine {
     const depthScale = 1 + (this.depth - 1) * 0.22;
     const baseHp = isGuardianEnemy(kind)
       ? 62
-      : kind === 'cavern_golem' || kind === 'flesh_tendril'
+      : kind === 'cavern_golem' || kind === 'flesh_tendril' || kind === 'alien_trooper'
       ? 30
       : kind === 'skeleton' || kind === 'cavern_beetle'
       ? 28
-      : kind === 'slime' || kind === 'flesh_cell'
+      : kind === 'slime' || kind === 'flesh_cell' || kind === 'alien_probe'
       ? 24
-      : kind === 'wisp' || kind === 'cavern_bat' || kind === 'flesh_parasite'
+      : kind === 'wisp' ||
+        kind === 'cavern_bat' ||
+        kind === 'flesh_parasite' ||
+        kind === 'alien_saucer'
       ? 22
       : isMageLikeRanged(kind)
       ? 19
       : 18; // ranged mobs have slightly less HP than melee mobs
     const maxHp = Math.round(baseHp * depthScale) * (eliteEligible ? 4 : 1);
     const speed =
-      kind === 'wisp' || kind === 'cavern_bat' || kind === 'flesh_parasite'
-        ? 3.5
-        : kind === 'skeleton' || kind === 'cavern_beetle' || kind === 'flesh_tendril'
-        ? 2.75
+      kind === 'wisp' ||
+      kind === 'cavern_bat' ||
+      kind === 'flesh_parasite' ||
+      kind === 'alien_saucer'
+        ? 3.55
+        : kind === 'skeleton' ||
+          kind === 'cavern_beetle' ||
+          kind === 'flesh_tendril' ||
+          kind === 'alien_trooper'
+        ? 2.8
         : isArcherLikeRanged(kind)
         ? 2.6
         : isMageLikeRanged(kind)
         ? 2.35
-        : isGuardianEnemy(kind) || kind === 'cavern_golem'
-        ? 2.25
+        : isGuardianEnemy(kind) || kind === 'cavern_golem' || kind === 'alien_probe'
+        ? 2.3
         : 2.1;
 
     this.enemies.push({
@@ -2100,16 +2228,19 @@ export class EmbervaultEngine {
       this.alchemistShieldTimer = 3.0;
     }
 
-    const baseHeal = Math.round(40 * (1 + this.relicStats.potionHealPct / 100));
+    const noodleBonus = this.hasUnique('noodle_elixir_boost') ? 15 : 0;
+    const baseHeal = Math.round(40 * (1 + this.relicStats.potionHealPct / 100)) + noodleBonus;
     const heal = Math.min(baseHeal, effMax - this.hp);
     this.hp = Math.min(effMax, this.hp + heal);
     this.audio.playPotion();
-    this.pushBanner(savedFlask ? '秘藥奇蹟 · 不耗藥水!' : 'ELIXIR USED');
+    this.pushBanner(
+      savedFlask ? '秘藥奇蹟 · 不耗藥水!' : noodleBonus > 0 ? '泡麵加湯回復!' : 'ELIXIR USED'
+    );
     this.emitFloatingText(
       this.heroX,
       1.8,
       this.heroZ,
-      savedFlask ? `+${heal} HP (免費!)` : `+${heal} HP`,
+      savedFlask ? `+${heal} HP (免費!)` : noodleBonus > 0 ? `+${heal} HP 暖胃!` : `+${heal} HP`,
       'heal'
     );
 
@@ -2143,6 +2274,39 @@ export class EmbervaultEngine {
     this.dashDirX = Math.sin(this.heroFacing);
     this.dashDirZ = Math.cos(this.heroFacing);
     this.audio.playDash();
+
+    // Unique: Phoenix Plume — fiery ring nova when dashing
+    if (this.hasUnique('phoenix_dash_nova')) {
+      const dashAtkMult = 1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100;
+      const fireDmg = Math.max(8, Math.round(14 * dashAtkMult));
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        const edx = e.x - this.heroX;
+        const edz = e.z - this.heroZ;
+        const edist = Math.hypot(edx, edz);
+        if (edist <= 3.4) {
+          const push = e.isBoss ? 1.8 : 6.0;
+          e.vx += (edx / (edist || 1)) * push;
+          e.vz += (edz / (edist || 1)) * push;
+          this.applyBonusEnemyDamage(e, fireDmg, `鳳焰 -${fireDmg}`, 'relicOrange', 0xff6224);
+        }
+      }
+      for (let i = 0; i < 18; i++) {
+        const a = (i / 18) * Math.PI * 2;
+        this.spawnParticle(
+          this.heroX + Math.cos(a) * 0.35,
+          0.55,
+          this.heroZ + Math.sin(a) * 0.35,
+          Math.cos(a) * 5.2,
+          1.1 + Math.random() * 1.4,
+          Math.sin(a) * 5.2,
+          i % 2 === 0 ? 0xff5a1f : 0xffd24a,
+          1.2,
+          0.45,
+          1.5
+        );
+      }
+    }
 
     for (let i = 0; i < 12; i++) {
       this.spawnParticle(
@@ -2251,8 +2415,16 @@ export class EmbervaultEngine {
       : 0;
     const titanFuryBonus =
       this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
+    const berserkerBonus = this.hasUnique('berserker_combo_ramp')
+      ? Math.min(0.25, this.floorKills * 0.01)
+      : 0;
     const atkMult =
-      1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100 + avariceBonus + titanFuryBonus;
+      1 +
+      this.atkUpgrades * 0.1 +
+      this.relicStats.atkPct / 100 +
+      avariceBonus +
+      titanFuryBonus +
+      berserkerBonus;
     const critChance = Math.min(
       0.95,
       (isCleave ? 0.5 : 0.11) + this.critUpgrades * 0.02 + this.relicStats.critPct / 100
@@ -2278,10 +2450,14 @@ export class EmbervaultEngine {
       const baseDmg = isCleave
         ? 18 + Math.floor(Math.random() * 8)
         : 11 + Math.floor(Math.random() * 6);
-      const isCrit = isCounter || usePhantomCrit || Math.random() < critChance;
+      const bananaSlip = this.hasUnique('banana_slip_crit') && Math.random() < 0.15;
+      const isCrit = isCounter || usePhantomCrit || bananaSlip || Math.random() < critChance;
       if (usePhantomCrit) consumedPhantom = true;
 
       let mult = atkMult * (isCounter ? Math.max(1.45, critMult) : isCrit ? critMult : 1);
+      if (bananaSlip) {
+        mult *= 1.4;
+      }
       if (enemy.isBoss || enemy.isElite) {
         mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
       }
@@ -2289,15 +2465,15 @@ export class EmbervaultEngine {
         mult *= enemy.isBoss ? 1.25 : 1.5;
       }
 
-      let gamblerTag = '';
+      let gamblerTag = bananaSlip ? '滑倒! ' : '';
       if (this.hasUnique('gambler_coin_flip')) {
         const gRoll = Math.random();
         if (gRoll < 0.25) {
           mult *= 1.6;
-          gamblerTag = 'JACKPOT ';
+          gamblerTag += 'JACKPOT ';
         } else if (gRoll < 0.35) {
           mult *= 0.7;
-          gamblerTag = 'SLIP ';
+          gamblerTag += 'SLIP ';
         }
       }
 
@@ -2314,6 +2490,7 @@ export class EmbervaultEngine {
       const knock =
         (isCleave ? 8.5 : 5.5) *
         knockMult *
+        (bananaSlip ? 1.85 : 1) *
         (enemy.isBoss ? 0.22 : enemy.isElite ? 0.45 : 1);
       enemy.vx += nx * knock;
       enemy.vz += nz * knock;
@@ -2325,6 +2502,22 @@ export class EmbervaultEngine {
         `${gamblerTag}${isCounter ? `COUNTER -${dmg}` : isCrit ? `CRIT -${dmg}` : `-${dmg}`}`,
         isCrit ? 'crit' : 'damage'
       );
+
+      // Unique: Overtime Mug — funny quips when hitting Elites/Bosses
+      if (
+        (enemy.isBoss || enemy.isElite) &&
+        this.hasUnique('overtime_mug_fury') &&
+        Math.random() < 0.2
+      ) {
+        const quips = ['準時下班!', '不准加班!', '拒絕開會!', '我要打卡!'];
+        this.emitFloatingText(
+          enemy.x,
+          (enemy.isBoss ? 2.75 : 2.35),
+          enemy.z,
+          quips[Math.floor(Math.random() * quips.length)],
+          'relicOrange'
+        );
+      }
 
       // Unique: Blood Moon Fang lifesteal (quarter strength: 1.5% with fractional accumulation)
       if (this.hasUnique('blood_moon_leech') && this.hp < effMaxHp) {
@@ -2344,7 +2537,7 @@ export class EmbervaultEngine {
           (Math.random() - 0.5) * 4.5 + nx * 2,
           1.5 + Math.random() * 2.5,
           (Math.random() - 0.5) * 4.5 + nz * 2,
-          isCrit ? 0xffdc6b : 0xffffff,
+          bananaSlip ? 0xffe44d : isCrit ? 0xffdc6b : 0xffffff,
           0.95,
           0.35,
           7.5
@@ -2356,6 +2549,58 @@ export class EmbervaultEngine {
         this.killEnemy(enemy);
       } else if (enemy.isBoss) {
         this.emitHud();
+      }
+
+      // Unique: Astral Prism — 20% chance for refracted astral double-strike (+35% dmg)
+      if (!enemy.dead && this.hasUnique('astral_double_strike') && Math.random() < 0.2) {
+        const astralDmg = Math.max(3, Math.round(dmg * 0.35));
+        this.applyBonusEnemyDamage(enemy, astralDmg, `星界斬 -${astralDmg}`, 'info', 0x7ef5ff);
+      }
+
+      // Unique: Permafrost Stele — chill enemy cooldown (+35%) & frost chip damage
+      if (!enemy.dead && this.hasUnique('frost_chill_aura')) {
+        enemy.attackCooldown += enemy.isBoss ? 0.22 : 0.45;
+        const frostDmg = Math.max(2, Math.round(dmg * 0.12));
+        this.applyBonusEnemyDamage(enemy, frostDmg, `冰霜 -${frostDmg}`, 'relicBlue', 0x8be9ff);
+      }
+
+      // Unique: Cat Paw Gloves — every 3rd hit triggers rapid "喵!" bonus swat + knockback
+      if (this.hasUnique('cat_paw_swat')) {
+        this.catPawHitCounter += 1;
+        if (!enemy.dead && this.catPawHitCounter % 3 === 0) {
+          const pawDmg = Math.max(4, Math.round(dmg * 0.35));
+          enemy.vx += nx * (enemy.isBoss ? 1.6 : 6.2);
+          enemy.vz += nz * (enemy.isBoss ? 1.6 : 6.2);
+          this.applyBonusEnemyDamage(enemy, pawDmg, `喵! -${pawDmg}`, 'relicOrange', 0xff9ad5);
+        }
+      }
+
+      // Unique: Dungeon Disco Ball — rainbow sparks on crit + 20% bonus tip coin
+      if (isCrit && this.hasUnique('disco_fever_aura')) {
+        const discoColors = [0xff4fd8, 0x3ef5ff, 0xffe047, 0x5cff6b, 0xb266ff];
+        for (let i = 0; i < 12; i++) {
+          const a = (i / 12) * Math.PI * 2;
+          this.spawnParticle(
+            enemy.x,
+            0.95,
+            enemy.z,
+            Math.cos(a) * 4.4,
+            1.6 + Math.random() * 2.0,
+            Math.sin(a) * 4.4,
+            discoColors[i % discoColors.length],
+            1.05,
+            0.48,
+            3.5
+          );
+        }
+        if (Math.random() < 0.2) {
+          this.emitFloatingText(enemy.x, 2.25, enemy.z, '迪斯可小費!', 'gold');
+          this.spawnLoot(
+            enemy.x + (Math.random() - 0.5) * 0.6,
+            enemy.z + (Math.random() - 0.5) * 0.6,
+            'gold'
+          );
+        }
       }
 
       // Unique: Crown of Ember Sovereign — fiery AoE nova on crit
@@ -2465,8 +2710,16 @@ export class EmbervaultEngine {
       const megaDmg = Math.round(15 * (1 + this.relicStats.crateDmgPct / 100));
       this.emitFloatingText(br.x, 1.35, br.z, `木箱粉碎 -${megaDmg}!`, 'crit');
     }
+    if (this.hasUnique('noodle_elixir_boost') && Math.random() < 0.28) {
+      this.emitFloatingText(br.x, 1.75, br.z, '真香！泡麵魂!', 'relicOrange');
+    }
 
-    const color = br.kind === 'crate' ? 0x7c502d : 0xb38252;
+    const color =
+      this.dungeon.biome.terrainTheme === 'alien'
+        ? 0x70d8ff
+        : br.kind === 'crate'
+        ? 0x7c502d
+        : 0xb38252;
     for (let i = 0; i < 10; i++) {
       this.spawnParticle(
         br.x + (Math.random() - 0.5) * 0.4,
@@ -2488,6 +2741,9 @@ export class EmbervaultEngine {
       const potChance = Math.min(0.45, 0.13 * dropMult);
       this.spawnLoot(br.x, br.z, Math.random() < potChance ? 'potion' : 'gold');
     }
+    if (this.hasUnique('starforged_treasure_sense') && Math.random() < 0.25) {
+      this.spawnLoot(br.x + (Math.random() - 0.5) * 0.45, br.z + (Math.random() - 0.5) * 0.45, 'gold');
+    }
     this.spawnRelicDrops(br.x, br.z, 'crate');
   }
 
@@ -2498,6 +2754,7 @@ export class EmbervaultEngine {
       enemy.telegraph.group.visible = false;
     }
     this.kills += 1;
+    this.floorKills += 1;
     if (enemy.isBoss) {
       this.bossKills += 1;
     } else if (enemy.isElite) {
@@ -2522,6 +2779,10 @@ export class EmbervaultEngine {
           ? 0xff8826
           : enemy.kind === 'boss_abyssal_brain'
           ? 0x36f5d4
+          : enemy.kind === 'boss_mothership_ai'
+          ? 0xff4757
+          : enemy.kind === 'boss_xeno_commander'
+          ? 0x39ff7a
           : 0xffd252;
       for (let i = 0; i < 36; i++) {
         const a = (i / 36) * Math.PI * 2;
@@ -2577,7 +2838,10 @@ export class EmbervaultEngine {
       enemy.kind === 'cavern_spitter' ||
       enemy.kind === 'cavern_warden' ||
       enemy.kind === 'flesh_spiner' ||
-      enemy.kind === 'flesh_brute'
+      enemy.kind === 'flesh_brute' ||
+      enemy.kind === 'alien_trooper' ||
+      enemy.kind === 'alien_gunner' ||
+      enemy.kind === 'alien_mech'
     ) {
       this.audio.playSkeletonDeath();
       const isCavernStone =
@@ -2585,19 +2849,28 @@ export class EmbervaultEngine {
         enemy.kind === 'cavern_golem' ||
         enemy.kind === 'cavern_spitter' ||
         enemy.kind === 'cavern_warden';
+      const isAlienMetal =
+        enemy.kind === 'alien_trooper' ||
+        enemy.kind === 'alien_gunner' ||
+        enemy.kind === 'alien_mech';
       const debrisCount = isGuardianEnemy(enemy.kind) ? 9 : 5;
       const debrisGeo = isCavernStone
         ? new THREE.OctahedronGeometry(0.14, 0)
         : new THREE.BoxGeometry(0.28, 0.07, 0.08);
       const debrisMat = new THREE.MeshStandardMaterial({
-        color: isCavernStone
+        color: isAlienMetal
+          ? enemy.kind === 'alien_mech'
+            ? 0xb8293d
+            : 0x4b5c7d
+          : isCavernStone
           ? 0x45d8f0
           : enemy.kind === 'archer'
           ? 0x9c7244
           : enemy.kind === 'flesh_spiner' || enemy.kind === 'flesh_brute'
           ? 0xf2ebd5
           : 0xe6e0cf,
-        roughness: isCavernStone ? 0.35 : 0.78,
+        roughness: isAlienMetal ? 0.25 : isCavernStone ? 0.35 : 0.78,
+        metalness: isAlienMetal ? 0.85 : 0.05,
       });
       for (let i = 0; i < debrisCount; i++) {
         const piece = new THREE.Mesh(debrisGeo, debrisMat);
@@ -2648,6 +2921,12 @@ export class EmbervaultEngine {
           ? 0x26f5b8
           : enemy.kind === 'flesh_parasite'
           ? 0x38e8d8
+          : enemy.kind === 'alien_probe'
+          ? 0xffb829
+          : enemy.kind === 'alien_saucer'
+          ? 0x39ff7a
+          : enemy.kind === 'alien_psion'
+          ? 0xff5ce6
           : 0xff7a29;
       const altCol =
         enemy.kind === 'mage'
@@ -2656,6 +2935,8 @@ export class EmbervaultEngine {
           ? 0xc6ff66
           : enemy.kind === 'flesh_parasite'
           ? 0xffe24d
+          : enemy.kind === 'alien_probe' || enemy.kind === 'alien_saucer' || enemy.kind === 'alien_psion'
+          ? 0x62f5ff
           : burstCol;
       for (let i = 0; i < 14; i++) {
         this.spawnParticle(
@@ -2713,7 +2994,8 @@ export class EmbervaultEngine {
 
     const extraCoins =
       (this.hasSet4pc('syndicate') ? 1 : 0) +
-      (this.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0);
+      (this.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0) +
+      (enemy.isElite && this.hasUnique('starforged_treasure_sense') && Math.random() < 0.25 ? 2 : 0);
     const coinDrops = (isGuardianEnemy(enemy.kind) ? 3 : enemy.isElite ? 3 : 1) + extraCoins;
     for (let i = 0; i < coinDrops; i++) {
       this.spawnLoot(
@@ -2907,6 +3189,24 @@ export class EmbervaultEngine {
       case 'flesh_brute':
         base = '骨甲肉魔';
         break;
+      case 'alien_trooper':
+        base = '星艦突擊兵';
+        break;
+      case 'alien_probe':
+        base = '警戒偵查球';
+        break;
+      case 'alien_saucer':
+        base = '幽浮偵察碟';
+        break;
+      case 'alien_gunner':
+        base = '外星電漿射手';
+        break;
+      case 'alien_psion':
+        base = '星靈念力師';
+        break;
+      case 'alien_mech':
+        base = '重裝防衛機甲';
+        break;
     }
     return e.isElite ? `菁英 ${base}` : base;
   }
@@ -3033,6 +3333,73 @@ export class EmbervaultEngine {
         'info',
         0x7eff9b
       );
+    }
+
+    // Unique: Eclipse Mirror — reflect 150% of damage taken as arcane pulse to nearby enemies
+    if (this.hasUnique('eclipse_reflect_beam')) {
+      const refDmg = Math.max(4, Math.round(actualDamage * 1.5));
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        if (Math.hypot(e.x - this.heroX, e.z - this.heroZ) <= 3.8) {
+          this.applyBonusEnemyDamage(e, refDmg, `蝕月反衝 -${refDmg}`, 'info', 0xc88cff);
+        }
+      }
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2;
+        this.spawnParticle(
+          this.heroX,
+          0.85,
+          this.heroZ,
+          Math.cos(a) * 5.2,
+          0.9 + Math.random(),
+          Math.sin(a) * 5.2,
+          i % 2 === 0 ? 0xc88cff : 0xe6f7ff,
+          1.05,
+          0.42,
+          1.2
+        );
+      }
+    }
+
+    // Unique: Bathhouse Rubber Duck — loud "啾！" knockback + 20% chance to heal 2 HP
+    if (this.hasUnique('rubber_duck_squeak') && this.hp > 0) {
+      const duckHeal = Math.random() < 0.2;
+      if (duckHeal) {
+        this.hp = Math.min(effMaxHp, this.hp + 2);
+      }
+      this.emitFloatingText(
+        this.heroX,
+        2.2,
+        this.heroZ,
+        duckHeal ? '啾！+2 HP' : '啾！',
+        duckHeal ? 'heal' : 'relicYellow'
+      );
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        const edx = e.x - this.heroX;
+        const edz = e.z - this.heroZ;
+        const edist = Math.hypot(edx, edz);
+        if (edist <= 3.5) {
+          const push = e.isBoss ? 1.8 : 7.5;
+          e.vx += (edx / (edist || 1)) * push;
+          e.vz += (edz / (edist || 1)) * push;
+        }
+      }
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        this.spawnParticle(
+          this.heroX,
+          0.95,
+          this.heroZ,
+          Math.cos(a) * 3.8,
+          1.6 + Math.random() * 1.4,
+          Math.sin(a) * 3.8,
+          0xffe44d,
+          1.05,
+          0.42,
+          3.0
+        );
+      }
     }
 
     this.heroVx += (dx / dist) * 5.2;
@@ -5125,7 +5492,9 @@ export class EmbervaultEngine {
     e.hopPhase += dt * 5.2;
 
     const hoverY =
-      e.kind === 'boss_lich' || e.kind === 'boss_abyssal_brain'
+      e.kind === 'boss_lich' ||
+      e.kind === 'boss_abyssal_brain' ||
+      e.kind === 'boss_mothership_ai'
         ? 0.16 + Math.sin(this.elapsed * 3.2) * 0.1
         : 0;
 
@@ -5207,7 +5576,11 @@ export class EmbervaultEngine {
     customDamage?: number
   ): void {
     const mesh = createProjectileMesh(kind);
-    const isFastShot = kind === 'arrow' || kind === 'crystal_shard' || kind === 'bone_dart';
+    const isFastShot =
+      kind === 'arrow' ||
+      kind === 'crystal_shard' ||
+      kind === 'bone_dart' ||
+      kind === 'plasma_bolt';
     const speed = customSpeed ?? (isFastShot ? 10.2 : 7.4);
     mesh.position.set(x, 0.85, z);
     mesh.rotation.y = Math.atan2(dirX, dirZ);
@@ -5252,7 +5625,11 @@ export class EmbervaultEngine {
       p.x += p.vx * dt;
       p.z += p.vz * dt;
       p.mesh.position.set(p.x, 0.85, p.z);
-      const isOrb = p.kind === 'mage_orb' || p.kind === 'spore_orb' || p.kind === 'bio_orb';
+      const isOrb =
+        p.kind === 'mage_orb' ||
+        p.kind === 'spore_orb' ||
+        p.kind === 'bio_orb' ||
+        p.kind === 'ion_orb';
       if (isOrb) {
         p.mesh.rotation.y += dt * 7;
         p.mesh.rotation.x += dt * 4;
@@ -5271,6 +5648,12 @@ export class EmbervaultEngine {
           ? Math.random() < 0.5
             ? 0x2ee6b8
             : 0xc6ff66
+          : p.kind === 'plasma_bolt'
+          ? 0x4dff88
+          : p.kind === 'ion_orb'
+          ? Math.random() < 0.5
+            ? 0xff5ce6
+            : 0x6ef2ff
           : p.kind === 'mage_orb'
           ? Math.random() < 0.5
             ? 0x6ef2ff
@@ -5479,6 +5862,10 @@ export class EmbervaultEngine {
         ? 0x6ef7a2
         : e.kind === 'flesh_spiner' || e.kind === 'flesh_eye'
         ? 0xff5ec4
+        : e.kind === 'alien_gunner'
+        ? 0x4dff88
+        : e.kind === 'alien_psion'
+        ? 0xff5ce6
         : isArcher
         ? 0xffd24a
         : 0x7ef5ff;
@@ -5575,7 +5962,8 @@ export class EmbervaultEngine {
       }
       const isBouncy = e.kind === 'slime' || e.kind === 'flesh_cell';
       const isWingedFlyer = e.kind === 'cavern_bat' || e.kind === 'flesh_parasite';
-      e.hopPhase += dt * (isBouncy ? 5.8 : isWingedFlyer ? 14.0 : e.kind === 'wisp' ? 6.5 : 8.5);
+      const isHoverTech = e.kind === 'wisp' || e.kind === 'alien_probe' || e.kind === 'alien_saucer';
+      e.hopPhase += dt * (isBouncy ? 5.8 : isWingedFlyer ? 14.0 : isHoverTech ? 6.5 : 8.5);
 
       if (isBouncy) {
         const bounce = Math.max(0, Math.sin(e.hopPhase));
@@ -5592,9 +5980,14 @@ export class EmbervaultEngine {
         const flap = Math.sin(e.hopPhase) * 0.65;
         if (e.rig.leftArm) e.rig.leftArm.rotation.z = flap;
         if (e.rig.weaponArm) e.rig.weaponArm.rotation.z = -flap;
-      } else if (e.kind === 'wisp') {
-        e.rig.body.position.y = Math.sin(e.hopPhase) * 0.22;
-        if (e.rig.coreMesh) e.rig.coreMesh.rotation.y += dt * 4;
+      } else if (isHoverTech) {
+        e.rig.body.position.y = Math.sin(e.hopPhase) * 0.2;
+        if (e.rig.coreMesh) {
+          e.rig.coreMesh.rotation.y += dt * (e.kind === 'alien_saucer' ? 6.5 : 4.2);
+          if (e.kind === 'alien_probe') {
+            e.rig.coreMesh.rotation.z += dt * 3.0;
+          }
+        }
       } else {
         const walkSwing = dist < 9.5 ? Math.sin(e.hopPhase) * 0.5 : 0;
         if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = walkSwing;

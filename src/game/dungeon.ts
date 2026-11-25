@@ -130,7 +130,49 @@ export const FLESH_BIOMES: BiomeConfig[] = [
   },
 ];
 
-export const BIOMES: BiomeConfig[] = [...DUNGEON_BIOMES, ...CAVERN_BIOMES, ...FLESH_BIOMES];
+export const ALIEN_BIOMES: BiomeConfig[] = [
+  {
+    id: 'alien_deck',
+    terrainTheme: 'alien',
+    name: 'Starship Cryo-Deck',
+    fogColor: 0x0f2036,
+    floorBase: '#b8cce0',
+    floorAccent: '#8fb2d6',
+    floorMortar: '#1c3554',
+    wallBase: '#a6bfd9',
+    wallAccent: '#78a2cc',
+    bannerColor: '#1f7fb8',
+    runeColor: 0x3de8ff,
+    runeCss: '#3de8ff',
+    torchColor: 0x7aefff,
+    hemiSky: 0xd6f0ff,
+    hemiGround: 0x45668c,
+  },
+  {
+    id: 'alien_core',
+    terrainTheme: 'alien',
+    name: 'Quantum Command Deck',
+    fogColor: 0x10223b,
+    floorBase: '#c2d6e8',
+    floorAccent: '#85b0de',
+    floorMortar: '#1b385c',
+    wallBase: '#aec8e0',
+    wallAccent: '#6d9ed1',
+    bannerColor: '#1a68c7',
+    runeColor: 0x57f0ff,
+    runeCss: '#57f0ff',
+    torchColor: 0x8af4ff,
+    hemiSky: 0xe0f5ff,
+    hemiGround: 0x4a6f99,
+  },
+];
+
+export const BIOMES: BiomeConfig[] = [
+  ...DUNGEON_BIOMES,
+  ...CAVERN_BIOMES,
+  ...FLESH_BIOMES,
+  ...ALIEN_BIOMES,
+];
 
 function createRng(seed: number): () => number {
   let s = seed >>> 0;
@@ -146,10 +188,16 @@ export function generateDungeon(depth: number): DungeonData {
   const size = Math.min(68, Math.round(34 * Math.pow(1.2, tier)));
   const width = size;
   const height = size;
-  // Terrain changes every 10 floors: 1-10 Stone Dungeon, 11-20 Cavern, 21-30 Monster Interior (Pink/Purple)
-  const zoneIndex = Math.floor((depth - 1) / 10) % 3;
+  // Terrain changes every 10 floors: 1-10 Stone Dungeon, 11-20 Cavern, 21-30 Monster Interior, 31-40 Alien Spaceship
+  const zoneIndex = Math.floor((depth - 1) / 10) % 4;
   const zonePool =
-    zoneIndex === 0 ? DUNGEON_BIOMES : zoneIndex === 1 ? CAVERN_BIOMES : FLESH_BIOMES;
+    zoneIndex === 0
+      ? DUNGEON_BIOMES
+      : zoneIndex === 1
+      ? CAVERN_BIOMES
+      : zoneIndex === 2
+      ? FLESH_BIOMES
+      : ALIEN_BIOMES;
   const biome = zonePool[Math.floor(((depth - 1) % 10) / 2) % zonePool.length];
   const rand = createRng(depth * 7919 + Math.floor(Math.random() * 100000));
 

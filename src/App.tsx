@@ -3,7 +3,6 @@ import {
   ChevronDown,
   ChevronUp,
   Coins,
-  Compass,
   FlaskConical,
   Gem,
   Heart,
@@ -155,19 +154,25 @@ export default function App() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const wallColor =
-      snap.terrainTheme === 'flesh'
+      snap.terrainTheme === 'alien'
+        ? '#3a5473'
+        : snap.terrainTheme === 'flesh'
         ? '#3d1738'
         : snap.terrainTheme === 'cavern'
         ? '#332b24'
         : '#2d313d';
     const pillarColor =
-      snap.terrainTheme === 'flesh'
+      snap.terrainTheme === 'alien'
+        ? '#6d94bd'
+        : snap.terrainTheme === 'flesh'
         ? '#5e2454'
         : snap.terrainTheme === 'cavern'
         ? '#52473d'
         : '#474c5c';
     const floorColor =
-      snap.terrainTheme === 'flesh'
+      snap.terrainTheme === 'alien'
+        ? '#8db4db'
+        : snap.terrainTheme === 'flesh'
         ? '#874474'
         : snap.terrainTheme === 'cavern'
         ? '#6b6257'
@@ -867,16 +872,6 @@ export default function App() {
                 遺物 {hud.equippedRelics.length}/4
                 {hud.relicBag.length > 0 ? ` · 袋${hud.relicBag.length}` : ''}
               </span>
-            </button>
-
-            {/* Skip / Generate Next Floor */}
-            <button
-              type="button"
-              onClick={() => engineRef.current?.triggerNewDungeon()}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#4a3e2a] bg-[#151822] text-xs font-hud text-[#dfd2b0] hover:border-[#c8a355] hover:text-[#fff0c4] transition-colors cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <Compass className="w-3.5 h-3.5 text-[#d4a94e]" />
-              <span>Next Floor</span>
             </button>
 
             {/* Sound Toggle */}

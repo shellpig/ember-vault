@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BiomeConfig, EnemyKind, ProjectileKind } from './types';
+import { BiomeConfig, EnemyKind, ProjectileKind, TerrainTheme } from './types';
 import { RelicRarity } from './relics';
 import { DungeonTextureSet } from './textures';
 
@@ -301,6 +301,441 @@ export function createEnemyModel(
     flashMaterials.push(m);
     return m;
   };
+
+  // === ALIEN SPACESHIP BOSSES (Depths 31-40) ===
+  if (kind === 'boss_mothership_ai') {
+    addContactShadow(root, shadowMap, 1.32);
+    const auraRing = new THREE.Mesh(
+      new THREE.RingGeometry(1.02, 1.28, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xff4757,
+        transparent: true,
+        opacity: 0.65,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    auraRing.rotation.x = -Math.PI / 2;
+    auraRing.position.y = 0.032;
+    root.add(auraRing);
+
+    // High-contrast Obsidian-Titanium Chassis, Gold Trim & Crimson Optical AI Eye
+    const hullMat = makeMat({ color: 0x1e293b, roughness: 0.24, metalness: 0.85 });
+    const chromeMat = makeMat({ color: 0xdcebf7, roughness: 0.18, metalness: 0.92 });
+    const goldMat = makeMat({ color: 0xe6b43c, roughness: 0.28, metalness: 0.88 });
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3b4e });
+    const energyMat = new THREE.MeshBasicMaterial({ color: 0xffa62b });
+
+    // Central faceted obsidian AI octahedron chassis
+    const coreShell = new THREE.Mesh(new THREE.OctahedronGeometry(0.62, 1), hullMat);
+    coreShell.position.y = 1.22;
+    coreShell.castShadow = true;
+    body.add(coreShell);
+
+    // Equatorial chrome armor collar + vertical gold fin blades
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 0.68, 0.16, 8), chromeMat);
+    collar.position.y = 1.22;
+    collar.castShadow = true;
+    body.add(collar);
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.72, 0.26), goldMat);
+      fin.position.set(Math.cos(a) * 0.56, 1.22, Math.sin(a) * 0.56);
+      fin.rotation.y = -a;
+      fin.castShadow = true;
+      body.add(fin);
+    }
+
+    // Glowing Crimson Optical Lens facing forward
+    const lensRing = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.05, 6, 16), goldMat);
+    lensRing.position.set(0, 1.22, 0.58);
+    const lensEye = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 10), eyeMat);
+    lensEye.position.set(0, 1.22, 0.55);
+    body.add(lensRing, lensEye);
+
+    // Spinning outer quantum containment ring (animated as coreMesh)
+    const coreMesh = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.055, 6, 20), energyMat);
+    coreMesh.position.y = 1.22;
+    coreMesh.rotation.x = Math.PI * 0.34;
+    body.add(coreMesh);
+
+    // Twin levitating plasma weapon pods
+    const buildPod = (side: -1 | 1) => {
+      const arm = new THREE.Group();
+      arm.position.set(side * 0.92, 1.12, 0.08);
+      const pod = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.38, 0.52), hullMat);
+      pod.castShadow = true;
+      const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.44, 6), chromeMat);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0, -0.02, 0.38);
+      const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), eyeMat);
+      muzzle.position.set(0, -0.02, 0.62);
+      arm.add(pod, barrel, muzzle);
+      return arm;
+    };
+    const leftArm = buildPod(-1);
+    const weaponArm = buildPod(1);
+    body.add(leftArm, weaponArm);
+
+    body.scale.setScalar(1.48);
+    return { root, body, leftArm, weaponArm, coreMesh, auraRing, flashMaterials };
+  }
+
+  if (kind === 'boss_xeno_commander') {
+    addContactShadow(root, shadowMap, 1.25);
+    const auraRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.96, 1.2, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0x39ff7a,
+        transparent: true,
+        opacity: 0.62,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    auraRing.rotation.x = -Math.PI / 2;
+    auraRing.position.y = 0.032;
+    root.add(auraRing);
+
+    // Dark-Emerald Obsidian Exo-Armor, Gold Sovereign Trim & Electric Lime Plasma Weapons
+    const armorMat = makeMat({ color: 0x162925, roughness: 0.28, metalness: 0.82 });
+    const plateMat = makeMat({ color: 0x264d42, roughness: 0.32, metalness: 0.72 });
+    const goldMat = makeMat({ color: 0xf2c14e, roughness: 0.25, metalness: 0.9 });
+    const plasmaMat = new THREE.MeshBasicMaterial({ color: 0x4dff88 });
+    const visorMat = new THREE.MeshBasicMaterial({ color: 0xffee52 });
+
+    const leftLeg = new THREE.Group();
+    leftLeg.position.set(-0.22, 0.54, 0);
+    const ll = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.54, 0.22), armorMat);
+    ll.position.y = -0.27;
+    ll.castShadow = true;
+    leftLeg.add(ll);
+    const rightLeg = new THREE.Group();
+    rightLeg.position.set(0.22, 0.54, 0);
+    const rl = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.54, 0.22), armorMat);
+    rl.position.y = -0.27;
+    rl.castShadow = true;
+    rightLeg.add(rl);
+    body.add(leftLeg, rightLeg);
+
+    // Armored Torso & Sovereign Reactor Chest
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.68, 0.4), armorMat);
+    torso.position.y = 0.9;
+    torso.castShadow = true;
+    const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.42, 0.44), plateMat);
+    chestPlate.position.y = 0.94;
+    const coreMesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.15, 0), plasmaMat);
+    coreMesh.position.set(0, 0.96, 0.24);
+    body.add(torso, chestPlate, coreMesh);
+
+    // Winged sci-fi pauldrons with gold trim
+    for (const side of [-1, 1]) {
+      const sh = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.24, 0.42), plateMat);
+      sh.position.set(side * 0.48, 1.2, 0);
+      sh.rotation.z = -side * 0.26;
+      sh.castShadow = true;
+      const trim = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.06, 0.44), goldMat);
+      trim.position.set(side * 0.48, 1.32, 0);
+      trim.rotation.z = -side * 0.26;
+      body.add(sh, trim);
+    }
+
+    // Elongated Alien Warlord Helm + Crown Crest + Glowing Visor
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.42, 0.46), armorMat);
+    head.position.set(0, 1.46, -0.02);
+    head.castShadow = true;
+    const crest = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.34, 0.58), goldMat);
+    crest.position.set(0, 1.66, -0.08);
+    crest.rotation.x = -0.24;
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.1, 0.08), visorMat);
+    visor.position.set(0, 1.46, 0.2);
+    body.add(head, crest, visor);
+
+    // Left Energy Shield Arm
+    const leftArm = new THREE.Group();
+    leftArm.position.set(-0.48, 1.04, 0);
+    const la = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.44, 0.16), armorMat);
+    la.position.y = -0.18;
+    const holoShield = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.68, 0.46),
+      new THREE.MeshBasicMaterial({
+        color: 0x39ff7a,
+        transparent: true,
+        opacity: 0.55,
+      })
+    );
+    holoShield.position.set(-0.14, -0.22, 0.16);
+    leftArm.add(la, holoShield);
+    body.add(leftArm);
+
+    // Right Plasma Halberd-Lance Arm
+    const weaponArm = new THREE.Group();
+    weaponArm.position.set(0.48, 1.04, 0);
+    const ra = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.44, 0.16), armorMat);
+    ra.position.y = -0.18;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.55, 6), goldMat);
+    shaft.position.set(0, -0.22, 0.48);
+    shaft.rotation.x = Math.PI * 0.45;
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.62, 0.24), plasmaMat);
+    blade.position.set(0, -0.12, 1.18);
+    blade.rotation.x = Math.PI * 0.45;
+    weaponArm.add(ra, shaft, blade);
+    body.add(weaponArm);
+
+    body.scale.setScalar(1.6);
+    return { root, body, leftLeg, rightLeg, leftArm, weaponArm, coreMesh, auraRing, flashMaterials };
+  }
+
+  // === ALIEN SPACESHIP MOBS (Depths 31-40) ===
+  if (kind === 'alien_trooper') {
+    addContactShadow(root, shadowMap, 0.5);
+    // Dark Indigo-Slate Exo-Trooper with Bright Plasma-Orange Visor & Energy Blade
+    const suitMat = makeMat({ color: 0x22293e, roughness: 0.34, metalness: 0.72 });
+    const armorMat = makeMat({ color: 0x3b486b, roughness: 0.28, metalness: 0.8 });
+    const visorMat = new THREE.MeshBasicMaterial({ color: 0xff7a21 });
+    const bladeMat = new THREE.MeshBasicMaterial({ color: 0xff9436 });
+
+    const leftLeg = new THREE.Group();
+    leftLeg.position.set(-0.12, 0.42, 0);
+    const ll = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.13), suitMat);
+    ll.position.y = -0.21;
+    ll.castShadow = true;
+    leftLeg.add(ll);
+    const rightLeg = new THREE.Group();
+    rightLeg.position.set(0.12, 0.42, 0);
+    const rl = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.13), suitMat);
+    rl.position.y = -0.21;
+    rl.castShadow = true;
+    rightLeg.add(rl);
+    body.add(leftLeg, rightLeg);
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.46, 0.26), armorMat);
+    torso.position.y = 0.68;
+    torso.castShadow = true;
+    const chestCore = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.28), visorMat);
+    chestCore.position.y = 0.72;
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.32), armorMat);
+    head.position.y = 1.08;
+    head.castShadow = true;
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.08), visorMat);
+    visor.position.set(0, 1.08, 0.15);
+    body.add(torso, chestCore, head, visor);
+
+    const leftArm = new THREE.Group();
+    leftArm.position.set(-0.27, 0.82, 0);
+    const la = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.36, 0.12), suitMat);
+    la.position.y = -0.14;
+    leftArm.add(la);
+    body.add(leftArm);
+
+    const weaponArm = new THREE.Group();
+    weaponArm.position.set(0.27, 0.82, 0);
+    const ra = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.34, 0.12), suitMat);
+    ra.position.y = -0.14;
+    const hilt = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.12), armorMat);
+    hilt.position.set(0, -0.3, 0.14);
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, 0.62), bladeMat);
+    blade.position.set(0, -0.3, 0.48);
+    weaponArm.add(ra, hilt, blade);
+    body.add(weaponArm);
+
+    return { root, body, leftLeg, rightLeg, leftArm, weaponArm, flashMaterials };
+  }
+
+  if (kind === 'alien_probe') {
+    addContactShadow(root, shadowMap, 0.5);
+    // Hovering Gunmetal Security Drone Orb with Glowing Amber Scanner Ring
+    const shellMat = makeMat({ color: 0x263142, roughness: 0.22, metalness: 0.88 });
+    const trimMat = makeMat({ color: 0x8ea9c9, roughness: 0.24, metalness: 0.86 });
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffb829 });
+
+    const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 12), shellMat);
+    sphere.position.y = 0.82;
+    sphere.castShadow = true;
+    const capTop = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 0.1, 8), trimMat);
+    capTop.position.y = 1.12;
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 8), eyeMat);
+    eye.position.set(0, 0.82, 0.28);
+    const coreMesh = new THREE.Mesh(new THREE.TorusGeometry(0.44, 0.04, 6, 16), eyeMat);
+    coreMesh.position.y = 0.82;
+    coreMesh.rotation.x = Math.PI * 0.42;
+    body.add(sphere, capTop, eye, coreMesh);
+
+    return { root, body, coreMesh, flashMaterials };
+  }
+
+  if (kind === 'alien_saucer') {
+    addContactShadow(root, shadowMap, 0.54);
+    // Agile Miniature Scout UFO Saucer with Emerald Dome & Rim Lights
+    const hullMat = makeMat({ color: 0x2b364a, roughness: 0.2, metalness: 0.9 });
+    const rimMat = makeMat({ color: 0xc2d8ed, roughness: 0.22, metalness: 0.88 });
+    const domeMat = makeMat({
+      color: 0x22d976,
+      emissive: 0x16a856,
+      emissiveIntensity: 0.5,
+      roughness: 0.14,
+      metalness: 0.2,
+    });
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0x5eff9e });
+
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.56, 0.16, 12), hullMat);
+    disc.position.y = 1.02;
+    disc.castShadow = true;
+    const lowerDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.56, 0.22, 0.12, 12), rimMat);
+    lowerDisc.position.y = 0.9;
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), domeMat);
+    dome.scale.set(1, 0.72, 1);
+    dome.position.y = 1.14;
+    const coreMesh = new THREE.Mesh(new THREE.TorusGeometry(0.52, 0.032, 6, 16), lightMat);
+    coreMesh.position.y = 0.96;
+    coreMesh.rotation.x = Math.PI / 2;
+    body.add(disc, lowerDisc, dome, coreMesh);
+
+    return { root, body, coreMesh, flashMaterials };
+  }
+
+  if (kind === 'alien_gunner') {
+    addContactShadow(root, shadowMap, 0.48);
+    // Classic Tall Grey-Green Alien Marksman in Charcoal Flight Suit with Lime Plasma Rifle
+    const suitMat = makeMat({ color: 0x1f2533, roughness: 0.42, metalness: 0.55 });
+    const skinMat = makeMat({ color: 0x76b87b, roughness: 0.48, metalness: 0.08 });
+    const gunMat = makeMat({ color: 0x414f66, roughness: 0.28, metalness: 0.82 });
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x0b0f17 });
+    const plasmaMat = new THREE.MeshBasicMaterial({ color: 0x5eff6b });
+
+    const leftLeg = new THREE.Group();
+    leftLeg.position.set(-0.11, 0.42, 0);
+    const ll = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.42, 0.11), suitMat);
+    ll.position.y = -0.21;
+    ll.castShadow = true;
+    leftLeg.add(ll);
+    const rightLeg = new THREE.Group();
+    rightLeg.position.set(0.11, 0.42, 0);
+    const rl = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.42, 0.11), suitMat);
+    rl.position.y = -0.21;
+    rl.castShadow = true;
+    rightLeg.add(rl);
+    body.add(leftLeg, rightLeg);
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.44, 0.2), suitMat);
+    torso.position.y = 0.66;
+    torso.castShadow = true;
+    // Iconic bulbous alien head with large slanted black almond eyes
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), skinMat);
+    head.scale.set(0.95, 1.18, 1.05);
+    head.position.y = 1.1;
+    head.castShadow = true;
+    const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, 0.05), eyeMat);
+    eyeL.position.set(-0.09, 1.08, 0.21);
+    eyeL.rotation.z = -0.32;
+    const eyeR = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, 0.05), eyeMat);
+    eyeR.position.set(0.09, 1.08, 0.21);
+    eyeR.rotation.z = 0.32;
+    body.add(torso, head, eyeL, eyeR);
+
+    const weaponArm = new THREE.Group();
+    weaponArm.position.set(0.22, 0.78, 0.04);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.1, 0.32), suitMat);
+    arm.position.z = 0.12;
+    const rifle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.14, 0.54), gunMat);
+    rifle.position.set(0, 0.02, 0.38);
+    const coreMesh = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.32), plasmaMat);
+    coreMesh.position.set(0, 0.06, 0.46);
+    weaponArm.add(arm, rifle, coreMesh);
+    body.add(weaponArm);
+
+    return { root, body, leftLeg, rightLeg, weaponArm, coreMesh, flashMaterials };
+  }
+
+  if (kind === 'alien_psion') {
+    addContactShadow(root, shadowMap, 0.5);
+    // Levitating High-Mind Alien Psion in Deep Violet Robes, Gold Collar & Magenta Ion Ring
+    const robeMat = makeMat({ color: 0x3b1d5e, roughness: 0.48, metalness: 0.35 });
+    const goldMat = makeMat({ color: 0xf2c14e, roughness: 0.25, metalness: 0.88 });
+    const skinMat = makeMat({ color: 0xa495d6, roughness: 0.42, metalness: 0.12 });
+    const psiMat = new THREE.MeshBasicMaterial({ color: 0xff5ce6 });
+
+    const robe = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.36, 0.62, 7), robeMat);
+    robe.position.y = 0.62;
+    robe.castShadow = true;
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.05, 6, 12), goldMat);
+    collar.position.y = 0.94;
+    collar.rotation.x = Math.PI / 2;
+    const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.27, 10, 10), skinMat);
+    cranium.scale.set(1.02, 1.28, 1.12);
+    cranium.position.y = 1.24;
+    cranium.castShadow = true;
+    const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.05), psiMat);
+    eyeL.position.set(-0.09, 1.2, 0.25);
+    const eyeR = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.05), psiMat);
+    eyeR.position.set(0.09, 1.2, 0.25);
+    body.add(robe, collar, cranium, eyeL, eyeR);
+
+    const coreMesh = new THREE.Mesh(new THREE.TorusGeometry(0.46, 0.032, 6, 16), psiMat);
+    coreMesh.position.y = 1.28;
+    coreMesh.rotation.x = Math.PI * 0.38;
+    body.add(coreMesh);
+
+    const weaponArm = new THREE.Group();
+    weaponArm.position.set(0.28, 0.88, 0.12);
+    const orb = new THREE.Mesh(new THREE.OctahedronGeometry(0.14, 0), psiMat);
+    orb.position.set(0.08, 0.04, 0.22);
+    weaponArm.add(orb);
+    body.add(weaponArm);
+
+    return { root, body, weaponArm, coreMesh, flashMaterials };
+  }
+
+  if (kind === 'alien_mech') {
+    addContactShadow(root, shadowMap, 0.8);
+    // Heavy Crimson & Gunmetal Starship Security Mech Guardian
+    const chassisMat = makeMat({ color: 0x262c3a, roughness: 0.3, metalness: 0.86 });
+    const crimsonMat = makeMat({ color: 0xb8293d, roughness: 0.28, metalness: 0.72 });
+    const chromeMat = makeMat({ color: 0xcfe2f5, roughness: 0.2, metalness: 0.9 });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd23f });
+
+    const leftLeg = new THREE.Group();
+    leftLeg.position.set(-0.22, 0.46, 0);
+    const ll = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.46, 0.24), chassisMat);
+    ll.position.y = -0.23;
+    ll.castShadow = true;
+    leftLeg.add(ll);
+    const rightLeg = new THREE.Group();
+    rightLeg.position.set(0.22, 0.46, 0);
+    const rl = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.46, 0.24), chassisMat);
+    rl.position.y = -0.23;
+    rl.castShadow = true;
+    rightLeg.add(rl);
+    body.add(leftLeg, rightLeg);
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.62, 0.46), crimsonMat);
+    torso.position.y = 0.82;
+    torso.castShadow = true;
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.08), glowMat);
+    visor.position.set(0, 0.94, 0.24);
+    const podL = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.26, 0.32), chassisMat);
+    podL.position.set(-0.42, 1.18, 0);
+    const podR = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.26, 0.32), chassisMat);
+    podR.position.set(0.42, 1.18, 0);
+    body.add(torso, visor, podL, podR);
+
+    const weaponArm = new THREE.Group();
+    weaponArm.position.set(0.44, 0.88, 0);
+    const piston = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.42, 0.16), chromeMat);
+    piston.position.y = -0.16;
+    const hammer = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, 0.42), chassisMat);
+    hammer.position.set(0, -0.34, 0.34);
+    hammer.castShadow = true;
+    const edge = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.08, 0.1), glowMat);
+    edge.position.set(0, -0.34, 0.55);
+    weaponArm.add(piston, hammer, edge);
+    body.add(weaponArm);
+
+    body.scale.setScalar(1.34);
+    return { root, body, leftLeg, rightLeg, weaponArm, flashMaterials };
+  }
 
   // === CAVERN BOSSES (Depths 11-20) ===
   if (kind === 'boss_crystal_wyrm') {
@@ -1972,12 +2407,65 @@ export function createKeyPedestal(
 
 export function createBrazier(
   glowMap: THREE.Texture,
-  accentColor = 0xff9c38
+  accentColor = 0xff9c38,
+  theme: TerrainTheme = 'dungeon'
 ): {
   root: THREE.Group;
   flame: THREE.Group;
 } {
   const root = new THREE.Group();
+
+  if (theme === 'alien') {
+    // Sleek Brushed-Silver Starship Plasma Reactor Pylon
+    const chromeMat = new THREE.MeshStandardMaterial({ color: 0xbcd4eb, roughness: 0.22, metalness: 0.88 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x223b59, roughness: 0.32, metalness: 0.8 });
+
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.42, 0.22, 8), darkMat);
+    base.position.y = 0.11;
+    base.castShadow = true;
+    root.add(base);
+
+    const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.26, 0.56, 8), chromeMat);
+    pedestal.position.y = 0.48;
+    pedestal.castShadow = true;
+    root.add(pedestal);
+
+    const emitterRing = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.045, 6, 12), chromeMat);
+    emitterRing.rotation.x = Math.PI / 2;
+    emitterRing.position.y = 0.8;
+    root.add(emitterRing);
+
+    const flame = new THREE.Group();
+    flame.position.y = 0.96;
+    const coreOrb = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.22, 0),
+      new THREE.MeshBasicMaterial({ color: 0xc2fbff })
+    );
+    const outerRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.32, 0.032, 6, 14),
+      new THREE.MeshBasicMaterial({ color: accentColor })
+    );
+    outerRing.rotation.x = Math.PI * 0.35;
+    flame.add(coreOrb, outerRing);
+    root.add(flame);
+
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowMap,
+        color: accentColor,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    halo.scale.set(2.4, 2.4, 1);
+    halo.position.y = 1.04;
+    root.add(halo);
+
+    return { root, flame };
+  }
+
   const ironMat = new THREE.MeshStandardMaterial({ color: 0x262930, roughness: 0.45, metalness: 0.78 });
 
   // Tripod legs
@@ -2038,12 +2526,45 @@ export function createBrazier(
 
 export function createWallTorch(
   glowMap: THREE.Texture,
-  accentColor = 0xffa43d
+  accentColor = 0xffa43d,
+  theme: TerrainTheme = 'dungeon'
 ): {
   root: THREE.Group;
   flame: THREE.Mesh;
 } {
   const root = new THREE.Group();
+
+  if (theme === 'alien') {
+    // Sleek Sci-Fi Bulkhead LED Wall Sconce
+    const chromeMat = new THREE.MeshStandardMaterial({ color: 0xc2d9f0, metalness: 0.88, roughness: 0.2 });
+    const mount = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.64, 0.1), chromeMat);
+    mount.position.set(0, 1.66, 0.02);
+    root.add(mount);
+
+    const flame = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 0.52, 0.08),
+      new THREE.MeshBasicMaterial({ color: 0xccfaff })
+    );
+    flame.position.set(0, 1.66, 0.1);
+    root.add(flame);
+
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowMap,
+        color: accentColor,
+        transparent: true,
+        opacity: 0.62,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    halo.scale.set(2.2, 2.2, 1);
+    halo.position.set(0, 1.66, 0.22);
+    root.add(halo);
+
+    return { root, flame };
+  }
+
   const ironMat = new THREE.MeshStandardMaterial({ color: 0x2a2d36, metalness: 0.75, roughness: 0.42 });
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.9 });
 
@@ -2693,6 +3214,38 @@ export function createProjectileMesh(kind: ProjectileKind): THREE.Group {
       new THREE.SphereGeometry(0.25, 8, 8),
       new THREE.MeshBasicMaterial({
         color: 0x2ee69a,
+        transparent: true,
+        opacity: 0.68,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    g.add(core, aura);
+  } else if (kind === 'plasma_bolt') {
+    const bolt = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.08, 0.66),
+      new THREE.MeshBasicMaterial({ color: 0xd6ffdb })
+    );
+    const glow = new THREE.Mesh(
+      new THREE.BoxGeometry(0.15, 0.15, 0.72),
+      new THREE.MeshBasicMaterial({
+        color: 0x39ff6a,
+        transparent: true,
+        opacity: 0.65,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    g.add(bolt, glow);
+  } else if (kind === 'ion_orb') {
+    const core = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.16, 0),
+      new THREE.MeshBasicMaterial({ color: 0xffc7f8 })
+    );
+    const aura = new THREE.Mesh(
+      new THREE.SphereGeometry(0.26, 8, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xff42d6,
         transparent: true,
         opacity: 0.68,
         depthWrite: false,

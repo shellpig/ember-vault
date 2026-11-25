@@ -7,7 +7,7 @@ export type TileType =
   | 5 // Pillar (impassable floor decoration)
   | 6; // Spike Trap (walkable, periodic hazard)
 
-export type TerrainTheme = 'dungeon' | 'cavern' | 'flesh';
+export type TerrainTheme = 'dungeon' | 'cavern' | 'flesh' | 'alien';
 
 export type BiomeId =
   | 'catacombs'
@@ -16,7 +16,9 @@ export type BiomeId =
   | 'cavern_crystal'
   | 'cavern_fungal'
   | 'flesh_maw'
-  | 'flesh_heart';
+  | 'flesh_heart'
+  | 'alien_deck'
+  | 'alien_core';
 
 export interface BiomeConfig {
   id: BiomeId;
@@ -98,7 +100,16 @@ export type EnemyKind =
   | 'flesh_eye'
   | 'flesh_brute'
   | 'boss_leviathan_heart'
-  | 'boss_abyssal_brain';
+  | 'boss_abyssal_brain'
+  // Zone 4 (Depth 31-40): Alien Spaceship Interior (Bright Blue-Silver Sci-Fi)
+  | 'alien_trooper'
+  | 'alien_probe'
+  | 'alien_saucer'
+  | 'alien_gunner'
+  | 'alien_psion'
+  | 'alien_mech'
+  | 'boss_mothership_ai'
+  | 'boss_xeno_commander';
 
 export type ProjectileKind =
   | 'arrow'
@@ -106,7 +117,9 @@ export type ProjectileKind =
   | 'crystal_shard'
   | 'spore_orb'
   | 'bone_dart'
-  | 'bio_orb';
+  | 'bio_orb'
+  | 'plasma_bolt'
+  | 'ion_orb';
 
 export type BossAttackState = 'chase' | 'windup' | 'strike' | 'recover';
 

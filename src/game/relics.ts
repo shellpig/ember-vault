@@ -42,7 +42,21 @@ export type UniqueEffectId =
   | 'storm_cleave_lightning'
   | 'gambler_coin_flip'
   | 'frying_pan_bonk'
-  | 'chronos_cheat_death';
+  | 'chronos_cheat_death'
+  // New Serious Combat Uniques (6)
+  | 'astral_double_strike'
+  | 'frost_chill_aura'
+  | 'berserker_combo_ramp'
+  | 'eclipse_reflect_beam'
+  | 'phoenix_dash_nova'
+  | 'starforged_treasure_sense'
+  // New Comedic / Funny Uniques (6)
+  | 'rubber_duck_squeak'
+  | 'banana_slip_crit'
+  | 'overtime_mug_fury'
+  | 'disco_fever_aura'
+  | 'noodle_elixir_boost'
+  | 'cat_paw_swat';
 
 export type RelicSetId = 'dragonfire' | 'voidstalker' | 'syndicate';
 
@@ -453,6 +467,116 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
     uniqueEffectDesc: '受到致命傷害時逆轉時間抵擋死亡，回復至 20% 血量並震飛周圍敵人（每層限 1 次）。',
     flavor: '砂粒倒流的瞬間，連死神也只能撲空。',
   },
+  // --- 6 New Serious Combat Uniques ---
+  {
+    templateId: 'uniq_astral_prism',
+    name: '星界折射稜鏡',
+    statKeys: ['atkPct', 'critPct', 'moveSpeedPct'],
+    uniqueEffectId: 'astral_double_strike',
+    uniqueEffectTitle: '星光殘影斬',
+    uniqueEffectDesc: '每次近戰命中時有 20% 機率折射出第二道星界斬擊，追加 35% 傷害。',
+    flavor: '在群星的倒影裡，每一劍都不只落下一次。',
+  },
+  {
+    templateId: 'uniq_permafrost_stele',
+    name: '永凍冰川的殘碑',
+    statKeys: ['damageReduction', 'maxHp', 'blockPct'],
+    uniqueEffectId: 'frost_chill_aura',
+    uniqueEffectTitle: '極寒緩速',
+    uniqueEffectDesc: '攻擊會凍結敵人行動，使其下次攻擊冷卻延長 35% 並附加額外冰霜傷害。',
+    flavor: '碰觸碑面的瞬間，連怒吼都結成霜霧。',
+  },
+  {
+    templateId: 'uniq_berserker_fang',
+    name: '狂戰龍牙墜飾',
+    statKeys: ['atkPct', 'critDmgPct', 'eliteBossDmgPct'],
+    uniqueEffectId: 'berserker_combo_ramp',
+    uniqueEffectTitle: '越戰越狂',
+    uniqueEffectDesc: '在本層每擊殺 1 名敵人，攻擊力額外 +1%（最高疊加至 +25%，換層重置）。',
+    flavor: '戰場上的血氣越濃，龍牙的脈動就越劇烈。',
+  },
+  {
+    templateId: 'uniq_eclipse_mirror',
+    name: '蝕月折射古鏡',
+    statKeys: ['thorns', 'blockPct', 'damageReduction'],
+    uniqueEffectId: 'eclipse_reflect_beam',
+    uniqueEffectTitle: '蝕月反衝',
+    uniqueEffectDesc: '受到傷害時釋放月蝕震波，將所受傷害的 150% 反彈給周圍 3.8 格內所有敵人。',
+    flavor: '所有刺向鏡面的惡意，都會加倍照回原地。',
+  },
+  {
+    templateId: 'uniq_phoenix_plume',
+    name: '焚天不死鳥尾羽',
+    statKeys: ['dashCdPct', 'moveSpeedPct', 'atkPct'],
+    uniqueEffectId: 'phoenix_dash_nova',
+    uniqueEffectTitle: '熾焰掠影',
+    uniqueEffectDesc: '每次衝刺時在原地與終點爆開烈焰火環，灼燒周圍敵人並造成擊退。',
+    flavor: '掠過之處只留下熾熱的火星與焦黑的腳印。',
+  },
+  {
+    templateId: 'uniq_starforged_compass',
+    name: '星鑄獵寶羅盤',
+    statKeys: ['dropRatePct', 'goldPct', 'eliteBossDmgPct'],
+    uniqueEffectId: 'starforged_treasure_sense',
+    uniqueEffectTitle: '寶藏直覺',
+    uniqueEffectDesc: '對菁英與 Boss 傷害額外 +12%；擊破木箱或擊殺菁英怪時有 25% 機率爆出額外金幣。',
+    flavor: '指針永遠不指北方，只指著最值錢的那一隻怪物。',
+  },
+  // --- 6 New Comedic / Funny Uniques (each with useful stats + working quirky effect) ---
+  {
+    templateId: 'uniq_rubber_duck',
+    name: '勇者的澡堂黃色小鴨',
+    statKeys: ['maxHp', 'blockPct', 'politeness'],
+    uniqueEffectId: 'rubber_duck_squeak',
+    uniqueEffectTitle: '神聖啾一聲',
+    uniqueEffectDesc: '受傷時發出響亮的「啾！」震飛周圍敵人，並有 20% 機率療癒心靈回復 2 HP。',
+    flavor: '在地城裡泡澡或許很荒謬，但捏一下真的會比較不痛。',
+  },
+  {
+    templateId: 'uniq_banana_peel',
+    name: '傳說級香蕉皮',
+    statKeys: ['critPct', 'moveSpeedPct', 'dramaticKnockback'],
+    uniqueEffectId: 'banana_slip_crit',
+    uniqueEffectTitle: '原地大滑倒',
+    uniqueEffectDesc: '每次攻擊有 15% 機率害敵人踩滑，造成 +40% 額外暴擊傷害並誇張擊飛！',
+    flavor: '魔王練了三百年劍法，最後輸給一根沒吃完的香蕉。',
+  },
+  {
+    templateId: 'uniq_overtime_mug',
+    name: '寫著「加班中」的馬克杯',
+    statKeys: ['atkPct', 'eliteBossDmgPct', 'footstepEcho'],
+    uniqueEffectId: 'overtime_mug_fury',
+    uniqueEffectTitle: '社畜怨念',
+    uniqueEffectDesc: '對菁英與 Boss（俗稱主管）傷害額外 +15%，命中時偶爾會吐出怨念吐槽。',
+    flavor: '杯底寫著：打完這隻 Boss 我今天一定要準時下班。',
+  },
+  {
+    templateId: 'uniq_disco_ball',
+    name: '地城迪斯可彩球',
+    statKeys: ['goldPct', 'critDmgPct', 'lanternGlowPct', 'shinyGoldFeel'],
+    uniqueEffectId: 'disco_fever_aura',
+    uniqueEffectTitle: '全場焦點小費',
+    uniqueEffectDesc: '觸發暴擊時爆開七彩霓虹火花，並有 20% 機率讓怪物當場噴出打賞金幣！',
+    flavor: '只要燈光夠炫，陰森地城也能變成深夜舞廳。',
+  },
+  {
+    templateId: 'uniq_soggy_noodles',
+    name: '泡過頭的神秘泡麵碗',
+    statKeys: ['potionHealPct', 'maxHp', 'crateDmgPct'],
+    uniqueEffectId: 'noodle_elixir_boost',
+    uniqueEffectTitle: '加湯又加麵',
+    uniqueEffectDesc: '飲用藥水時額外多回復 +15 HP；砸碎木箱時偶爾飄出讓人感動的泡麵香氣。',
+    flavor: '雖然麵條已經膨脹到三倍大，但宵夜時段它就是神藥。',
+  },
+  {
+    templateId: 'uniq_cat_paw_gloves',
+    name: '主子賜福的貓掌手套',
+    statKeys: ['dashCdPct', 'critPct', 'politeness'],
+    uniqueEffectId: 'cat_paw_swat',
+    uniqueEffectTitle: '高速貓貓拳',
+    uniqueEffectDesc: '每第 3 次近戰命中追加一記超快「喵！」連擊貓掌，造成額外傷害與擊退。',
+    flavor: '肉球摸起來軟綿綿，但巴在怪物臉上可是會飛出去的。',
+  },
 ];
 
 export interface SetPieceTemplate {
@@ -800,17 +924,23 @@ function computeSellValue(rarity: RelicRarity, level: number): number {
 
 export type RelicDropSource = 'crate' | 'mob' | 'elite' | 'boss';
 
+function lerpDepthCurve(depth: number, d1: number, v1: number, d2: number, v2: number, d3: number, v3: number): number {
+  if (depth <= d1) return v1;
+  if (depth <= d2) return v1 + ((depth - d1) / (d2 - d1)) * (v2 - v1);
+  if (depth <= d3) return v2 + ((depth - d2) / (d3 - d2)) * (v3 - v2);
+  return v3;
+}
+
 function rollRarity(source: RelicDropSource, depth: number): RelicRarity {
   // Smooth depth progression: 0.0 at Depth 1 -> 1.0 at Depth 30 (clamped for >30)
   const t = Math.min(1, Math.max(0, (depth - 1) / 29));
   const r = Math.random() * 100;
 
   if (source === 'boss') {
-    // Low floors (Depth 5): ~12% orange / ~12% green / ~54% yellow / ~22% blue
-    // Deep floors (Depth 25-30+): ~40% orange / ~40% green / ~20% yellow / 0% blue
-    const orangeChance = 8 + t * 33;
-    const greenChance = 8 + t * 33;
-    const blueChance = Math.max(0, 26 * Math.pow(1 - t, 1.8));
+    // Depth 5: 5% / Depth 15: 10% / Depth 30+: 15% (each for Orange and Green)
+    const orangeChance = lerpDepthCurve(depth, 5, 5, 15, 10, 30, 15);
+    const greenChance = orangeChance;
+    const blueChance = Math.max(0, 28 * Math.pow(1 - t, 1.85));
     const yellowChance = Math.max(0, 100 - orangeChance - greenChance - blueChance);
     if (r < orangeChance) return 'orange';
     if (r < orangeChance + greenChance) return 'green';
@@ -819,11 +949,10 @@ function rollRarity(source: RelicDropSource, depth: number): RelicRarity {
   }
 
   if (source === 'elite') {
-    // Low floors (Depth 1): ~4.5% orange / ~4.5% green / ~38% yellow / ~53% blue
-    // Deep floors (Depth 30): ~30% orange / ~30% green / ~38% yellow / ~2% blue
-    const orangeChance = 4.5 + t * 25.5;
-    const greenChance = 4.5 + t * 25.5;
-    const blueChance = Math.max(2, 53 * Math.pow(1 - t, 1.55));
+    // Depth 1: 2.5% / Depth 15: 5% / Depth 30+: 7.5% (each for Orange and Green)
+    const orangeChance = lerpDepthCurve(depth, 1, 2.5, 15, 5, 30, 7.5);
+    const greenChance = orangeChance;
+    const blueChance = Math.max(3, 55 * Math.pow(1 - t, 1.55));
     const yellowChance = Math.max(0, 100 - orangeChance - greenChance - blueChance);
     if (r < orangeChance) return 'orange';
     if (r < orangeChance + greenChance) return 'green';
@@ -831,12 +960,11 @@ function rollRarity(source: RelicDropSource, depth: number): RelicRarity {
     return 'blue';
   }
 
-  // Normal mob or crate: low early Orange/Green jackpot, very rare Blue on high floors
-  // Depth 1: ~1.2% orange / ~1.2% green / ~22% yellow / ~75.6% blue
-  // Depth 30: ~16% orange / ~16% green / ~62% yellow / ~6% blue
-  const orangeChance = 1.2 + t * 14.8;
-  const greenChance = 1.2 + t * 14.8;
-  const blueChance = Math.max(5, 75.6 * Math.pow(1 - t, 1.45));
+  // Normal mob or crate
+  // Depth 1: 0.4% / Depth 15: 0.8% / Depth 30+: 1.2% (each for Orange and Green)
+  const orangeChance = lerpDepthCurve(depth, 1, 0.4, 15, 0.8, 30, 1.2);
+  const greenChance = orangeChance;
+  const blueChance = Math.max(8, 78 * Math.pow(1 - t, 1.35));
   const yellowChance = Math.max(0, 100 - orangeChance - greenChance - blueChance);
   if (r < orangeChance) return 'orange';
   if (r < orangeChance + greenChance) return 'green';
@@ -937,7 +1065,7 @@ export function rollRelicDrops(
   const results: RelicItem[] = [];
 
   if (source === 'crate') {
-    const chance = Math.min(0.24, 0.045 * dropMult);
+    const chance = Math.min(0.24 / 3, (0.045 / 3) * dropMult);
     if (Math.random() < chance) {
       results.push(generateRelic(depth, 'crate', allocId()));
     }
@@ -945,7 +1073,7 @@ export function rollRelicDrops(
   }
 
   if (source === 'mob') {
-    const chance = Math.min(0.28, 0.055 * dropMult);
+    const chance = Math.min(0.28 / 3, (0.055 / 3) * dropMult);
     if (Math.random() < chance) {
       results.push(generateRelic(depth, 'mob', allocId()));
     }
@@ -953,16 +1081,16 @@ export function rollRelicDrops(
   }
 
   if (source === 'elite') {
-    // Guaranteed at least 1 relic from elites
+    // Guaranteed at least 1 relic from elites (unchanged)
     results.push(generateRelic(depth, 'elite', allocId()));
-    // Depth-scaling chance for a 2nd relic
-    const secondChance = Math.min(0.82, (0.16 + depth * 0.025) * dropMult);
+    // Depth-scaling chance for a 2nd relic (1/3 base & cap)
+    const secondChance = Math.min(0.82 / 3, ((0.16 + depth * 0.025) / 3) * dropMult);
     if (Math.random() < secondChance) {
       results.push(generateRelic(depth, 'elite', allocId()));
     }
-    // Deep floor bonus chance for a 3rd relic
+    // Deep floor bonus chance for a 3rd relic (1/3 base & cap)
     if (depth >= 12) {
-      const thirdChance = Math.min(0.4, ((depth - 10) * 0.015) * dropMult);
+      const thirdChance = Math.min(0.4 / 3, (((depth - 10) * 0.015) / 3) * dropMult);
       if (Math.random() < thirdChance) {
         results.push(generateRelic(depth, 'elite', allocId()));
       }
@@ -970,14 +1098,14 @@ export function rollRelicDrops(
     return results;
   }
 
-  // Boss: Guaranteed 1 relic + high depth-scaling chance for 2nd & 3rd
+  // Boss: Guaranteed 1 relic (unchanged) + 1/3 depth-scaling chance for 2nd & 3rd
   results.push(generateRelic(depth, 'boss', allocId()));
-  const secondChance = Math.min(0.95, (0.45 + depth * 0.03) * dropMult);
+  const secondChance = Math.min(0.95 / 3, ((0.45 + depth * 0.03) / 3) * dropMult);
   if (Math.random() < secondChance) {
     results.push(generateRelic(depth, 'boss', allocId()));
   }
   if (depth >= 10) {
-    const thirdChance = Math.min(0.65, (0.12 + (depth - 9) * 0.022) * dropMult);
+    const thirdChance = Math.min(0.65 / 3, ((0.12 + (depth - 9) * 0.022) / 3) * dropMult);
     if (Math.random() < thirdChance) {
       results.push(generateRelic(depth, 'boss', allocId()));
     }
@@ -1035,6 +1163,12 @@ export function computeRelicSummary(equipped: RelicItem[]): RelicSummaryStats {
   // Unique passive stat bonuses
   if (uniqueSet.has('frying_pan_bonk')) {
     summary.blockPct += 4;
+  }
+  if (uniqueSet.has('starforged_treasure_sense')) {
+    summary.eliteBossDmgPct += 12;
+  }
+  if (uniqueSet.has('overtime_mug_fury')) {
+    summary.eliteBossDmgPct += 15;
   }
 
   // Compute active Set Bonuses (counts distinct named pieces per set)

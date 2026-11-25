@@ -215,6 +215,83 @@ export function createDungeonTextures(
         vy += rand() < 0.5 ? 1 : -1;
       }
     }
+  } else if (theme === 'alien') {
+    // Bright Blue-Silver Sci-Fi Starship Deck Plating with recessed grip treads, rivets & glowing cyan conduits
+    fctx.fillStyle = '#1b3554';
+    fctx.fillRect(0, 0, 64, 64);
+    fbctx.fillStyle = '#252525';
+    fbctx.fillRect(0, 0, 64, 64);
+
+    // 2x2 brushed titanium deck tiles
+    for (let gy = 0; gy < 2; gy++) {
+      for (let gx = 0; gx < 2; gx++) {
+        const px = gx * 32 + 2;
+        const py = gy * 32 + 2;
+        const pw = 28;
+        const ph = 28;
+        const isAcc = (gx + gy) % 2 === 1;
+        const rgb = isAcc ? accentRgb : baseRgb;
+
+        fctx.fillStyle = shiftColor(rgb, 8);
+        fctx.fillRect(px, py, pw, ph);
+
+        // Brushed metallic micro-streaks
+        for (let sy = py + 2; sy < py + ph - 2; sy += 2) {
+          const streak = Math.floor((rand() - 0.5) * 14);
+          fctx.fillStyle = shiftColor(rgb, 8 + streak);
+          fctx.fillRect(px + 2, sy, pw - 4, 1);
+        }
+
+        // Crisp chrome bevel highlight & dark lower seam
+        fctx.fillStyle = '#e8f5ff';
+        fctx.fillRect(px, py, pw, 1);
+        fctx.fillRect(px, py, 1, ph);
+        fctx.fillStyle = '#537396';
+        fctx.fillRect(px, py + ph - 1, pw, 1);
+        fctx.fillRect(px + pw - 1, py, 1, ph);
+
+        // Corner titanium bolts
+        fctx.fillStyle = '#38587a';
+        fctx.fillRect(px + 2, py + 2, 2, 2);
+        fctx.fillRect(px + pw - 4, py + 2, 2, 2);
+        fctx.fillRect(px + 2, py + ph - 4, 2, 2);
+        fctx.fillRect(px + pw - 4, py + ph - 4, 2, 2);
+        fctx.fillStyle = '#f0faff';
+        fctx.fillRect(px + 2, py + 2, 1, 1);
+        fctx.fillRect(px + pw - 4, py + 2, 1, 1);
+
+        // Central recessed deck grip ribs
+        fctx.fillStyle = shiftColor(rgb, -18);
+        fctx.fillRect(px + 7, py + 8, 14, 12);
+        fctx.fillStyle = shiftColor(rgb, 24);
+        for (let ry = 10; ry <= 16; ry += 3) {
+          fctx.fillRect(px + 9, py + ry, 10, 1);
+        }
+
+        // Bump map
+        fbctx.fillStyle = '#dcdcdc';
+        fbctx.fillRect(px, py, pw, ph);
+        fbctx.fillStyle = '#ffffff';
+        fbctx.fillRect(px, py, pw, 2);
+        fbctx.fillStyle = '#888888';
+        fbctx.fillRect(px + 7, py + 8, 14, 12);
+      }
+    }
+
+    // Glowing cyan energy conduits along tile seam crosshairs
+    fctx.fillStyle = '#29c8f2';
+    fctx.fillRect(31, 0, 2, 64);
+    fctx.fillRect(0, 31, 64, 2);
+    fctx.fillStyle = '#b8f7ff';
+    fctx.fillRect(31, 10, 2, 12);
+    fctx.fillRect(31, 42, 2, 12);
+    fctx.fillRect(10, 31, 12, 2);
+    fctx.fillRect(42, 31, 12, 2);
+    // Central glowing circuit node
+    fctx.fillStyle = '#75f2ff';
+    fctx.fillRect(29, 29, 6, 6);
+    fctx.fillStyle = '#ffffff';
+    fctx.fillRect(31, 31, 2, 2);
   } else {
     // Classic Stone Dungeon Flagstone Floor (Depths 1-10)
     const rows = 4;
@@ -354,6 +431,65 @@ export function createDungeonTextures(
       wctx.fillStyle = '#ffd9fa';
       wctx.fillRect(nx + 1, ny + 1, 2, 2);
     }
+  } else if (theme === 'alien') {
+    // Bright Silver-Blue Starship Bulkhead Wall with chrome trim, air vents & glowing cyan LED strips
+    wctx.fillStyle = '#233f5e';
+    wctx.fillRect(0, 0, 64, 64);
+    wbctx.fillStyle = '#303030';
+    wbctx.fillRect(0, 0, 64, 64);
+
+    // Top structural header rail
+    wctx.fillStyle = '#d4e8fa';
+    wctx.fillRect(0, 0, 64, 8);
+    wctx.fillStyle = '#7ba3cc';
+    wctx.fillRect(0, 8, 64, 2);
+    wbctx.fillStyle = '#ffffff';
+    wbctx.fillRect(0, 0, 64, 8);
+
+    // Main twin brushed-silver bulkhead panels
+    for (let px = 0; px < 64; px += 32) {
+      wctx.fillStyle = shiftColor(wallRgb, 14);
+      wctx.fillRect(px + 2, 12, 28, 34);
+      wctx.fillStyle = '#eaf6ff';
+      wctx.fillRect(px + 2, 12, 28, 2);
+      wctx.fillRect(px + 2, 12, 1, 34);
+      wctx.fillStyle = '#5579a0';
+      wctx.fillRect(px + 2, 45, 28, 1);
+
+      // Recessed blue-steel tech bay inside panel
+      wctx.fillStyle = shiftColor(wallAccRgb, -8);
+      wctx.fillRect(px + 6, 18, 20, 22);
+      wctx.fillStyle = '#2e4e73';
+      for (let vy = 21; vy <= 33; vy += 4) {
+        wctx.fillRect(px + 9, vy, 14, 2);
+      }
+      // Small cyan telemetry indicator lights
+      wctx.fillStyle = '#47f0ff';
+      wctx.fillRect(px + 6, 14, 6, 2);
+      wctx.fillStyle = '#e0ffff';
+      wctx.fillRect(px + 14, 14, 2, 2);
+
+      wbctx.fillStyle = '#d8d8d8';
+      wbctx.fillRect(px + 2, 12, 28, 34);
+      wbctx.fillStyle = '#787878';
+      wbctx.fillRect(px + 6, 18, 20, 22);
+    }
+
+    // Horizontal luminous cyan light bar
+    wctx.fillStyle = '#1ca8e8';
+    wctx.fillRect(0, 48, 64, 4);
+    wctx.fillStyle = '#9cf8ff';
+    wctx.fillRect(2, 49, 60, 2);
+    wbctx.fillStyle = '#ffffff';
+    wbctx.fillRect(0, 48, 64, 4);
+
+    // Heavy titanium base kickplate
+    wctx.fillStyle = '#537396';
+    wctx.fillRect(0, 53, 64, 11);
+    wctx.fillStyle = '#89aed4';
+    wctx.fillRect(0, 53, 64, 2);
+    wbctx.fillStyle = '#c8c8c8';
+    wbctx.fillRect(0, 53, 64, 11);
   } else {
     // Classic Ashlar Wall Brick (Depths 1-10)
     const brickRows = 8;
@@ -432,6 +568,22 @@ export function createDungeonTextures(
       pctx.fillStyle = '#73285e';
       pctx.fillRect(fx, 0, 2, 64);
     }
+  } else if (theme === 'alien') {
+    // Brushed chrome & silver-blue reactor support column with glowing cyan plasma bands
+    pctx.fillStyle = '#b4cde6';
+    pctx.fillRect(0, 0, 32, 64);
+    pctx.fillStyle = '#e6f5ff';
+    pctx.fillRect(3, 0, 5, 64);
+    pctx.fillStyle = '#6287b0';
+    pctx.fillRect(22, 0, 8, 64);
+    for (const py of [12, 30, 48]) {
+      pctx.fillStyle = '#1f3b5c';
+      pctx.fillRect(0, py - 1, 32, 6);
+      pctx.fillStyle = '#38e8ff';
+      pctx.fillRect(0, py, 32, 4);
+      pctx.fillStyle = '#e0ffff';
+      pctx.fillRect(2, py + 1, 28, 2);
+    }
   } else {
     pctx.fillStyle = shiftColor(wallRgb, -6);
     pctx.fillRect(0, 0, 32, 64);
@@ -468,6 +620,26 @@ export function createDungeonTextures(
     cctx.fillRect(14, 0, 3, 32);
     cctx.fillStyle = '#ff94eb';
     cctx.fillRect(10, 10, 4, 4);
+  } else if (theme === 'alien') {
+    // Sealed silver-white sci-fi energy supply canister with cyan core strip
+    cctx.fillStyle = '#3c5a7d';
+    cctx.fillRect(0, 0, 32, 32);
+    cctx.fillStyle = '#cfe2f5';
+    cctx.fillRect(2, 2, 28, 28);
+    cctx.fillStyle = '#f2faff';
+    cctx.fillRect(3, 3, 26, 3);
+    cctx.fillStyle = '#6d94bd';
+    cctx.fillRect(4, 11, 24, 10);
+    cctx.fillStyle = '#2de4ff';
+    cctx.fillRect(6, 14, 20, 4);
+    cctx.fillStyle = '#e6ffff';
+    cctx.fillRect(10, 15, 12, 2);
+    // Corner clamps
+    cctx.fillStyle = '#243c59';
+    cctx.fillRect(0, 0, 6, 6);
+    cctx.fillRect(26, 0, 6, 6);
+    cctx.fillRect(0, 26, 6, 6);
+    cctx.fillRect(26, 26, 6, 6);
   } else {
     cctx.fillStyle = theme === 'cavern' ? '#524436' : '#5c3c24';
     cctx.fillRect(0, 0, 32, 32);
@@ -514,6 +686,28 @@ export function createDungeonTextures(
     dctx.fillRect(24, 24, 16, 16);
     dctx.fillStyle = '#ffd9fa';
     dctx.fillRect(28, 28, 8, 8);
+  } else if (theme === 'alien') {
+    // Reinforced titanium blast door with cyan plasma containment bars & holographic lock core
+    dctx.fillStyle = '#294466';
+    dctx.fillRect(0, 0, 64, 64);
+    dctx.fillStyle = '#a9c6e3';
+    dctx.fillRect(4, 4, 56, 56);
+    dctx.fillStyle = '#3d6087';
+    dctx.fillRect(10, 10, 44, 44);
+    for (let px = 14; px < 52; px += 9) {
+      dctx.fillStyle = '#2ee6ff';
+      dctx.fillRect(px, 12, 3, 40);
+      dctx.fillStyle = '#dffeff';
+      dctx.fillRect(px + 1, 12, 1, 40);
+    }
+    dctx.fillStyle = '#d4e9fc';
+    dctx.fillRect(0, 26, 64, 12);
+    dctx.fillStyle = '#1b3554';
+    dctx.fillRect(22, 22, 20, 20);
+    dctx.fillStyle = '#47f0ff';
+    dctx.fillRect(26, 26, 12, 12);
+    dctx.fillStyle = '#ffffff';
+    dctx.fillRect(30, 30, 4, 4);
   } else {
     dctx.fillStyle = theme === 'cavern' ? '#2e3238' : '#3b2518';
     dctx.fillRect(0, 0, 64, 64);
@@ -556,6 +750,29 @@ export function createDungeonTextures(
     bctx.fillStyle = '#ff8de6';
     bctx.fillRect(14, 10, 4, 14);
     bctx.fillRect(15, 28, 2, 12);
+  } else if (theme === 'alien') {
+    // Glowing cyan holographic starship telemetry display screen
+    bctx.fillStyle = '#1a3c63';
+    bctx.fillRect(2, 2, 28, 42);
+    bctx.fillStyle = '#3ceaff';
+    bctx.fillRect(2, 2, 28, 2);
+    bctx.fillRect(2, 42, 28, 2);
+    bctx.fillRect(2, 2, 2, 42);
+    bctx.fillRect(28, 2, 2, 42);
+    // Holographic scanlines & star-chart rings
+    bctx.fillStyle = '#2498d6';
+    for (let hy = 6; hy < 40; hy += 4) {
+      bctx.fillRect(5, hy, 22, 1);
+    }
+    bctx.fillStyle = '#99f8ff';
+    bctx.fillRect(12, 12, 8, 8);
+    bctx.fillStyle = '#1a3c63';
+    bctx.fillRect(14, 14, 4, 4);
+    bctx.fillStyle = '#e0ffff';
+    bctx.fillRect(15, 15, 2, 2);
+    bctx.fillRect(7, 27, 14, 2);
+    bctx.fillRect(7, 32, 18, 2);
+    bctx.fillRect(7, 37, 10, 2);
   } else {
     bctx.fillStyle = biome.bannerColor;
     bctx.fillRect(2, 2, 28, 38);
