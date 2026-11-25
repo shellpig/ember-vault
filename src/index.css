@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #090a0f;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+.font-display {
+  font-family: 'Cinzel', Georgia, serif;
+}
+
+.font-hud {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle miniature framing without washing out scene clarity */
+.diorama-vignette {
+  background:
+    radial-gradient(ellipse 80% 74% at 50% 50%, rgba(9, 10, 15, 0) 56%, rgba(5, 6, 11, 0.34) 88%, rgba(4, 5, 9, 0.66) 100%);
+}
+
+.tilt-blur-top {
+  background: linear-gradient(to bottom, rgba(5, 6, 11, 0.42) 0%, rgba(5, 6, 11, 0.1) 55%, rgba(5, 6, 11, 0) 100%);
+}
+
+.tilt-blur-bottom {
+  background: linear-gradient(to top, rgba(5, 6, 11, 0.46) 0%, rgba(5, 6, 11, 0.1) 55%, rgba(5, 6, 11, 0) 100%);
+}
+
+@keyframes float-up {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.85);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, -2px) scale(1.06);
+  }
+  75% {
+    opacity: 1;
+    transform: translate(-50%, -28px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -42px) scale(0.92);
+  }
+}
+
+.floating-dmg {
+  animation: float-up 0.95s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes banner-enter {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -10px) scale(0.96);
+  }
+  14% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  84% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -6px) scale(0.98);
+  }
+}
+
+.event-banner {
+  animation: banner-enter 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

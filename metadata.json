@@ -1,0 +1,6 @@
+{
+  "name": "Embervault — 3D Isometric Dungeon Crawler",
+  "description": "A procedural 3D isometric miniature dungeon crawler with dynamic lantern shadows, autonomous exploration AI, seamless manual combat takeover, and Web Audio soundscape.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
