@@ -20,6 +20,7 @@ import type {
   LoadoutPayload,
   LootSnap,
   PartyStatePayload,
+  PetSnap,
   PrivatePayload,
   ProjSnap,
   RosterEntry,
@@ -88,6 +89,11 @@ import {
   createHeroModel,
   createHeroSetAura,
   createFrostMageModel,
+  createHunterModel,
+  createHunterArrowMesh,
+  createHunterPetModel,
+  HeroRig,
+  PetRig,
   createIceSpikeMesh,
   createFrozenShell,
   createSlowMarker,
@@ -121,10 +127,15 @@ import { DungeonTextureSet, createDungeonTextures } from './textures';
 import {
   FROST_MAGE,
   HERO_CLASSES,
+  HUNTER,
   HeroClassId,
+  PET_NAMES,
+  PET_SPECIES_LIST,
+  PetSpecies,
   UpgradeKind,
   UpgradeOptionView,
   WARRIOR,
+  getHunterPetMaxHp,
 } from './classes';
 import {
   BannerEvent,
@@ -652,14 +663,37 @@ interface HeroProjectileEntity {
   vx: number;
   vz: number;
   traveled: number;
-  /** 0, 1 = normal spike, 2 = empowered spike */
+  /** Frost Mage: 0, 1 = normal spike, 2 = empowered spike. Hunter arrow: -1. */
   shotIdx: number;
-  /** Phantom Boots guaranteed crit captured when the spike was fired. */
+  /** Phantom Boots guaranteed crit captured when the projectile was fired. */
   phantomCrit: boolean;
-  /** The hero that fired it (its stats and kill credit apply when the spike explodes). */
+  /** The hero that fired it (its stats and kill credit apply when it hits). */
   ownerId: string;
-  /** Teammate view only: a spike of another hero, mirrored from the host's snapshots (never simulated here). */
+  /** Teammate view only: a projectile of another hero, mirrored from the host's snapshots (never simulated here). */
   pid?: number;
+}
+
+interface PetEntity {
+  ownerId: string;
+  species: PetSpecies;
+  name: string;
+  rig: PetRig;
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  facing: number;
+  hp: number;
+  maxHp: number;
+  buffTimer: number;
+  attackCooldown: number;
+  timeSinceDamaged: number;
+  hitFlash: number;
+  invuln: number;
+  walkPhase: number;
+  targetX?: number;
+  targetZ?: number;
+  targetFacing?: number;
 }
 
 interface HeroHitParams {
@@ -985,6 +1019,8 @@ export class EmbervaultEngine {
   /** Suppresses save checkpoints while a run is being (re)built from a save. */
   private loadingRun = false;
   private heroProjectiles: HeroProjectileEntity[] = [];
+  /** Active Hunter pet companions, keyed by owner heroId (max 1 per hunter). */
+  private pets: Map<string, PetEntity> = new Map();
   private hasKey = false;
   private doorUnlocked = false;
   private runElapsedSec = 0;
@@ -1207,6 +1243,19 @@ export class EmbervaultEngine {
     return this.heroes.length;
   }
 
+  private createHeroRigForClass(classId: HeroClassId): HeroRig {
+    const sm = this.sharedShadowMap!;
+    const rig =
+      classId === 'frost_mage'
+        ? createFrostMageModel(sm)
+        : classId === 'hunter'
+        ? createHunterModel(sm)
+        : createHeroModel(sm);
+    rig.root.userData.heroClassId = classId;
+    rig.root.userData.isFrostMage = classId === 'frost_mage';
+    return rig;
+  }
+
   /** (Re)creates the bot teammates. Their starting kit is a copy of `base` (the local loadout) or the bare class. */
   private setupBots(base: CharacterLoadout | null): void {
     for (const h of this.heroes) if (h.isBot || h.isRemote) this.disposeBot(h);
@@ -1218,25 +1267,32 @@ export class EmbervaultEngine {
       const bot = new Hero(`bot-${i + 1}`);
       bot.isBot = true;
       bot.botIndex = i + 1;
-      const classId: HeroClassId = Math.random() < 0.5 ? 'warrior' : 'frost_mage';
-      const wantMage = classId === 'frost_mage';
-      bot.rig = wantMage ? createFrostMageModel(this.sharedShadowMap) : createHeroModel(this.sharedShadowMap);
-      bot.rig.root.userData.isFrostMage = wantMage;
+      const roll = Math.random();
+      const classId: HeroClassId = roll < 0.34 ? 'warrior' : roll < 0.67 ? 'frost_mage' : 'hunter';
+      bot.rig = this.createHeroRigForClass(classId);
       bot.setAura = createHeroSetAura();
       bot.rig.root.add(bot.setAura.group);
       this.scene.add(bot.rig.root);
       bot.resetForNewRun();
       bot.applyClassStats(classId);
       if (base) {
-        // Upgrade levels are class specific: map the warrior and mage tracks onto each other.
+        // Upgrade levels are class specific: map the tracks onto each other.
         const up = base.upgrades;
         const hpLv = Math.max(up.hp, up.hpShield);
-        const armorLv = Math.max(up.armor, up.shieldSpeed);
+        const utilLv = Math.max(up.armor, up.shieldSpeed, up.atkSpeed ?? 0);
         bot.applyLoadout({
           gold: 0,
           maxDepth: base.maxDepth,
           potions: Math.max(3, Math.min(6, base.potions)),
-          upgrades: { hp: hpLv, atk: up.atk, armor: armorLv, crit: up.crit, hpShield: hpLv, shieldSpeed: armorLv },
+          upgrades: {
+            hp: hpLv,
+            atk: up.atk,
+            armor: utilLv,
+            crit: up.crit,
+            hpShield: hpLv,
+            shieldSpeed: utilLv,
+            atkSpeed: utilLv,
+          },
           equipped: base.equipped,
           bag: [],
           stash: [],
@@ -2558,6 +2614,7 @@ export class EmbervaultEngine {
       this.pushBanner(`DEPTH ${depth}`, biome.name);
     }
     if (!bg) this.updateWallOcclusion();
+    this.repositionPetsForNewFloor();
     this.emitHud();
     this.emitMinimap();
     // Room game host: the new floor (or the rebuilt one) goes to every teammate that is in the dungeon
@@ -2594,6 +2651,7 @@ export class EmbervaultEngine {
 
   private buildTown(): void {
     // The caller has already parked or disposed the dungeon and activated an empty level field set for the town.
+    for (const pet of this.pets.values()) pet.rig.root.visible = false;
     this.townBuilt = true;
     this.inTown = true;
 
@@ -4098,9 +4156,8 @@ export class EmbervaultEngine {
   /** Swap the hero 3D rig to match the given class (no-op if already matching). */
   private applyHeroClassRig(classId: HeroClassId): void {
     if (!this.hero.rig || !this.sharedShadowMap) return;
-    const wantMage = classId === 'frost_mage';
-    const isMageRig = Boolean(this.hero.rig.root.userData.isFrostMage);
-    if (wantMage === isMageRig) return;
+    const currentClass = this.hero.rig.root.userData.heroClassId as HeroClassId | undefined;
+    if (currentClass === classId) return;
     this.hero.rig.root.remove(this.hero.setAura.group);
     this.scene.remove(this.hero.rig.root);
     this.hero.rig.root.traverse((obj) => {
@@ -4110,12 +4167,15 @@ export class EmbervaultEngine {
         else obj.material.dispose();
       }
     });
-    this.hero.rig = wantMage
-      ? createFrostMageModel(this.sharedShadowMap)
-      : createHeroModel(this.sharedShadowMap);
-    this.hero.rig.root.userData.isFrostMage = wantMage;
+    this.hero.rig = this.createHeroRigForClass(classId);
     if (this.heroLight) {
-      this.heroLight.color.setHex(wantMage ? 0x9fe6ff : this.dungeon?.biome.torchColor ?? 0xffaa44);
+      this.heroLight.color.setHex(
+        classId === 'frost_mage'
+          ? 0x9fe6ff
+          : classId === 'hunter'
+          ? 0xff9b6a
+          : this.dungeon?.biome.torchColor ?? 0xffaa44
+      );
     }
     this.hero.rig.root.add(this.hero.setAura.group);
     this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
@@ -4140,6 +4200,7 @@ export class EmbervaultEngine {
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
+      this.clearAllPets();
       this.hero.resetForNewRun();
       this.inTown = false;
       this.savedDungeon = null;
@@ -4352,6 +4413,40 @@ export class EmbervaultEngine {
         ),
       ];
     }
+    if (this.hero.isHunter()) {
+      const spdPct = Math.round(this.hero.atkSpeedUpgrades * HUNTER.atkSpeedStep * 100);
+      const maxSpdPct = Math.round(HUNTER.maxAtkSpeedUpgrades * HUNTER.atkSpeedStep * 100);
+      return [
+        row(
+          'hp',
+          'hp',
+          `+${HUNTER.hpPerUpgrade} Max HP`,
+          'HP MAXED',
+          `${this.hero.maxHp} / ${this.hero.getBaseMaxHpCap()} HP`
+        ),
+        row(
+          'atk',
+          'atk',
+          '+10% Attack',
+          'ATK MAXED',
+          `+${this.hero.atkUpgrades * 10}% / +${HUNTER.maxAtkUpgrades * 10}% DMG`
+        ),
+        row(
+          'atk_speed',
+          'armor',
+          '+10% 攻速',
+          '攻速已滿',
+          `+${spdPct}% / +${maxSpdPct}% 射速`
+        ),
+        row(
+          'crit',
+          'crit',
+          `+${HUNTER.critPerUpgradePct}% Crit`,
+          'CRIT MAXED',
+          `+${this.hero.critUpgrades * HUNTER.critPerUpgradePct}% / +${HUNTER.maxCritUpgrades * HUNTER.critPerUpgradePct}% CRIT`
+        ),
+      ];
+    }
     return [
       row(
         'hp',
@@ -4510,15 +4605,26 @@ export class EmbervaultEngine {
         `護盾回充 +${this.hero.shieldSpeedUpgrades * 12}% · FULL`,
         'shieldHit'
       );
+    } else if (kind === 'atk_speed') {
+      this.hero.atkSpeedUpgrades += 1;
+      this.hero.hp = effMax;
+      this.emitFloatingText(
+        this.hero.x,
+        2.0,
+        this.hero.z,
+        `攻速 +${Math.round(this.hero.atkSpeedUpgrades * HUNTER.atkSpeedStep * 100)}% · FULL HP`,
+        'info'
+      );
     } else if (kind === 'hp') {
+      const hpStep = this.hero.isHunter() ? HUNTER.hpPerUpgrade : WARRIOR.hpPerUpgrade;
       this.hero.hpUpgrades += 1;
-      this.hero.maxHp = Math.min(this.hero.maxHpCap, this.hero.maxHp + WARRIOR.hpPerUpgrade);
+      this.hero.maxHp = Math.min(this.hero.getBaseMaxHpCap(), this.hero.maxHp + hpStep);
       this.hero.hp = this.hero.getEffectiveMaxHp();
       this.emitFloatingText(
         this.hero.x,
         2.0,
         this.hero.z,
-        `+${WARRIOR.hpPerUpgrade} MAX HP · FULL HP`,
+        `+${hpStep} MAX HP · FULL HP`,
         'heal'
       );
     } else if (kind === 'armor') {
@@ -4532,13 +4638,14 @@ export class EmbervaultEngine {
         'info'
       );
     } else if (kind === 'crit') {
+      const critStep = this.hero.isHunter() ? HUNTER.critPerUpgradePct : 2;
       this.hero.critUpgrades += 1;
       this.hero.hp = effMax;
       this.emitFloatingText(
         this.hero.x,
         2.0,
         this.hero.z,
-        `CRIT +${this.hero.critUpgrades * 2}% · FULL HP`,
+        `CRIT +${this.hero.critUpgrades * critStep}% · FULL HP`,
         'crit'
       );
     } else {
@@ -4803,6 +4910,10 @@ export class EmbervaultEngine {
     if (this.hero.attackCooldown > 0) return;
     if (this.hero.isMage()) {
       this.performMageAttack();
+      return;
+    }
+    if (this.hero.isHunter()) {
+      this.performHunterAttack();
       return;
     }
 
@@ -5185,6 +5296,10 @@ export class EmbervaultEngine {
       this.performFrostNova();
       return;
     }
+    if (this.hero.isHunter()) {
+      this.performHunterPetSkill();
+      return;
+    }
 
     this.hero.pommelCooldown = this.hero.pommelMaxCooldown;
     this.hero.pommelAnim = 0.34;
@@ -5485,8 +5600,12 @@ export class EmbervaultEngine {
 
   /** Rotates the hero to face the nearest valid enemy. Returns true if a target was found. */
   private autoFaceNearestEnemy(): boolean {
-    const mage = this.hero.isMage();
-    const range = mage ? FROST_MAGE.projectileRange : 3.2;
+    const ranged = this.hero.isRangedClass();
+    const range = this.hero.isHunter()
+      ? HUNTER.projectileRange
+      : this.hero.isMage()
+      ? FROST_MAGE.projectileRange
+      : 3.2;
     let best: EnemyEntity | null = null;
     let bestDist = Infinity;
     for (const e of this.viewEnemies()) {
@@ -5494,7 +5613,7 @@ export class EmbervaultEngine {
       const d = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
       if (d > range + this.getEnemyHitRadius(e) || d >= bestDist) continue;
       if (
-        mage &&
+        ranged &&
         !hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, e.x, e.z, this.doorUnlocked, 0.2)
       ) {
         continue;
@@ -5576,6 +5695,437 @@ export class EmbervaultEngine {
     this.hero.phantomCritTimer = 0;
   }
 
+  /** Hunter basic attack: fast single-target arrow along heroFacing (no 3-hit cycle). */
+  private performHunterAttack(): void {
+    if (this.hero.attackCooldown > 0) return;
+    this.hero.attackCooldown = this.hero.getHunterShotCooldown();
+    this.hero.attackAnim = 0.18;
+    this.audio.playBowShot();
+
+    const dirX = Math.sin(this.hero.facing);
+    const dirZ = Math.cos(this.hero.facing);
+    const x = this.hero.x + dirX * 0.55;
+    const z = this.hero.z + dirZ * 0.55;
+    const mesh = createHunterArrowMesh();
+    mesh.position.set(x, 0.88, z);
+    mesh.rotation.y = Math.atan2(dirX, dirZ);
+    this.dynamicGroup.add(mesh);
+    this.heroProjectiles.push({
+      mesh,
+      x,
+      z,
+      vx: dirX * HUNTER.projectileSpeed,
+      vz: dirZ * HUNTER.projectileSpeed,
+      traveled: 0,
+      shotIdx: -1,
+      phantomCrit: this.hero.phantomCritTimer > 0,
+      ownerId: this.hero.id,
+    });
+    this.hero.phantomCritTimer = 0;
+  }
+
+  private hitHunterArrow(
+    x: number,
+    z: number,
+    target: EnemyEntity | null,
+    phantomCrit = false
+  ): void {
+    for (let i = 0; i < (target ? 7 : 5); i++) {
+      this.spawnParticle(
+        x,
+        0.85,
+        z,
+        (Math.random() - 0.5) * 3.2,
+        1.0 + Math.random() * 1.4,
+        (Math.random() - 0.5) * 3.2,
+        i % 2 === 0 ? 0xff7b47 : 0xffd54f,
+        0.65,
+        0.26,
+        5.5
+      );
+    }
+    if (!target || target.dead) return;
+    // Guest client only has puppet enemies; real damage is computed by host.
+    if (this.mpGuestDungeon()) return;
+
+    this.hero.hunterHitCount += 1;
+    const isThunderHit = this.hero.hunterHitCount % HUNTER.thunderEveryNHits === 0;
+    const atkMult = this.hero.getAtkMult();
+    const critChance = Math.min(
+      0.95,
+      HUNTER.baseCritChance +
+        this.hero.critUpgrades * (HUNTER.critPerUpgradePct / 100) +
+        this.hero.relicStats.critPct / 100
+    );
+    const critMult = 1.35 + this.hero.relicStats.critDmgPct / 100 + (phantomCrit ? 0.25 : 0);
+    const knockMult = 1 + this.hero.relicStats.dramaticKnockback / 100;
+    const effMaxHp = this.hero.getEffectiveMaxHp();
+    const warriorBase = 11 + Math.floor(Math.random() * 6);
+    const hitState = { consumedPhantom: false, triggeredStorm: false };
+
+    this.applyHeroHit(target, {
+      baseDmg: Math.max(1, Math.round(warriorBase * HUNTER.shotDamageMult)),
+      isEmpowered: isThunderHit,
+      atkMult,
+      critChance,
+      critMult,
+      knockMult,
+      knockBase: 1.9,
+      originX: x,
+      originZ: z,
+      fallbackX: Math.sin(this.hero.facing),
+      fallbackZ: Math.cos(this.hero.facing),
+      usePhantomCrit: phantomCrit,
+      effMaxHp,
+      state: hitState,
+      hitColor: 0xff7b47,
+    });
+    this.audio.playHit(false);
+    this.emitHud();
+  }
+
+  /** Hunter right-click skill (CD 7s): summon a random pet if none alive, else buff (+20% atk/spd/def for 5s) + heal 50%. */
+  private performHunterPetSkill(): void {
+    if (this.hero.pommelCooldown > 0 || this.hero.isDead || this.inTown) return;
+    if (this.mpGuestDungeon()) {
+      this.mpQueueAction(ACT_POMMEL);
+      this.hero.pommelCooldown = this.hero.pommelMaxCooldown;
+      this.hero.pommelAnim = 0.26;
+      return;
+    }
+    this.hero.pommelCooldown = this.hero.pommelMaxCooldown;
+    this.hero.pommelAnim = 0.28;
+
+    const existing = this.pets.get(this.hero.id);
+    if (existing && existing.hp > 0) {
+      // Buff + 50% heal
+      const healAmt = Math.round(existing.maxHp * HUNTER.petHealFraction);
+      const actualHeal = Math.min(healAmt, existing.maxHp - existing.hp);
+      existing.hp = Math.min(existing.maxHp, existing.hp + healAmt);
+      existing.buffTimer = HUNTER.petBuffDuration;
+      this.audio.playUpgrade();
+      this.emitFloatingText(
+        existing.x,
+        2.0,
+        existing.z,
+        `★ ${existing.name} 狂野激勵 +${Math.round(actualHeal)} HP`,
+        'heal'
+      );
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        this.spawnParticle(
+          existing.x + Math.cos(a) * 0.45,
+          0.6,
+          existing.z + Math.sin(a) * 0.45,
+          Math.cos(a) * 2.2,
+          1.8 + Math.random() * 1.4,
+          Math.sin(a) * 2.2,
+          i % 2 === 0 ? 0xff9f43 : 0x52ffa8,
+          0.95,
+          0.45,
+          2.0
+        );
+      }
+    } else {
+      // Summon a brand-new random pet beside the Hunter
+      if (existing) this.dismissPet(this.hero.id);
+      if (!this.sharedShadowMap) return;
+      const species = PET_SPECIES_LIST[Math.floor(Math.random() * PET_SPECIES_LIST.length)];
+      const pool = PET_NAMES[species];
+      const name = pool[Math.floor(Math.random() * pool.length)];
+      const angle = this.hero.facing + Math.PI * 0.35;
+      let sx = this.hero.x + Math.sin(angle) * 1.3;
+      let sz = this.hero.z + Math.cos(angle) * 1.3;
+      if (!this.canMoveTo(sx, sz, 0.45)) {
+        sx = this.hero.x;
+        sz = this.hero.z;
+      }
+      const rig = createHunterPetModel(species, name, this.sharedShadowMap);
+      rig.root.position.set(sx, 0, sz);
+      this.scene.add(rig.root);
+      const maxHp = getHunterPetMaxHp(this.depth);
+      const pet: PetEntity = {
+        ownerId: this.hero.id,
+        species,
+        name,
+        rig,
+        x: sx,
+        z: sz,
+        vx: 0,
+        vz: 0,
+        facing: this.hero.facing,
+        hp: maxHp,
+        maxHp,
+        buffTimer: 0,
+        attackCooldown: 0.3,
+        timeSinceDamaged: 999,
+        hitFlash: 0,
+        invuln: 0.4,
+        walkPhase: 0,
+      };
+      this.pets.set(this.hero.id, pet);
+      this.audio.playUpgrade();
+      const speciesLabel = species === 'bear' ? '戰熊' : species === 'chocobo' ? '陸行鳥' : '戰狼';
+      this.emitFloatingText(sx, 2.0, sz, `召喚 ${speciesLabel}「${name}」!`, 'relicOrange');
+      for (let i = 0; i < 18; i++) {
+        const a = (i / 18) * Math.PI * 2;
+        this.spawnParticle(
+          sx + Math.cos(a) * 0.4,
+          0.5,
+          sz + Math.sin(a) * 0.4,
+          Math.cos(a) * 2.6,
+          1.6 + Math.random() * 1.4,
+          Math.sin(a) * 2.6,
+          i % 2 === 0 ? 0xff7b47 : 0xffd54f,
+          1.0,
+          0.45,
+          3.0
+        );
+      }
+    }
+    this.emitHud();
+  }
+
+  private disposePetRig(rig: PetRig): void {
+    this.scene.remove(rig.root);
+    rig.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose();
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+        else obj.material.dispose();
+      } else if (obj instanceof THREE.Sprite) {
+        obj.material.map?.dispose();
+        obj.material.dispose();
+      }
+    });
+  }
+
+  private dismissPet(ownerId: string): void {
+    const pet = this.pets.get(ownerId);
+    if (!pet) return;
+    this.disposePetRig(pet.rig);
+    this.pets.delete(ownerId);
+  }
+
+  private clearAllPets(): void {
+    for (const id of Array.from(this.pets.keys())) {
+      this.dismissPet(id);
+    }
+  }
+
+  private repositionPetsForNewFloor(): void {
+    const newMaxHp = getHunterPetMaxHp(this.depth);
+    for (const pet of this.pets.values()) {
+      const owner = this.heroById(pet.ownerId);
+      if (!owner || owner.isDead) {
+        this.dismissPet(pet.ownerId);
+        continue;
+      }
+      pet.maxHp = newMaxHp;
+      pet.hp = newMaxHp;
+      pet.timeSinceDamaged = 999;
+      pet.x = owner.x + 0.9;
+      pet.z = owner.z + 0.9;
+      if (!this.canMoveTo(pet.x, pet.z, 0.45)) {
+        pet.x = owner.x;
+        pet.z = owner.z;
+      }
+      pet.vx = 0;
+      pet.vz = 0;
+      pet.rig.root.position.set(pet.x, 0, pet.z);
+    }
+  }
+
+  private damagePet(pet: PetEntity, rawDamage: number, srcX: number, srcZ: number): void {
+    if (pet.invuln > 0 || pet.hp <= 0) return;
+    const defMult = pet.buffTimer > 0 ? HUNTER.petBuffDamageTakenMult : 1;
+    const dmg = Math.max(1, Math.round(rawDamage * defMult));
+    pet.hp = Math.max(0, pet.hp - dmg);
+    pet.timeSinceDamaged = 0;
+    pet.hitFlash = 0.16;
+    pet.invuln = 0.35;
+
+    const dx = pet.x - srcX;
+    const dz = pet.z - srcZ;
+    const dist = Math.hypot(dx, dz) || 1;
+    pet.vx += (dx / dist) * 2.6;
+    pet.vz += (dz / dist) * 2.6;
+
+    this.emitFloatingText(pet.x, 1.5, pet.z, `-${dmg}`, 'playerHit');
+    if (pet.hp <= 0) {
+      this.emitFloatingText(pet.x, 2.0, pet.z, `${pet.name} 倒下了!`, 'playerHit');
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2;
+        this.spawnParticle(
+          pet.x,
+          0.7,
+          pet.z,
+          Math.cos(a) * 3.0,
+          1.6 + Math.random() * 1.4,
+          Math.sin(a) * 3.0,
+          0xff7b47,
+          0.9,
+          0.45,
+          4.5
+        );
+      }
+      this.dismissPet(pet.ownerId);
+    }
+  }
+
+  private updatePets(dt: number): void {
+    const prevActor = this.hero;
+    for (const [ownerId, pet] of Array.from(this.pets.entries())) {
+      const owner = this.heroById(ownerId);
+      if (!owner || owner.isDead) {
+        this.dismissPet(ownerId);
+        continue;
+      }
+      if (owner.inTown) {
+        pet.rig.root.visible = false;
+        continue;
+      }
+      pet.rig.root.visible = !this.inTown;
+
+      pet.hitFlash = Math.max(0, pet.hitFlash - dt);
+      pet.invuln = Math.max(0, pet.invuln - dt);
+      pet.buffTimer = Math.max(0, pet.buffTimer - dt);
+      pet.attackCooldown = Math.max(0, pet.attackCooldown - dt);
+      pet.timeSinceDamaged += dt;
+
+      // Out-of-combat automatic regeneration (~5s to full after delay)
+      if (pet.hp < pet.maxHp && pet.timeSinceDamaged >= HUNTER.petRegenDelay) {
+        pet.hp = Math.min(pet.maxHp, pet.hp + (pet.maxHp / HUNTER.petRegenRefill) * dt);
+      }
+
+      const buffed = pet.buffTimer > 0;
+      const toOwnerX = owner.x - pet.x;
+      const toOwnerZ = owner.z - pet.z;
+      const ownerDist = Math.hypot(toOwnerX, toOwnerZ);
+
+      let moveX = 0;
+      let moveZ = 0;
+
+      if (ownerDist > HUNTER.petTeleportDist) {
+        // Teleport right next to owner
+        pet.x = owner.x + (Math.random() - 0.5) * 0.8;
+        pet.z = owner.z + (Math.random() - 0.5) * 0.8;
+        if (!this.canMoveTo(pet.x, pet.z, 0.45)) {
+          pet.x = owner.x;
+          pet.z = owner.z;
+        }
+        pet.vx = 0;
+        pet.vz = 0;
+      } else if (ownerDist > HUNTER.petLeashReturnDist) {
+        // Too far from owner: disengage and rush back
+        moveX = (toOwnerX / ownerDist) * HUNTER.petMoveSpeed * 1.25;
+        moveZ = (toOwnerZ / ownerDist) * HUNTER.petMoveSpeed * 1.25;
+        pet.facing = Math.atan2(toOwnerX, toOwnerZ);
+      } else {
+        // Seek nearest enemy within aggro range
+        let target: EnemyEntity | null = null;
+        let bestD: number = HUNTER.petAggroRange;
+        for (const e of this.enemies) {
+          if (e.dead) continue;
+          const dPet = Math.hypot(e.x - pet.x, e.z - pet.z);
+          const dOwner = Math.hypot(e.x - owner.x, e.z - owner.z);
+          if (dPet < bestD && dOwner < HUNTER.petLeashReturnDist) {
+            bestD = dPet;
+            target = e;
+          }
+        }
+        if (target) {
+          const ex = target.x - pet.x;
+          const ez = target.z - pet.z;
+          const ed = Math.hypot(ex, ez) || 1;
+          pet.facing = Math.atan2(ex, ez);
+          const strikeDist = HUNTER.petAttackReach + this.getEnemyHitRadius(target);
+          if (ed > strikeDist * 0.78) {
+            const spd = HUNTER.petMoveSpeed * (buffed ? 1.15 : 1);
+            moveX = (ex / ed) * spd;
+            moveZ = (ez / ed) * spd;
+          }
+          if (ed <= strikeDist && pet.attackCooldown <= 0) {
+            pet.attackCooldown = HUNTER.petAttackCooldown / (buffed ? HUNTER.petBuffAtkSpeedMult : 1);
+            const rawBase =
+              HUNTER.petDamageMin +
+              Math.floor(Math.random() * (HUNTER.petDamageMax - HUNTER.petDamageMin + 1));
+            const dmg = Math.max(
+              1,
+              Math.round(rawBase * owner.getAtkMult() * (buffed ? HUNTER.petBuffAtkMult : 1))
+            );
+            target.hp -= dmg;
+            target.hitFlash = 0.14;
+            const kb = target.isBoss ? 0.6 : target.isElite ? 1.6 : 3.2;
+            target.vx += (ex / ed) * kb;
+            target.vz += (ez / ed) * kb;
+            this.setActor(owner);
+            owner.totalDamageDealt += dmg;
+            this.emitFloatingText(target.x, 1.5, target.z, `${dmg}`, buffed ? 'crit' : 'damage');
+            this.audio.playHit(false);
+            if (target.hp <= 0) {
+              this.killEnemy(target);
+            }
+          }
+        } else if (ownerDist > 2.0) {
+          // Follow beside owner
+          const spd = HUNTER.petMoveSpeed * Math.min(1.15, ownerDist / 2.6);
+          moveX = (toOwnerX / ownerDist) * spd;
+          moveZ = (toOwnerZ / ownerDist) * spd;
+          pet.facing = Math.atan2(toOwnerX, toOwnerZ);
+        }
+      }
+
+      const nextPos = this.moveWithSlide(
+        pet.x,
+        pet.z,
+        (moveX + pet.vx) * dt,
+        (moveZ + pet.vz) * dt,
+        0.42
+      );
+      pet.x = nextPos.x;
+      pet.z = nextPos.z;
+      pet.vx *= Math.exp(-9 * dt);
+      pet.vz *= Math.exp(-9 * dt);
+
+      this.animatePetRig(pet, Math.hypot(moveX, moveZ), dt);
+    }
+    this.setActor(prevActor);
+  }
+
+  private animatePetRig(pet: PetEntity, moveSpeed: number, dt: number): void {
+    pet.rig.root.position.set(pet.x, 0, pet.z);
+    pet.rig.body.rotation.y = pet.facing;
+    const moving = moveSpeed > 0.25;
+    pet.walkPhase += dt * (moving ? 14 : 3.5);
+    const swing = moving ? Math.sin(pet.walkPhase) * 0.65 : 0;
+    pet.rig.legs.forEach((leg, idx) => {
+      leg.rotation.x = idx % 2 === 0 ? swing : -swing;
+    });
+    if (pet.rig.tail) {
+      pet.rig.tail.rotation.y = Math.sin(pet.walkPhase * 1.2) * (moving ? 0.35 : 0.15);
+    }
+    pet.rig.body.position.y = moving ? Math.abs(Math.sin(pet.walkPhase)) * 0.08 : 0;
+
+    const buffed = pet.buffTimer > 0;
+    pet.rig.buffRing.visible = buffed;
+    if (buffed) {
+      pet.rig.buffRing.rotation.z += dt * 2.4;
+    }
+    for (const m of pet.rig.flashMaterials) {
+      if (pet.hitFlash > 0) {
+        m.emissive.setHex(0xffffff);
+        m.emissiveIntensity = 0.85;
+      } else if (buffed) {
+        m.emissive.setHex(0xff8c24);
+        m.emissiveIntensity = 0.22;
+      } else {
+        m.emissive.setHex(0x000000);
+        m.emissiveIntensity = 0;
+      }
+    }
+  }
+
   private removeHeroProjectileAt(idx: number): void {
     const p = this.heroProjectiles[idx];
     this.dynamicGroup.remove(p.mesh);
@@ -5610,11 +6160,15 @@ export class EmbervaultEngine {
       const steps = Math.max(1, Math.ceil((speed * dt) / 0.3));
       const sdt = dt / steps;
       let exploded = false;
+      const isArrow = p.shotIdx === -1;
+      const hitRad = isArrow ? HUNTER.projectileHitRadius : FROST_MAGE.projectileHitRadius;
+      const maxRange = isArrow ? HUNTER.projectileRange : FROST_MAGE.projectileRange;
       for (let s = 0; s < steps && !exploded; s++) {
         const nx = p.x + p.vx * sdt;
         const nz = p.z + p.vz * sdt;
         if (this.isPointInWall(nx, nz)) {
-          this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+          if (isArrow) this.hitHunterArrow(p.x, p.z, null, p.phantomCrit);
+          else this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
           exploded = true;
           break;
         }
@@ -5622,14 +6176,12 @@ export class EmbervaultEngine {
         p.z = nz;
         p.traveled += speed * sdt;
 
-        // A teammate's client has no real monsters, only the host's interpolated puppets: collide with those so
-        // the spike visibly bursts on impact. explodeIceSpike only damages `this.enemies` (empty on a guest), so
-        // this is visual only; the host still decides the actual hit and damage.
         const hitTargets = this.mpGuestDungeon() && this.mp ? this.mp.guest.enemyList : this.enemies;
         for (const e of hitTargets) {
           if (e.dead) continue;
-          if (Math.hypot(e.x - p.x, e.z - p.z) <= FROST_MAGE.projectileHitRadius + this.getEnemyHitRadius(e)) {
-            this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+          if (Math.hypot(e.x - p.x, e.z - p.z) <= hitRad + this.getEnemyHitRadius(e)) {
+            if (isArrow) this.hitHunterArrow(p.x, p.z, e, p.phantomCrit);
+            else this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
             exploded = true;
             break;
           }
@@ -5638,13 +6190,19 @@ export class EmbervaultEngine {
         for (const br of this.breakables) {
           if (br.broken) continue;
           if (Math.hypot(br.x - p.x, br.z - p.z) <= 0.6) {
-            this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+            if (isArrow) {
+              if (!this.mpGuestDungeon()) this.breakProp(br);
+              else this.mpGuestPredictBreak(br);
+              this.hitHunterArrow(p.x, p.z, null, p.phantomCrit);
+            } else {
+              this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+            }
             exploded = true;
             break;
           }
         }
-        if (!exploded && p.traveled >= FROST_MAGE.projectileRange) {
-          this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+        if (!exploded && p.traveled >= maxRange) {
+          if (!isArrow) this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
           exploded = true;
         }
       }
@@ -5652,19 +6210,34 @@ export class EmbervaultEngine {
         this.removeHeroProjectileAt(i);
         continue;
       }
-      p.mesh.position.set(p.x, 0.85, p.z);
-      p.mesh.rotation.z += dt * (p.shotIdx === 2 ? 9 : 5);
-      if (Math.random() < (p.shotIdx === 2 ? 0.9 : 0.5)) {
+      p.mesh.position.set(p.x, isArrow ? 0.88 : 0.85, p.z);
+      if (!isArrow) {
+        p.mesh.rotation.z += dt * (p.shotIdx === 2 ? 9 : 5);
+        if (Math.random() < (p.shotIdx === 2 ? 0.9 : 0.5)) {
+          this.spawnParticle(
+            p.x,
+            0.85,
+            p.z,
+            (Math.random() - 0.5) * 0.4,
+            0.2 + Math.random() * 0.4,
+            (Math.random() - 0.5) * 0.4,
+            p.shotIdx === 2 && Math.random() < 0.3 ? 0xffe066 : 0xbff4ff,
+            0.6,
+            0.24,
+            0
+          );
+        }
+      } else if (Math.random() < 0.45) {
         this.spawnParticle(
           p.x,
-          0.85,
+          0.88,
           p.z,
-          (Math.random() - 0.5) * 0.4,
-          0.2 + Math.random() * 0.4,
-          (Math.random() - 0.5) * 0.4,
-          p.shotIdx === 2 && Math.random() < 0.3 ? 0xffe066 : 0xbff4ff,
-          0.6,
-          0.24,
+          (Math.random() - 0.5) * 0.3,
+          0.1,
+          (Math.random() - 0.5) * 0.3,
+          0xff9f43,
+          0.45,
+          0.18,
           0
         );
       }
@@ -6893,6 +7466,7 @@ export class EmbervaultEngine {
 
     if (this.hero.hp <= 0) {
       this.hero.isDead = true;
+      this.dismissPet(this.hero.id);
       this.requestSave('death');
       this.hero.slainBy = sourceLabel;
       // Downed: open the hero's portal right where they fell (replaces any older one)
@@ -6984,7 +7558,7 @@ export class EmbervaultEngine {
       hp: lh.hp,
       maxHp: lh.getEffectiveMaxHp(),
       baseMaxHp: lh.maxHp,
-      maxHpCap: lh.maxHpCap,
+      maxHpCap: lh.getBaseMaxHpCap(),
       potions: lh.potions,
       hasKey: this.hasKey,
       doorUnlocked: this.doorUnlocked,
@@ -6995,8 +7569,8 @@ export class EmbervaultEngine {
       atkBonusPct: lh.atkUpgrades * 10,
       armorBonusPct: lh.armorUpgrades * 10,
       armorMaxPct: lh.maxArmorUpgrades * 10,
-      critBonusPct: lh.critUpgrades * 2,
-      critMaxPct: lh.maxCritUpgrades * 2,
+      critBonusPct: lh.critUpgrades * (lh.isHunter() ? HUNTER.critPerUpgradePct : 2),
+      critMaxPct: lh.getUpgradeMax('crit') * (lh.isHunter() ? HUNTER.critPerUpgradePct : 2),
       upgradeLevel: lh.getTotalUpgradeLevel(),
       upgradeCost: this.getUpgradeCost(),
       potionCost: this.getPotionCost(),
@@ -7055,6 +7629,19 @@ export class EmbervaultEngine {
       skillName: HERO_CLASSES[lh.classId].skillName,
       mobilityName: HERO_CLASSES[lh.classId].mobilityName,
       upgradeOptions: this.getUpgradeOptions(),
+      pet: (() => {
+        const p = this.pets.get(lh.id);
+        if (!p || lh.isDead) return null;
+        return {
+          species: p.species,
+          name: p.name,
+          hp: Math.max(0, Math.round(p.hp)),
+          maxHp: p.maxHp,
+          buffRemaining: Math.max(0, p.buffTimer),
+          buffMax: HUNTER.petBuffDuration,
+          regenerating: p.hp < p.maxHp && p.timeSinceDamaged >= HUNTER.petRegenDelay,
+        };
+      })(),
     });
   }
 
@@ -7945,14 +8532,46 @@ export class EmbervaultEngine {
         0.42
       );
 
-      // Frost Mage: ranged kiting combat. Falls through to path navigation only when LOS is blocked.
+      // Frost Mage / Hunter: ranged kiting combat. Falls through to path navigation only when LOS is blocked.
       if (this.hero.isMage()) {
         const mageMove = this.updateMageCombatAI(nearestEnemy, nearestEnemyDist);
         if (mageMove) return mageMove;
+      } else if (this.hero.isHunter()) {
+        if (this.hero.pommelCooldown <= 0) {
+          const pet = this.pets.get(this.hero.id);
+          if (!pet || pet.hp <= pet.maxHp * 0.7 || nearestEnemyDist < 8.5) {
+            this.performHunterPetSkill();
+          }
+        }
+        const shotLOS = hasLineOfSight(
+          this.dungeon,
+          this.hero.x,
+          this.hero.z,
+          nearestEnemy.x,
+          nearestEnemy.z,
+          this.doorUnlocked,
+          0.2
+        );
+        if (shotLOS && nearestEnemyDist <= HUNTER.projectileRange - 0.5) {
+          this.hero.facing = Math.atan2(dx, dz);
+          if (this.hero.attackCooldown <= 0) this.performHunterAttack();
+          const len = nearestEnemyDist || 1;
+          if (nearestEnemyDist < 3.6) {
+            // Kite backward while shooting
+            return { moveX: -dx / len, moveZ: -dz / len };
+          }
+          if (nearestEnemyDist > 7.5) {
+            return { moveX: (dx / len) * 0.65, moveZ: (dz / len) * 0.65 };
+          }
+          return {
+            moveX: (-dz / len) * 0.45 * this.hero.ai.strafeSign,
+            moveZ: (dx / len) * 0.45 * this.hero.ai.strafeSign,
+          };
+        }
       }
 
       // Auto AI casts Pommel Strike when off CD to interrupt windups or stun nearby foes
-      if (!this.hero.isMage() && this.hero.pommelCooldown <= 0) {
+      if (!this.hero.isRangedClass() && this.hero.pommelCooldown <= 0) {
         let inShockRange = 0;
         let hasPriorityInterrupt = false;
         let hasUnstunnedElite = false;
@@ -7986,7 +8605,7 @@ export class EmbervaultEngine {
       }
 
       const attackRange = nearestEnemy.isBoss ? 2.25 : 1.85;
-      if (!this.hero.isMage() && nearestEnemyDist <= attackRange && clearLOS) {
+      if (!this.hero.isRangedClass() && nearestEnemyDist <= attackRange && clearLOS) {
         this.hero.facing = Math.atan2(dx, dz);
         if (this.hero.attackCooldown <= 0) {
           this.performAttack();
@@ -8228,6 +8847,8 @@ export class EmbervaultEngine {
           } else if (this.hero.gold >= this.getUpgradeCost()) {
             const cycle: UpgradeKind[] = this.hero.isMage()
               ? ['hp_shield', 'atk', 'shield_speed', 'crit']
+              : this.hero.isHunter()
+              ? ['hp', 'atk', 'atk_speed', 'crit']
               : ['hp', 'atk', 'armor', 'crit'];
             const startIdx = Math.max(0, cycle.indexOf(this.hero.autoNextUpgrade));
             let choice: UpgradeKind = 'atk';
@@ -8672,7 +9293,8 @@ export class EmbervaultEngine {
     } else if (!this.inTown) {
       this.updateObjectives(dt);
 
-      // 5. Update Enemies & Projectiles
+      // 5. Update Enemies, Pets & Projectiles
+      this.updatePets(dt);
       this.updateEnemies(dt);
       this.updateProjectiles(dt);
       this.updateHeroProjectiles(dt);
@@ -8762,6 +9384,7 @@ export class EmbervaultEngine {
       this.setActor(local);
       this.updateRescue(dt);
       this.updateObjectives(dt);
+      this.updatePets(dt);
       this.updateEnemies(dt);
       this.updateProjectiles(dt);
       this.updateHeroProjectiles(dt);
@@ -8902,7 +9525,10 @@ export class EmbervaultEngine {
     this.hero.input.moveZ = moveZ;
 
     // 2. Move Hero (Dash or Walk + Knockback)
-    const moveSpeed = 4.65 * (1 + this.hero.relicStats.moveSpeedPct / 100);
+    const moveSpeed =
+      4.65 *
+      HERO_CLASSES[this.hero.classId].moveSpeedMult *
+      (1 + this.hero.relicStats.moveSpeedPct / 100);
     let dx = 0;
     let dz = 0;
     if (this.hero.dashTimer > 0) {
@@ -9819,6 +10445,37 @@ export class EmbervaultEngine {
         continue;
       }
 
+      // Pet collision (pets can body-block enemy projectiles)
+      let hitPet: PetEntity | null = null;
+      for (const pet of this.pets.values()) {
+        if (pet.hp <= 0) continue;
+        const owner = this.heroById(pet.ownerId);
+        if (!owner || owner.isDead || owner.inTown) continue;
+        if (Math.hypot(p.x - pet.x, p.z - pet.z) < 0.62) {
+          hitPet = pet;
+          break;
+        }
+      }
+      if (hitPet) {
+        this.damagePet(hitPet, p.damage, p.x - p.vx * 0.05, p.z - p.vz * 0.05);
+        for (let k = 0; k < 6; k++) {
+          this.spawnParticle(
+            p.x,
+            0.85,
+            p.z,
+            (Math.random() - 0.5) * 3.8,
+            1.2 + Math.random() * 1.4,
+            (Math.random() - 0.5) * 3.8,
+            trailCol,
+            0.72,
+            0.28,
+            4
+          );
+        }
+        this.removeProjectileAt(i);
+        continue;
+      }
+
       // Hero collision (any standing hero; heroes can dash through projectiles!)
       const struck = this.heroes.find(
         (h) => !h.isDead && !h.inTown && h.dashTimer <= 0 && Math.hypot(p.x - h.x, p.z - h.z) < 0.58
@@ -10061,17 +10718,31 @@ export class EmbervaultEngine {
         e.rig.body.rotation.z = 0;
       }
 
-      // Lock onto the nearest hero that is still standing (downed heroes are ignored; nobody to hunt = idle)
+      // Lock onto the nearest hero (or Hunter pet for non-boss enemies)
       const prey = this.nearestLiveHero(e.x, e.z);
       if (!prey) continue;
       this.setActor(prey);
-      const dx = this.hero.x - e.x;
-      const dz = this.hero.z - e.z;
-      const dist = Math.hypot(dx, dz);
+      let dx = this.hero.x - e.x;
+      let dz = this.hero.z - e.z;
+      let dist = Math.hypot(dx, dz);
 
       if (e.isBoss) {
         this.updateBoss(e, edt, dx, dz, dist);
         continue;
+      }
+
+      let targetPet: PetEntity | null = null;
+      for (const pet of this.pets.values()) {
+        if (pet.hp <= 0) continue;
+        const owner = this.heroById(pet.ownerId);
+        if (!owner || owner.isDead || owner.inTown) continue;
+        const pd = Math.hypot(pet.x - e.x, pet.z - e.z);
+        if (pd < dist) {
+          dist = pd;
+          dx = pet.x - e.x;
+          dz = pet.z - e.z;
+          targetPet = pet;
+        }
       }
 
       if (e.isRanged) {
@@ -10132,13 +10803,12 @@ export class EmbervaultEngine {
         const baseMelee = isGuard ? 9 : isSwarm ? 1.25 + Math.random() * 0.65 : 5;
         // Swarm critters scale gentler with depth (+6%/floor instead of +12%)
         const depthScale = isSwarm ? this.getSwarmDepthDamageScale() : this.getDepthDamageScale();
-        this.damageHero(
-          baseMelee * depthScale * e.damageMult,
-          e.x,
-          e.z,
-          this.getEnemyLabel(e),
-          e
-        );
+        const dmg = baseMelee * depthScale * e.damageMult;
+        if (targetPet) {
+          this.damagePet(targetPet, dmg, e.x, e.z);
+        } else {
+          this.damageHero(dmg, e.x, e.z, this.getEnemyLabel(e), e);
+        }
       }
 
       // Enemy Procedural Rig Animation
@@ -11146,6 +11816,7 @@ export class EmbervaultEngine {
       this.rescueBars.delete(h.id);
       this.scene.remove(bar.group);
     }
+    this.dismissPet(h.id);
     this.disposeBot(h);
     this.heroes = this.heroes.filter((x) => x !== h);
     this.mp?.guest.heroBufs.delete(h.id);
@@ -11156,9 +11827,7 @@ export class EmbervaultEngine {
     const h = new Hero(id);
     h.isRemote = true;
     h.displayName = name;
-    const wantMage = classId === 'frost_mage';
-    h.rig = wantMage ? createFrostMageModel(this.sharedShadowMap) : createHeroModel(this.sharedShadowMap);
-    h.rig.root.userData.isFrostMage = wantMage;
+    h.rig = this.createHeroRigForClass(classId);
     h.setAura = createHeroSetAura();
     h.rig.root.add(h.setAura.group);
     this.scene.add(h.rig.root);
@@ -11967,6 +12636,27 @@ export class EmbervaultEngine {
       snap.dr = dr;
       if (commit) host.doorSig = doorSig;
     }
+    if (this.pets.size > 0) {
+      const petsArr: PetSnap[] = [];
+      for (const pet of this.pets.values()) {
+        const owner = this.heroById(pet.ownerId);
+        if (!owner || owner.isDead || owner.inTown) continue;
+        const spIdx: 0 | 1 | 2 = pet.species === 'bear' ? 0 : pet.species === 'chocobo' ? 1 : 2;
+        petsArr.push([
+          pet.ownerId,
+          spIdx,
+          pet.name,
+          q100(pet.x),
+          q100(pet.z),
+          q100(pet.facing),
+          Math.max(0, Math.round(pet.hp)),
+          pet.maxHp,
+          q100(Math.max(0, pet.buffTimer)),
+          pet.hitFlash > 0 ? 1 : 0,
+        ]);
+      }
+      if (petsArr.length) snap.pets = petsArr;
+    }
     const world: WorldSnap = {
       k: this.hasKey ? 1 : 0,
       u: this.doorUnlocked ? 1 : 0,
@@ -12258,8 +12948,8 @@ export class EmbervaultEngine {
     if (s.hp) {
       for (const [pid, owner, x, z, vx, vz, shot] of s.hp) {
         if (owner === mp.selfId || g.hprojs.has(pid)) continue;
-        const mesh = createIceSpikeMesh(shot === 2);
-        mesh.position.set(x / 100, 0.85, z / 100);
+        const mesh = shot === -1 ? createHunterArrowMesh() : createIceSpikeMesh(shot === 2);
+        mesh.position.set(x / 100, shot === -1 ? 0.88 : 0.85, z / 100);
         mesh.rotation.y = Math.atan2(vx, vz);
         this.dynamicGroup.add(mesh);
         const ent: HeroProjectileEntity = {
@@ -12293,6 +12983,56 @@ export class EmbervaultEngine {
           g.hprojs.delete(pid);
         }
       }
+    }
+
+    // Hunter pets (reconciled from host snapshot)
+    const seenPets = new Set<string>();
+    if (s.pets && this.sharedShadowMap) {
+      for (const [ownerId, spIdx, name, x100, z100, f100, hp, maxHp, buff100, hit] of s.pets) {
+        seenPets.add(ownerId);
+        const species: PetSpecies = spIdx === 0 ? 'bear' : spIdx === 1 ? 'chocobo' : 'wolf';
+        let pet = this.pets.get(ownerId);
+        if (!pet || pet.species !== species || pet.name !== name) {
+          if (pet) this.dismissPet(ownerId);
+          const rig = createHunterPetModel(species, name, this.sharedShadowMap);
+          rig.root.position.set(x100 / 100, 0, z100 / 100);
+          this.scene.add(rig.root);
+          pet = {
+            ownerId,
+            species,
+            name,
+            rig,
+            x: x100 / 100,
+            z: z100 / 100,
+            vx: 0,
+            vz: 0,
+            facing: f100 / 100,
+            hp,
+            maxHp,
+            buffTimer: buff100 / 100,
+            attackCooldown: 0,
+            timeSinceDamaged: 999,
+            hitFlash: hit ? 0.14 : 0,
+            invuln: 0,
+            walkPhase: 0,
+            targetX: x100 / 100,
+            targetZ: z100 / 100,
+            targetFacing: f100 / 100,
+          };
+          this.pets.set(ownerId, pet);
+        } else {
+          pet.targetX = x100 / 100;
+          pet.targetZ = z100 / 100;
+          pet.targetFacing = f100 / 100;
+          pet.hp = hp;
+          pet.maxHp = maxHp;
+          pet.buffTimer = buff100 / 100;
+          if (hit) pet.hitFlash = 0.14;
+        }
+      }
+    }
+    for (const id of Array.from(this.pets.keys())) {
+      if (!seenPets.has(id)) this.dismissPet(id);
     }
 
     // My own loot
@@ -12737,6 +13477,26 @@ export class EmbervaultEngine {
 
   /** Teammate: everything that is not the hero's own movement (monsters, projectiles, loot, objectives). */
   private mpGuestWorld(dt: number): void {
+    // Smoothly interpolate puppet Hunter pets on guest clients
+    for (const pet of this.pets.values()) {
+      pet.rig.root.visible = !this.inTown;
+      pet.hitFlash = Math.max(0, pet.hitFlash - dt);
+      pet.buffTimer = Math.max(0, pet.buffTimer - dt);
+      const tx = pet.targetX ?? pet.x;
+      const tz = pet.targetZ ?? pet.z;
+      const dist = Math.hypot(tx - pet.x, tz - pet.z);
+      if (dist > 4) {
+        pet.x = tx;
+        pet.z = tz;
+      } else {
+        pet.x = THREE.MathUtils.damp(pet.x, tx, 14, dt);
+        pet.z = THREE.MathUtils.damp(pet.z, tz, 14, dt);
+      }
+      if (pet.targetFacing !== undefined) {
+        pet.facing = pet.targetFacing;
+      }
+      this.animatePetRig(pet, dist * 8, dt);
+    }
     const mp = this.mp!;
     const g = mp.guest;
     this.mpGuestCheckBreaks();

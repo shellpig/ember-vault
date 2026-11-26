@@ -18,6 +18,31 @@ export function ClassEmblem({ id, color, accent }: { id: HeroClassId; color: str
       </svg>
     );
   }
+  if (id === 'hunter') {
+    return (
+      <svg viewBox="0 0 64 64" className="w-16 h-16" aria-hidden="true" fill="none">
+        {/* Recurve bow */}
+        <path
+          d="M22 8 C40 16, 40 48, 22 56"
+          stroke={color}
+          strokeWidth="3"
+          strokeLinecap="round"
+        />
+        <path
+          d="M22 8 L18 12 M22 56 L18 52"
+          stroke={accent}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+        />
+        {/* Bowstring */}
+        <path d="M21 10 L14 32 L21 54" stroke="#e8dfd2" strokeWidth="1.4" strokeOpacity="0.8" />
+        {/* Nocked arrow */}
+        <path d="M14 32 H52" stroke={accent} strokeWidth="2.4" strokeLinecap="round" />
+        <path d="M45 26 L54 32 L45 38 L48 32 Z" fill={color} stroke={color} strokeWidth="1.2" strokeLinejoin="round" />
+        <path d="M12 28 L18 32 L12 36" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 64 64" className="w-16 h-16" aria-hidden="true" fill="none">
       <g stroke={color} strokeWidth="2.5" strokeLinecap="round">

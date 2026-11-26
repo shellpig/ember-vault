@@ -144,7 +144,17 @@ import type {
   RelicRarity,
   RelicSummaryStats,
 } from './relics';
-import type { HeroClassId, UpgradeOptionView } from './classes';
+import type { HeroClassId, PetSpecies, UpgradeOptionView } from './classes';
+
+export interface PetHudInfo {
+  species: PetSpecies;
+  name: string;
+  hp: number;
+  maxHp: number;
+  buffRemaining: number;
+  buffMax: number;
+  regenerating: boolean;
+}
 
 export interface FloatingLabelData {
   id: number;
@@ -318,6 +328,8 @@ export interface HudState {
   mobilityName: string;
   /** Altar upgrade rows for the current class, already formatted. */
   upgradeOptions: UpgradeOptionView[];
+  /** Active Hunter pet state (shown below the top-left HUD card), or null if none. */
+  pet: PetHudInfo | null;
 }
 
 /** One selectable dungeon portal in the town gate menu (spec §3.1: any hero may use anybody's portal). */

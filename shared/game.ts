@@ -173,8 +173,10 @@ export const EF_BOSS_SHIFT = 6;
 
 /** Enemy projectile (flies straight, the receiver moves it): [pid, kind, x100, z100, vx100, vz100] */
 export type ProjSnap = [number, string, number, number, number, number];
-/** Hero ice spike: [pid, ownerId, x100, z100, vx100, vz100, shotIdx] */
+/** Hero projectile (ice spike shotIdx 0..2, hunter arrow shotIdx -1): [pid, ownerId, x100, z100, vx100, vz100, shotIdx] */
 export type HeroProjSnap = [number, string, number, number, number, number, number];
+/** Hunter pet: [ownerId, species 0 bear / 1 chocobo / 2 wolf, name, x100, z100, facing100, hp, maxHp, buffSec100, hitFlash] */
+export type PetSnap = [string, 0 | 1 | 2, string, number, number, number, number, number, number, 0 | 1];
 /** Loot of a teammate (only the owner draws it): [id, ownerId, type 0 gold / 1 potion / 2 relic, x100, z100, rarity 0-3] */
 export type LootSnap = [number, string, number, number, number, number];
 /** A hero's lingering portal: [ownerId, x100, z100, downed] */
@@ -222,6 +224,8 @@ export interface SnapshotPayload {
   lr?: number[];
   w?: WorldSnap;
   dr?: DoorSnap[];
+  /** Active hunter pets in the dungeon. */
+  pets?: PetSnap[];
   ev?: GameEvent[];
 }
 

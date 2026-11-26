@@ -9,7 +9,7 @@ export const MAX_BAG = 30;
 export const MAX_STASH = 200;
 export const MAX_NAME_LENGTH = 16;
 
-/** Gold-upgrade levels. Warrior uses hp/atk/armor/crit, Frost Mage uses hpShield/atk/crit/shieldSpeed. */
+/** Gold-upgrade levels. Warrior: hp/atk/armor/crit; Frost Mage: hpShield/atk/crit/shieldSpeed; Hunter: hp/atk/atkSpeed/crit. */
 export interface CharacterUpgrades {
   hp: number;
   atk: number;
@@ -17,6 +17,7 @@ export interface CharacterUpgrades {
   crit: number;
   hpShield: number;
   shieldSpeed: number;
+  atkSpeed: number;
 }
 
 export const UPGRADE_KEYS: ReadonlyArray<keyof CharacterUpgrades> = [
@@ -26,10 +27,11 @@ export const UPGRADE_KEYS: ReadonlyArray<keyof CharacterUpgrades> = [
   'crit',
   'hpShield',
   'shieldSpeed',
+  'atkSpeed',
 ];
 
 export function emptyUpgrades(): CharacterUpgrades {
-  return { hp: 0, atk: 0, armor: 0, crit: 0, hpShield: 0, shieldSpeed: 0 };
+  return { hp: 0, atk: 0, armor: 0, crit: 0, hpShield: 0, shieldSpeed: 0, atkSpeed: 0 };
 }
 
 /** Persisted part of a character (what the client uploads on PUT). */

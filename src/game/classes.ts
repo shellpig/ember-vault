@@ -2,7 +2,9 @@
 // All gameplay numbers for each class live here so balance tweaks stay in one place.
 // Distances are WORLD UNITS (1 tile = TILE_SIZE = 2.0 world units).
 
-export type HeroClassId = 'warrior' | 'frost_mage';
+export type HeroClassId = 'warrior' | 'frost_mage' | 'hunter';
+
+export type PetSpecies = 'bear' | 'chocobo' | 'wolf';
 
 export type UpgradeKind =
   // Warrior
@@ -12,7 +14,9 @@ export type UpgradeKind =
   | 'crit'
   // Frost Mage
   | 'hp_shield'
-  | 'shield_speed';
+  | 'shield_speed'
+  // Hunter
+  | 'atk_speed';
 
 export type UpgradeAccent = 'hp' | 'atk' | 'armor' | 'crit' | 'shield';
 
@@ -45,6 +49,8 @@ export interface HeroClassDef {
   baseShield: number;
   /** Multiplier applied to base potion heal (40 HP). */
   potionHealMult: number;
+  /** Multiplier applied to base movement speed (4.65). */
+  moveSpeedMult: number;
   skillName: string;
   skillCooldown: number;
   mobilityName: string;
@@ -64,6 +70,7 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClassDef> = {
     baseHp: 60,
     baseShield: 0,
     potionHealMult: 1.5,
+    moveSpeedMult: 1.0,
     skillName: '劍柄重擊',
     skillCooldown: 8.0,
     mobilityName: '衝刺',
@@ -80,15 +87,33 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClassDef> = {
     baseHp: 20,
     baseShield: 30,
     potionHealMult: 1.0,
+    moveSpeedMult: 1.0,
     skillName: '冰霜新星',
     skillCooldown: 10.0,
     mobilityName: '閃現',
     accentCss: '#8fd8ff',
     secondaryCss: '#ffd84a',
   },
+  hunter: {
+    id: 'hunter',
+    name: '赤焰獵人',
+    title: 'Amazon Hunter',
+    description:
+      '身手矯健的紅甲女弓手。天生高速移動、極快連射與 20% 爆擊，能召喚並強化近戰戰寵並肩作戰。',
+    highlights: ['高速單體連射，天生 20% 爆擊', '右鍵：召喚戰寵／強化並回血 50%', '天生移動速度 1.2 倍'],
+    baseHp: 50,
+    baseShield: 0,
+    potionHealMult: 1.0,
+    moveSpeedMult: 1.2,
+    skillName: '召喚戰寵',
+    skillCooldown: 7.0,
+    mobilityName: '疾步',
+    accentCss: '#e8524a',
+    secondaryCss: '#f2b84b',
+  },
 };
 
-export const SELECTABLE_CLASS_IDS: HeroClassId[] = ['warrior', 'frost_mage'];
+export const SELECTABLE_CLASS_IDS: HeroClassId[] = ['warrior', 'frost_mage', 'hunter'];
 
 // ---------------------------------------------------------------------------
 // Warrior tuning
@@ -157,4 +182,60 @@ export function getShieldSpeedFactor(shieldSpeedUpgrades: number): number {
 export function splitRelicMaxHpForMage(amount: number): { hp: number; shield: number } {
   const hp = Math.round(amount * FROST_MAGE.relicHpShareToHp);
   return { hp, shield: amount - hp };
+}
+
+// ---------------------------------------------------------------------------
+// Hunter tuning
+// ---------------------------------------------------------------------------
+export const HUNTER = {
+  // Bow attack (no 3-hit cycle, fast single-target)
+  baseShotCooldown: 0.28,
+  atkSpeedStep: 0.1, // +10% attack speed per upgrade (max 5 -> +50%)
+  shotDamageMult: 0.65, // x warrior normal-hit base (11-16)
+  baseCritChance: 0.2,
+  projectileSpeed: 22,
+  projectileRange: 11,
+  projectileHitRadius: 0.45,
+  thunderEveryNHits: 4,
+
+  // Altar upgrades (total 60)
+  hpPerUpgrade: 8,
+  maxHpUpgrades: 20, // 50 + 20 * 8 = 210 HP
+  maxAtkUpgrades: 20,
+  maxAtkSpeedUpgrades: 5,
+  maxCritUpgrades: 15, // +3% each -> +45% (65% with innate 20%)
+  critPerUpgradePct: 3,
+
+  // Pet companion
+  petBaseHp: 96, // Matches unnamed elite base HP (24 * 4)
+  petDepthHpScale: 0.22,
+  petRegenDelay: 2.5, // seconds without damage before out-of-combat regen starts
+  petRegenRefill: 5.0, // seconds to refill from 0 to full once regen starts
+  petMoveSpeed: 6.0,
+  petAggroRange: 9.0,
+  petLeashReturnDist: 11.5, // breaks off combat to return to owner beyond this distance
+  petTeleportDist: 18.0, // teleports beside owner if stuck / too far
+  petAttackReach: 1.55,
+  petAttackCooldown: 0.95,
+  petDamageMin: 9,
+  petDamageMax: 12,
+
+  // Pet skill buff (when pet is already alive)
+  petBuffDuration: 5.0,
+  petHealFraction: 0.5,
+  petBuffAtkMult: 1.2,
+  petBuffAtkSpeedMult: 1.2,
+  petBuffDamageTakenMult: 0.8, // +20% defense
+} as const;
+
+export const PET_SPECIES_LIST: readonly PetSpecies[] = ['bear', 'chocobo', 'wolf'];
+
+export const PET_NAMES: Record<PetSpecies, readonly string[]> = {
+  bear: ['巴魯', '鐵掌', '蜜糖', '巨岩', '棕毛', '雷吼', '大壯', '雪爪'],
+  chocobo: ['波可', '金羽', '疾風', '小陸', '赤喙', '飛雲', '咕咕', '流光'],
+  wolf: ['灰牙', '夜影', '芬里爾', '霜尾', '赤瞳', '孤月', '疾爪', '白狼'],
+};
+
+export function getHunterPetMaxHp(depth: number): number {
+  return Math.round(HUNTER.petBaseHp * (1 + Math.max(0, depth - 1) * HUNTER.petDepthHpScale));
 }

@@ -2,6 +2,7 @@ import type { CharacterUpgrades } from '../../shared/character';
 import {
   FROST_MAGE,
   HERO_CLASSES,
+  HUNTER,
   WARRIOR,
   getShieldSpeedFactor,
   splitRelicMaxHpForMage,
@@ -159,6 +160,9 @@ export class Hero {
   public readonly maxCritUpgrades = WARRIOR.maxCritUpgrades;
   public hpShieldUpgrades = 0;
   public shieldSpeedUpgrades = 0;
+  public atkSpeedUpgrades = 0;
+  /** Counts Hunter arrow hits for every-Nth-hit relics (e.g. Thunder Hammer every 4th hit). */
+  public hunterHitCount = 0;
   public autoNextUpgrade: UpgradeKind = 'hp';
 
   /**
@@ -311,6 +315,7 @@ export class Hero {
         crit: this.critUpgrades,
         hpShield: this.hpShieldUpgrades,
         shieldSpeed: this.shieldSpeedUpgrades,
+        atkSpeed: this.atkSpeedUpgrades,
       },
       equipped: this.equippedRelics.map((r) => ({ ...r })),
       bag: this.relicBag.map((r) => ({ ...r })),
@@ -333,6 +338,25 @@ export class Hero {
 
   public isMage(): boolean {
     return this.classId === 'frost_mage';
+  }
+
+  public isHunter(): boolean {
+    return this.classId === 'hunter';
+  }
+
+  public isRangedClass(): boolean {
+    return this.classId === 'frost_mage' || this.classId === 'hunter';
+  }
+
+  public getBaseMaxHpCap(): number {
+    if (this.isHunter()) {
+      return HERO_CLASSES.hunter.baseHp + HUNTER.hpPerUpgrade * HUNTER.maxHpUpgrades;
+    }
+    return this.maxHpCap;
+  }
+
+  public getHunterShotCooldown(): number {
+    return HUNTER.baseShotCooldown / (1 + this.atkSpeedUpgrades * HUNTER.atkSpeedStep);
   }
 
   public hasUnique(effectId: UniqueEffectId): boolean {
@@ -393,7 +417,8 @@ export class Hero {
       this.armorUpgrades +
       this.critUpgrades +
       this.hpShieldUpgrades +
-      this.shieldSpeedUpgrades
+      this.shieldSpeedUpgrades +
+      this.atkSpeedUpgrades
     );
   }
 
@@ -409,6 +434,20 @@ export class Hero {
           return FROST_MAGE.maxCritUpgrades;
         case 'shield_speed':
           return FROST_MAGE.maxShieldSpeedUpgrades;
+        default:
+          return 0;
+      }
+    }
+    if (this.isHunter()) {
+      switch (kind) {
+        case 'hp':
+          return HUNTER.maxHpUpgrades;
+        case 'atk':
+          return HUNTER.maxAtkUpgrades;
+        case 'atk_speed':
+          return HUNTER.maxAtkSpeedUpgrades;
+        case 'crit':
+          return HUNTER.maxCritUpgrades;
         default:
           return 0;
       }
@@ -441,11 +480,13 @@ export class Hero {
         return this.hpShieldUpgrades;
       case 'shield_speed':
         return this.shieldSpeedUpgrades;
+      case 'atk_speed':
+        return this.atkSpeedUpgrades;
     }
   }
 
   public isUpgradeMaxed(kind: UpgradeKind): boolean {
-    if (!this.isMage() && kind === 'hp') return this.maxHp >= this.maxHpCap;
+    if (!this.isMage() && kind === 'hp') return this.maxHp >= this.getBaseMaxHpCap();
     return this.getUpgradeCount(kind) >= this.getUpgradeMax(kind);
   }
 
@@ -512,6 +553,8 @@ export class Hero {
     this.critUpgrades = 0;
     this.hpShieldUpgrades = 0;
     this.shieldSpeedUpgrades = 0;
+    this.atkSpeedUpgrades = 0;
+    this.hunterHitCount = 0;
     this.timeSinceDamaged = 999;
     this.mageShotIndex = 0;
     this.autoNextUpgrade = classId === 'frost_mage' ? 'hp_shield' : 'hp';
@@ -533,6 +576,15 @@ export class Hero {
       this.maxHp = HERO_CLASSES.frost_mage.baseHp + FROST_MAGE.hpPerUpgrade * this.hpShieldUpgrades;
       this.baseMaxShield =
         HERO_CLASSES.frost_mage.baseShield + FROST_MAGE.shieldPerUpgrade * this.hpShieldUpgrades;
+    } else if (this.isHunter()) {
+      this.hpUpgrades = lvl(up.hp, HUNTER.maxHpUpgrades);
+      this.atkUpgrades = lvl(up.atk, HUNTER.maxAtkUpgrades);
+      this.atkSpeedUpgrades = lvl(up.atkSpeed, HUNTER.maxAtkSpeedUpgrades);
+      this.critUpgrades = lvl(up.crit, HUNTER.maxCritUpgrades);
+      this.maxHp = Math.min(
+        this.getBaseMaxHpCap(),
+        HERO_CLASSES.hunter.baseHp + HUNTER.hpPerUpgrade * this.hpUpgrades
+      );
     } else {
       this.hpUpgrades = lvl(up.hp, this.getUpgradeMax('hp'));
       this.atkUpgrades = lvl(up.atk, this.maxAtkUpgrades);

@@ -332,13 +332,6 @@ export function CharacterSelectScreen({
                 </button>
               );
             })}
-            <div
-              aria-disabled="true"
-              className="flex flex-col items-center justify-center gap-3 px-5 py-5 bg-[#0b0d13]/80 border border-dashed border-[#3a3428] opacity-60 cursor-not-allowed select-none min-h-[200px]"
-            >
-              <div className="font-display text-xl font-bold tracking-[0.12em] text-[#6a6f80]">？？？</div>
-              <div className="font-hud text-xs text-[#6a6f80] tracking-widest">即將推出</div>
-            </div>
           </div>
           <p className="font-hud text-[11px] text-[#8d93a6]">職業建立後無法更改。</p>
           {error && (

@@ -824,9 +824,22 @@ const FROST_MAGE_UNIQUE_DESC: Partial<Record<UniqueEffectId, string>> = {
   phoenix_dash_nova: '每次閃現時在起點與終點爆開烈焰火環，灼燒周圍敵人並造成擊退。',
 };
 
+const HUNTER_UNIQUE_DESC: Partial<Record<UniqueEffectId, string>> = {
+  blood_moon_leech: '箭矢命中時回復造成傷害 1.5% 的生命（未滿 1 點時累積至下次命中）。',
+  astral_double_strike: '箭矢命中時有 20% 機率折射出一發追擊箭，追加 35% 傷害。',
+  cat_paw_swat: '每第 3 次箭矢命中追加一記超快「喵！」連擊貓掌，造成額外傷害與擊退。',
+  storm_cleave_lightning:
+    '每第 4 次箭矢命中時釋放雷電，連鎖電擊附近最多 3 名敵人造成 20% 額外傷害。',
+  phantom_dash_crit: '疾步後的 2 秒內，下一次射擊必定暴擊且額外造成 +25% 傷害。',
+  phoenix_dash_nova: '每次疾步時在起點與終點爆開烈焰火環，灼燒周圍敵人並造成擊退。',
+};
+
 export function getUniqueEffectDescForClass(effectId: UniqueEffectId, classId: HeroClassId): string {
   if (classId === 'frost_mage') {
     const d = FROST_MAGE_UNIQUE_DESC[effectId];
+    if (d) return d;
+  } else if (classId === 'hunter') {
+    const d = HUNTER_UNIQUE_DESC[effectId];
     if (d) return d;
   }
   return UNIQUE_RELIC_CATALOG.find((t) => t.uniqueEffectId === effectId)?.uniqueEffectDesc ?? '';

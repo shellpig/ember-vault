@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BiomeConfig, EnemyKind, ProjectileKind, TerrainTheme } from './types';
+import { PetSpecies } from './classes';
 import { RelicRarity } from './relics';
 import { DungeonTextureSet } from './textures';
 
@@ -5453,4 +5454,408 @@ export function createSlowMarker(): THREE.Group {
     g.add(b);
   });
   return g;
+}
+
+// ===========================================================================
+// HUNTER (Amazon Archer) & PET COMPANION MODELS
+// ===========================================================================
+
+export interface PetRig {
+  root: THREE.Group;
+  body: THREE.Group;
+  legs: THREE.Object3D[];
+  tail?: THREE.Object3D;
+  buffRing: THREE.Mesh;
+  nameTag: THREE.Sprite;
+  flashMaterials: THREE.MeshStandardMaterial[];
+}
+
+export function createHunterModel(shadowMap: THREE.Texture): HeroRig {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+  addContactShadow(root, shadowMap, 0.58);
+
+  const flashMaterials: THREE.MeshStandardMaterial[] = [];
+  const makeMat = (params: THREE.MeshStandardMaterialParameters) => {
+    const m = new THREE.MeshStandardMaterial(params);
+    flashMaterials.push(m);
+    return m;
+  };
+  const box = (
+    w: number,
+    h: number,
+    d: number,
+    mat: THREE.Material,
+    x: number,
+    y: number,
+    z: number,
+    shadow = false
+  ) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    m.castShadow = shadow;
+    return m;
+  };
+
+  const crimsonMat = makeMat({ color: 0xc92a2a, metalness: 0.14, roughness: 0.62 });
+  const darkRedMat = makeMat({ color: 0x7a161b, metalness: 0.15, roughness: 0.72 });
+  const leatherMat = makeMat({ color: 0x5c2d1f, metalness: 0.08, roughness: 0.85 });
+  const goldMat = makeMat({ color: 0xf2b84b, metalness: 0.85, roughness: 0.25 });
+  const skinMat = makeMat({ color: 0xe6b595, metalness: 0, roughness: 0.88 });
+  const hairMat = makeMat({ color: 0x3b1812, metalness: 0.06, roughness: 0.82 });
+  const hairAccentMat = makeMat({ color: 0x6e2318, metalness: 0.06, roughness: 0.82 });
+  const bowWoodMat = makeMat({ color: 0x7c3f1d, metalness: 0.18, roughness: 0.55 });
+
+  // Legs (pivot at hip y=0.44): athletic bare thighs + tall laced crimson Amazon boots with gold knee guards
+  const makeLeg = (x: number) => {
+    const leg = new THREE.Group();
+    leg.position.set(x, 0.44, 0);
+    // Upper bare thigh
+    leg.add(box(0.145, 0.18, 0.16, skinMat, 0, -0.09, 0, true));
+    // Crimson thigh strap / gold clasp on left
+    if (x < 0) leg.add(box(0.155, 0.04, 0.17, darkRedMat, 0, -0.1, 0));
+    // Tall crimson boot + gold knee trim
+    leg.add(box(0.155, 0.26, 0.2, darkRedMat, 0, -0.3, 0.01, true));
+    leg.add(box(0.165, 0.045, 0.18, goldMat, 0, -0.19, 0.02));
+    body.add(leg);
+    return leg;
+  };
+  const leftLeg = makeLeg(-0.115);
+  const rightLeg = makeLeg(0.115);
+
+  // Midriff & hips: crimson armored briefs / sash + bare athletic waist
+  body.add(box(0.36, 0.14, 0.25, crimsonMat, 0, 0.48, 0, true));
+  body.add(box(0.31, 0.16, 0.22, skinMat, 0, 0.61, 0, true));
+  // Gold waist chain / Amazon belt
+  body.add(box(0.39, 0.05, 0.27, goldMat, 0, 0.54, 0));
+  body.add(box(0.08, 0.09, 0.04, goldMat, 0, 0.53, 0.145));
+  // Split crimson war-skirt panels (front narrow tabard + back drape, open at sides)
+  const frontTabard = box(0.16, 0.26, 0.04, crimsonMat, 0, 0.36, 0.14, true);
+  frontTabard.rotation.x = -0.1;
+  const frontTrim = box(0.17, 0.035, 0.045, goldMat, 0, 0.24, 0.15);
+  const backDrape = box(0.32, 0.28, 0.04, darkRedMat, 0, 0.35, -0.135, true);
+  backDrape.rotation.x = 0.12;
+  body.add(frontTabard, frontTrim, backDrape);
+
+  // Upper torso: crimson Amazon leather bustier / halter armor with gold trim
+  body.add(box(0.38, 0.24, 0.26, crimsonMat, 0, 0.79, 0.01, true));
+  body.add(box(0.4, 0.04, 0.28, goldMat, 0, 0.68, 0.01));
+  body.add(box(0.36, 0.04, 0.27, goldMat, 0, 0.9, 0.01));
+  // Bare collar / shoulders + asymmetrical Amazon left pauldron
+  body.add(box(0.3, 0.08, 0.2, skinMat, 0, 0.94, 0));
+  body.add(box(0.22, 0.1, 0.26, crimsonMat, -0.25, 0.92, 0, true));
+  body.add(box(0.24, 0.035, 0.27, goldMat, -0.25, 0.97, 0));
+
+  // Quiver on back with feathered arrows
+  const quiver = new THREE.Group();
+  quiver.position.set(0.08, 0.8, -0.17);
+  quiver.rotation.z = -0.35;
+  quiver.add(box(0.11, 0.38, 0.1, leatherMat, 0, 0, 0, true));
+  quiver.add(box(0.12, 0.04, 0.11, goldMat, 0, 0.17, 0));
+  for (const ox of [-0.025, 0, 0.025]) {
+    quiver.add(box(0.018, 0.12, 0.018, goldMat, ox, 0.24, 0));
+    quiver.add(box(0.04, 0.05, 0.015, crimsonMat, ox, 0.28, 0));
+  }
+  body.add(quiver);
+
+  // Head
+  body.add(box(0.32, 0.32, 0.3, skinMat, 0, 1.13, 0, true));
+  // Hair + golden Amazon circlet
+  body.add(box(0.36, 0.11, 0.35, hairMat, 0, 1.31, -0.01, true));
+  body.add(box(0.36, 0.26, 0.09, hairMat, 0, 1.16, -0.16, true));
+  body.add(box(0.06, 0.22, 0.24, hairAccentMat, -0.18, 1.16, -0.02));
+  body.add(box(0.06, 0.22, 0.24, hairAccentMat, 0.18, 1.16, -0.02));
+  body.add(box(0.34, 0.045, 0.32, goldMat, 0, 1.25, 0.01));
+  body.add(box(0.06, 0.07, 0.04, crimsonMat, 0, 1.26, 0.175));
+  // Eyes
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffe4b8 });
+  body.add(box(0.05, 0.04, 0.02, eyeMat, -0.07, 1.13, 0.155));
+  body.add(box(0.05, 0.04, 0.02, eyeMat, 0.07, 1.13, 0.155));
+
+  // Long high ponytail acts as `cape` so it sways dynamically while running!
+  const cape = new THREE.Group();
+  cape.position.set(0, 1.28, -0.18);
+  cape.add(box(0.09, 0.09, 0.09, goldMat, 0, 0, -0.02));
+  cape.add(box(0.14, 0.32, 0.11, hairMat, 0, -0.16, -0.09, true));
+  cape.add(box(0.11, 0.24, 0.09, hairAccentMat, 0, -0.4, -0.13, true));
+  body.add(cape);
+
+  // Left arm (draws bowstring / holds lantern ember gem on bracer)
+  const leftArm = new THREE.Group();
+  leftArm.position.set(-0.26, 0.86, 0);
+  leftArm.add(box(0.12, 0.22, 0.12, skinMat, 0, -0.1, 0, true));
+  leftArm.add(box(0.135, 0.16, 0.135, crimsonMat, 0, -0.26, 0.02, true));
+  leftArm.add(box(0.145, 0.035, 0.145, goldMat, 0, -0.19, 0.02));
+  const lanternPivot = new THREE.Group();
+  lanternPivot.position.set(0, -0.32, 0.1);
+  const lanternCore = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.065, 0),
+    new THREE.MeshBasicMaterial({ color: 0xffb347 })
+  );
+  lanternPivot.add(lanternCore);
+  leftArm.add(lanternPivot);
+  body.add(leftArm);
+
+  // Right arm (holds the recurve Amazon bow in `swordGroup`)
+  const rightArm = new THREE.Group();
+  rightArm.position.set(0.26, 0.86, 0);
+  rightArm.add(box(0.12, 0.22, 0.12, skinMat, 0, -0.1, 0, true));
+  rightArm.add(box(0.135, 0.16, 0.135, crimsonMat, 0, -0.26, 0.02, true));
+  rightArm.add(box(0.145, 0.035, 0.145, goldMat, 0, -0.19, 0.02));
+
+  const swordGroup = new THREE.Group();
+  swordGroup.position.set(0, -0.28, 0.2);
+  // Recurve bow limbs
+  const bowGrip = box(0.055, 0.26, 0.065, goldMat, 0, 0, 0.06, true);
+  const upperLimb = box(0.045, 0.42, 0.055, bowWoodMat, 0, 0.28, 0.0, true);
+  upperLimb.rotation.x = -0.35;
+  const upperTip = box(0.04, 0.18, 0.045, goldMat, 0, 0.5, -0.05);
+  upperTip.rotation.x = 0.25;
+  const lowerLimb = box(0.045, 0.42, 0.055, bowWoodMat, 0, -0.28, 0.0, true);
+  lowerLimb.rotation.x = 0.35;
+  const lowerTip = box(0.04, 0.18, 0.045, goldMat, 0, -0.5, -0.05);
+  lowerTip.rotation.x = -0.25;
+  const bowString = box(0.012, 1.06, 0.012, new THREE.MeshBasicMaterial({ color: 0xf5ebd6 }), 0, 0, -0.08);
+  swordGroup.add(bowGrip, upperLimb, upperTip, lowerLimb, lowerTip, bowString);
+  rightArm.add(swordGroup);
+  body.add(rightArm);
+
+  return {
+    root,
+    body,
+    leftLeg,
+    rightLeg,
+    leftArm,
+    rightArm,
+    swordGroup,
+    cape,
+    lanternCore,
+    lanternPivot,
+    flashMaterials,
+  };
+}
+
+export function createHunterArrowMesh(): THREE.Group {
+  const g = new THREE.Group();
+  // Shaft along +Z
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.022, 0.022, 0.72, 5),
+    new THREE.MeshBasicMaterial({ color: 0xf5c97a })
+  );
+  shaft.rotation.x = Math.PI / 2;
+  g.add(shaft);
+  // Glowing crimson-gold arrowhead at +Z
+  const tip = new THREE.Mesh(
+    new THREE.ConeGeometry(0.065, 0.22, 4),
+    new THREE.MeshBasicMaterial({ color: 0xff5a45 })
+  );
+  tip.rotation.x = Math.PI / 2;
+  tip.position.z = 0.4;
+  g.add(tip);
+  // Crimson fletching at -Z
+  const fletchMat = new THREE.MeshBasicMaterial({ color: 0xe63946 });
+  const f1 = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.015, 0.16), fletchMat);
+  f1.position.z = -0.32;
+  const f2 = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.14, 0.16), fletchMat);
+  f2.position.z = -0.32;
+  g.add(f1, f2);
+  // Subtle fiery aura
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 6, 5),
+    new THREE.MeshBasicMaterial({
+      color: 0xff7b47,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  glow.scale.set(0.9, 0.9, 2.5);
+  glow.position.z = 0.15;
+  g.add(glow);
+  return g;
+}
+
+export function createHunterPetModel(
+  species: PetSpecies,
+  name: string,
+  shadowMap: THREE.Texture
+): PetRig {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  const flashMaterials: THREE.MeshStandardMaterial[] = [];
+  const makeMat = (params: THREE.MeshStandardMaterialParameters) => {
+    const m = new THREE.MeshStandardMaterial(params);
+    flashMaterials.push(m);
+    return m;
+  };
+  const box = (
+    w: number,
+    h: number,
+    d: number,
+    mat: THREE.Material,
+    x: number,
+    y: number,
+    z: number,
+    shadow = false
+  ) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    m.castShadow = shadow;
+    return m;
+  };
+
+  const collarMat = makeMat({ color: 0xc92a2a, metalness: 0.15, roughness: 0.6 });
+  const goldMat = makeMat({ color: 0xffd54f, metalness: 0.85, roughness: 0.25 });
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffe066 });
+  const legs: THREE.Object3D[] = [];
+  let tail: THREE.Object3D | undefined;
+
+  if (species === 'bear') {
+    addContactShadow(root, shadowMap, 0.78);
+    const furMat = makeMat({ color: 0x5c3a21, metalness: 0.05, roughness: 0.92 });
+    const darkFurMat = makeMat({ color: 0x3b2313, metalness: 0.05, roughness: 0.92 });
+    const snoutMat = makeMat({ color: 0xa67c52, metalness: 0.04, roughness: 0.88 });
+    // Chunky torso & hump
+    body.add(box(0.74, 0.56, 0.98, furMat, 0, 0.58, 0, true));
+    body.add(box(0.68, 0.16, 0.44, darkFurMat, 0, 0.88, 0.16, true));
+    // Collar
+    body.add(box(0.62, 0.12, 0.14, collarMat, 0, 0.72, 0.44));
+    body.add(box(0.1, 0.1, 0.06, goldMat, 0, 0.64, 0.52));
+    // Head + snout + ears
+    body.add(box(0.5, 0.44, 0.46, furMat, 0, 0.74, 0.62, true));
+    body.add(box(0.24, 0.2, 0.22, snoutMat, 0, 0.66, 0.88, true));
+    body.add(box(0.1, 0.08, 0.06, darkFurMat, 0, 0.72, 0.99));
+    body.add(box(0.12, 0.12, 0.08, darkFurMat, -0.2, 0.98, 0.56));
+    body.add(box(0.12, 0.12, 0.08, darkFurMat, 0.2, 0.98, 0.56));
+    body.add(box(0.06, 0.05, 0.03, eyeMat, -0.14, 0.8, 0.85));
+    body.add(box(0.06, 0.05, 0.03, eyeMat, 0.14, 0.8, 0.85));
+    // Stubby tail
+    tail = box(0.18, 0.18, 0.16, darkFurMat, 0, 0.62, -0.54);
+    body.add(tail);
+    // 4 sturdy legs
+    const legCoords: Array<[number, number]> = [
+      [-0.26, 0.32],
+      [0.26, 0.32],
+      [-0.26, -0.32],
+      [0.26, -0.32],
+    ];
+    for (const [lx, lz] of legCoords) {
+      const leg = new THREE.Group();
+      leg.position.set(lx, 0.36, lz);
+      leg.add(box(0.22, 0.36, 0.24, darkFurMat, 0, -0.18, 0, true));
+      body.add(leg);
+      legs.push(leg);
+    }
+  } else if (species === 'chocobo') {
+    addContactShadow(root, shadowMap, 0.65);
+    const featherMat = makeMat({ color: 0xf4c430, metalness: 0.05, roughness: 0.78 });
+    const brightFeatherMat = makeMat({ color: 0xffe066, metalness: 0.05, roughness: 0.75 });
+    const beakMat = makeMat({ color: 0xe67e22, metalness: 0.08, roughness: 0.65 });
+    // Plump avian body + folded wings + crimson scarf
+    body.add(box(0.54, 0.44, 0.7, featherMat, 0, 0.68, 0, true));
+    body.add(box(0.1, 0.3, 0.52, brightFeatherMat, -0.3, 0.7, -0.02, true));
+    body.add(box(0.1, 0.3, 0.52, brightFeatherMat, 0.3, 0.7, -0.02, true));
+    // Neck + crimson bandana + head + crest + beak
+    body.add(box(0.22, 0.42, 0.22, featherMat, 0, 1.02, 0.26, true));
+    body.add(box(0.28, 0.1, 0.28, collarMat, 0, 0.9, 0.26));
+    body.add(box(0.32, 0.3, 0.34, brightFeatherMat, 0, 1.28, 0.3, true));
+    body.add(box(0.16, 0.14, 0.26, beakMat, 0, 1.24, 0.56, true));
+    // Crest feathers
+    const crest1 = box(0.08, 0.22, 0.14, brightFeatherMat, 0, 1.46, 0.22);
+    crest1.rotation.x = -0.35;
+    const crest2 = box(0.08, 0.16, 0.12, featherMat, 0, 1.42, 0.12);
+    crest2.rotation.x = -0.55;
+    body.add(crest1, crest2);
+    // Eyes
+    const birdEye = new THREE.MeshBasicMaterial({ color: 0x1a1a22 });
+    body.add(box(0.04, 0.06, 0.06, birdEye, -0.165, 1.32, 0.38));
+    body.add(box(0.04, 0.06, 0.06, birdEye, 0.165, 1.32, 0.38));
+    // Tail plumes
+    tail = new THREE.Group();
+    tail.position.set(0, 0.78, -0.38);
+    const plume = box(0.32, 0.2, 0.34, brightFeatherMat, 0, 0.06, -0.12, true);
+    plume.rotation.x = 0.35;
+    tail.add(plume);
+    body.add(tail);
+    // 2 long sturdy bird legs
+    for (const lx of [-0.16, 0.16]) {
+      const leg = new THREE.Group();
+      leg.position.set(lx, 0.5, 0);
+      leg.add(box(0.1, 0.46, 0.1, beakMat, 0, -0.23, 0, true));
+      leg.add(box(0.16, 0.06, 0.24, beakMat, 0, -0.47, 0.06));
+      body.add(leg);
+      legs.push(leg);
+    }
+  } else {
+    // Wolf
+    addContactShadow(root, shadowMap, 0.68);
+    const furMat = makeMat({ color: 0x8d99ae, metalness: 0.08, roughness: 0.85 });
+    const darkFurMat = makeMat({ color: 0x4a5568, metalness: 0.08, roughness: 0.88 });
+    const bellyMat = makeMat({ color: 0xd8dee9, metalness: 0.04, roughness: 0.9 });
+    // Sleek wolf torso
+    body.add(box(0.46, 0.38, 0.92, furMat, 0, 0.56, 0, true));
+    body.add(box(0.42, 0.12, 0.64, darkFurMat, 0, 0.76, 0.04, true));
+    body.add(box(0.34, 0.12, 0.74, bellyMat, 0, 0.38, 0));
+    // Crimson neck bandana
+    body.add(box(0.44, 0.12, 0.18, collarMat, 0, 0.66, 0.38));
+    body.add(box(0.08, 0.08, 0.05, goldMat, 0, 0.6, 0.48));
+    // Head + snout + pointed ears
+    body.add(box(0.36, 0.32, 0.38, furMat, 0, 0.76, 0.56, true));
+    body.add(box(0.18, 0.15, 0.26, bellyMat, 0, 0.69, 0.82, true));
+    body.add(box(0.08, 0.06, 0.06, darkFurMat, 0, 0.73, 0.95));
+    body.add(box(0.09, 0.18, 0.08, darkFurMat, -0.12, 0.98, 0.5));
+    body.add(box(0.09, 0.18, 0.08, darkFurMat, 0.12, 0.98, 0.5));
+    body.add(box(0.06, 0.05, 0.03, eyeMat, -0.1, 0.81, 0.75));
+    body.add(box(0.06, 0.05, 0.03, eyeMat, 0.1, 0.81, 0.75));
+    // Bushy tail
+    tail = new THREE.Group();
+    tail.position.set(0, 0.64, -0.46);
+    const tailMesh = box(0.16, 0.16, 0.44, darkFurMat, 0, 0.06, -0.2, true);
+    tailMesh.rotation.x = 0.25;
+    tail.add(tailMesh);
+    body.add(tail);
+    // 4 agile legs
+    const legCoords: Array<[number, number]> = [
+      [-0.17, 0.3],
+      [0.17, 0.3],
+      [-0.17, -0.32],
+      [0.17, -0.32],
+    ];
+    for (const [lx, lz] of legCoords) {
+      const leg = new THREE.Group();
+      leg.position.set(lx, 0.42, lz);
+      leg.add(box(0.13, 0.42, 0.14, darkFurMat, 0, -0.21, 0, true));
+      body.add(leg);
+      legs.push(leg);
+    }
+  }
+
+  // Buff aura ring on ground (hidden until buffed)
+  const buffRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.62, 0.82, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0xff9f43,
+      transparent: true,
+      opacity: 0.75,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  buffRing.rotation.x = -Math.PI / 2;
+  buffRing.position.y = 0.06;
+  buffRing.visible = false;
+  root.add(buffRing);
+
+  // Floating random pet name above head
+  const nameTag = createEliteNameSprite(name, false);
+  nameTag.scale.set(3.2, 0.72, 1);
+  nameTag.position.y = species === 'chocobo' ? 2.05 : 1.75;
+  root.add(nameTag);
+
+  return { root, body, legs, tail, buffRing, nameTag, flashMaterials };
 }
