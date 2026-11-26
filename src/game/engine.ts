@@ -4623,6 +4623,25 @@ export class EmbervaultEngine {
     return { ok: true };
   }
 
+  /** Sells a relic directly from the bag or town stash while the stash modal is open. */
+  public sellRelicInStash(
+    relicId: string,
+    source: 'bag' | 'stash'
+  ): { ok: true; gold: number; name: string } | { ok: false; reason: 'closed' | 'notFound' } {
+    if (!this.hero.stashOpen || !this.inTown || this.hero.isDead || this.tradeLocked) {
+      return { ok: false, reason: 'closed' };
+    }
+    const list = source === 'bag' ? this.hero.relicBag : this.hero.stash;
+    const idx = list.findIndex((r) => r.id === relicId);
+    if (idx === -1) return { ok: false, reason: 'notFound' };
+    const [item] = list.splice(idx, 1);
+    this.hero.gold += item.sellValue;
+    this.hero.totalGoldEarned += item.sellValue;
+    this.audio.playCoin();
+    this.emitHud();
+    return { ok: true, gold: item.sellValue, name: item.name };
+  }
+
   /** Stash -> bag. */
   public withdrawRelic(relicId: string): StashMoveResult {
     if (!this.hero.stashOpen || !this.inTown || this.hero.isDead || this.tradeLocked) return { ok: false, reason: 'closed' };

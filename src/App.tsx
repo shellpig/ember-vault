@@ -2341,6 +2341,7 @@ export default function App() {
       {hud.stashOpen && hud.inTown && !hud.isDead && (
         <StashModal
           heroClass={hud.heroClass}
+          gold={hud.gold}
           equipped={hud.equippedRelics}
           bag={hud.relicBag}
           bagCap={hud.relicBagCap}
@@ -2348,6 +2349,7 @@ export default function App() {
           stashCap={hud.stashCap}
           onDeposit={(id) => engineRef.current!.depositRelic(id)}
           onWithdraw={(id) => engineRef.current!.withdrawRelic(id)}
+          onSell={(id, source) => engineRef.current!.sellRelicInStash(id, source)}
           onUnequip={(slotIdx) => engineRef.current?.unequipRelic(slotIdx)}
           onClose={() => engineRef.current?.closeStash()}
         />
