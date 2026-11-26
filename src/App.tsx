@@ -114,6 +114,8 @@ const INITIAL_HUD: HudState = {
   hasShopOnFloor: false,
   inTown: false,
   nearPortal: false,
+  portalOptions: [],
+  dungeonRunning: false,
   nearAngel: false,
   townReturnCost: 10,
   angelBuff: null,
@@ -1053,22 +1055,34 @@ export default function App() {
             </div>
 
             <p className="font-hud text-[11px] text-[#aeb8c7] leading-relaxed">
-              穿過傳送門返回地下城原地。本層怪物將會重新復活，但傳送門周圍保持安全。
+              {hud.dungeonRunning
+                ? '隊友仍在地下城戰鬥，怪物不會重生。選擇要穿過的傳送門。'
+                : hud.portalOptions[0]?.id === 'entrance'
+                ? '這一層沒有任何傳送門可用，將從樓層入口出發。本層怪物已重新生成。'
+                : '穿過傳送門返回地下城。本層怪物將會重新復活，但傳送門周圍保持安全。'}
             </p>
 
-            <button
-              type="button"
-              onClick={() => engineRef.current?.returnToDungeon()}
-              className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-[#3e9cc2] bg-[#102430] hover:border-[#7eeaff] hover:bg-[#163344] transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-2 text-xs font-hud font-bold text-[#b8f4ff] whitespace-nowrap">
-                <DoorOpen className="w-4 h-4 text-[#5ce1ff] shrink-0" />
-                <span>返回第 {hud.depth} 層地下城</span>
-              </div>
-              <span className="font-hud text-[11px] text-[#7ed7eb] whitespace-nowrap">
-                點擊傳送
-              </span>
-            </button>
+            <div className="space-y-1.5" data-testid="portal-options">
+              {hud.portalOptions.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  data-testid={`portal-option-${opt.id}`}
+                  onClick={() => engineRef.current?.returnToDungeon(opt.id)}
+                  className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-[#3e9cc2] bg-[#102430] hover:border-[#7eeaff] hover:bg-[#163344] transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 text-xs font-hud font-bold text-[#b8f4ff] whitespace-nowrap">
+                    <DoorOpen className="w-4 h-4 text-[#5ce1ff] shrink-0" />
+                    <span>
+                      {hud.portalOptions.length > 1 || opt.id === 'entrance'
+                        ? `${opt.label}${opt.downed ? '（隊友倒地）' : ''}`
+                        : `返回第 ${hud.depth} 層地下城`}
+                    </span>
+                  </div>
+                  <span className="font-hud text-[11px] text-[#7ed7eb] whitespace-nowrap">點擊傳送</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
