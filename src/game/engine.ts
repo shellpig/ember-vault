@@ -3,6 +3,58 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DungeonAudio } from './audio';
 import { Hero, STASH_CAP } from './hero';
 import type { CharacterLoadout } from './hero';
+import type { AngelBuff } from './relics';
+import type { RoomMember } from '../../shared/room';
+import type {
+  CommandPayload,
+  DoorSnap,
+  EnemySnap,
+  EnemyStatic,
+  GameEvent,
+  GameKind,
+  HandbackPayload,
+  HeroProjSnap,
+  HeroSnap,
+  InputPayload,
+  LevelPayload,
+  LoadoutPayload,
+  LootSnap,
+  PrivatePayload,
+  ProjSnap,
+  RosterEntry,
+  SnapshotPayload,
+  TownPayload,
+  WorldSnap,
+} from '../../shared/game';
+import {
+  ACT_ATTACK,
+  ACT_DASH,
+  ACT_POMMEL,
+  ACT_POTION,
+  EF_BOSS_SHIFT,
+  EF_FROZEN,
+  EF_HIT,
+  EF_SLOW,
+  EF_STUN,
+  HF_DASH,
+  HF_DEAD,
+  HF_HIT,
+  HF_HIT_SHIELD,
+  HF_TOWN,
+  INPUT_KEEPALIVE_MS,
+  INPUT_MAX_HZ,
+  INPUT_STALE_MS,
+  INTERP_DELAY_MS,
+  KEY_A,
+  KEY_D,
+  KEY_F,
+  KEY_S,
+  KEY_W,
+  LOADOUT_WAIT_MS,
+  MAX_EVENTS_PER_SNAPSHOT,
+  SNAPSHOT_HZ,
+  q100,
+} from '../../shared/game';
 import {
   TILE_SIZE,
   findGridPath,
@@ -95,6 +147,100 @@ export type StashMoveResult =
 
 /** Why the engine asks the host to persist the character right now. */
 export type SaveCheckpointReason = 'town' | 'leaveTown' | 'floor' | 'death' | 'stash';
+
+/** Everything the room layer hands the engine when a room game starts (P5-B). */
+export interface MpConfig {
+  role: 'host' | 'guest';
+  selfId: string;
+  hostId: string;
+  members: RoomMember[];
+  /** Sends a game message through the room relay (`to` omitted = everybody, host only). */
+  send: (kind: GameKind, payload: unknown, to?: string) => void;
+  /** A short notice for the player ("XXX 已離開"). */
+  onNotice: (msg: string) => void;
+}
+
+interface MpSample {
+  t: number;
+  x: number;
+  z: number;
+  f: number;
+}
+
+interface MpEnemyPuppet {
+  e: EnemyEntity;
+  buf: MpSample[];
+  placed: boolean;
+}
+
+interface MpGuestState {
+  enemies: Map<number, MpEnemyPuppet>;
+  /** The puppets as a plain list (HUD boss bar / minimap read it instead of `enemies`). */
+  enemyList: EnemyEntity[];
+  projs: Map<number, ProjectileEntity>;
+  hprojs: Map<number, HeroProjectileEntity>;
+  loots: Map<number, LootEntity>;
+  heroBufs: Map<string, { buf: MpSample[]; speed: number }>;
+  /** My own recent positions (local clock) for reconciling against the host's echo. */
+  history: Array<{ t: number; x: number; z: number }>;
+  lastSent: { k: number; f: number; h: number; at: number };
+  actions: number[];
+  lastHasKey: boolean;
+  lastUnlocked: boolean;
+  usedRunes: Set<number>;
+  brokenProps: Set<number>;
+  doorSig: string;
+  lastSnapAt: number;
+  depth: number;
+  /** A floor is built and snapshots may be applied. */
+  built: boolean;
+  spikeOffset?: number;
+}
+
+interface MpHostState {
+  pending: Map<string, LoadoutPayload>;
+  waitStart: number;
+  launched: boolean;
+  inputs: Map<string, { t: number; k: number; f: number; h: number; at: number }>;
+  actions: Map<string, number[]>;
+  cmds: Array<{ from: string; cmd: CommandPayload }>;
+  handbacks: Array<{ from: string; hb: HandbackPayload }>;
+  sendAcc: number;
+  sentEnemies: Map<number, string>;
+  sentProj: Map<ProjectileEntity, number>;
+  sentHproj: Map<HeroProjectileEntity, number>;
+  sentLoot: Set<number>;
+  events: GameEvent[];
+  eventKeys: Set<string>;
+  nextPid: number;
+  pids: WeakMap<object, number>;
+  privSig: Map<string, string>;
+  privAt: Map<string, number>;
+  doorSig: string;
+  worldSig: string;
+  tapped: boolean;
+  lastHeroSig: string;
+  lastSentAt: number;
+  lastDepthSent: number;
+}
+
+interface MpState {
+  role: 'host' | 'guest';
+  selfId: string;
+  hostId: string;
+  members: RoomMember[];
+  send: (kind: GameKind, payload: unknown, to?: string) => void;
+  onNotice: (msg: string) => void;
+  /** Holding at black: waiting for the host's reply (level / town) or for the loadouts. */
+  hold: boolean;
+  inbox: Array<{ kind: GameKind; payload: unknown }>;
+  /** min(local receive time - host timestamp): maps the host clock to ours. */
+  clockOff: number;
+  classId: HeroClassId;
+  loadout: CharacterLoadout;
+  host?: MpHostState;
+  guest: MpGuestState;
+}
 
 interface EngineCallbacks {
   /** Called at save points (town, leaving town, new floor, death) while a saved character is loaded. */
@@ -480,6 +626,8 @@ interface HeroProjectileEntity {
   phantomCrit: boolean;
   /** The hero that fired it (its stats and kill credit apply when the spike explodes). */
   ownerId: string;
+  /** Teammate view only: a spike of another hero, mirrored from the host's snapshots (never simulated here). */
+  pid?: number;
 }
 
 interface HeroHitParams {
@@ -513,6 +661,8 @@ interface ProjectileEntity {
   sourceLabel: string;
   life: number;
   maxLife: number;
+  /** Teammate view only: id of the host's projectile this one mirrors (moved by the snapshot stream). */
+  pid?: number;
 }
 
 interface LootEntity {
@@ -533,6 +683,8 @@ interface LootEntity {
   age: number;
   pickupDelay?: number;
   collected: boolean;
+  /** Teammate view only: the rarity of a relic whose details the host never sent (minimap / mesh colour). */
+  rarity?: 'blue' | 'yellow' | 'orange' | 'green';
 }
 
 interface BreakableEntity {
@@ -708,6 +860,8 @@ export class EmbervaultEngine {
    */
   private heroes: Hero[] = [];
   private localHeroId = 'hero-0';
+  /** Room game state (P5-B). Null = plain single player: every multiplayer path below is skipped. */
+  private mp: MpState | null = null;
   /**
    * The hero ("actor") that the per-hero engine code currently operates on. All the combat / skill / relic /
    * pickup methods read their hero from here. Outside of a per-hero context it is always the local hero;
@@ -872,10 +1026,15 @@ export class EmbervaultEngine {
     return undefined;
   }
 
-  /** Makes `h` the hero that the per-hero engine code operates on (bots are silent). */
+  /** Makes `h` the hero that the per-hero engine code operates on (bots and remote teammates are silent). */
   private setActor(h: Hero): void {
     this.hero = h;
-    this.audio.suppressed = h.isBot || this.bgSim;
+    this.audio.suppressed = h.isBot || h.isRemote || this.bgSim;
+  }
+
+  /** The current actor is not the local player: nothing it does may reach this screen (HUD, shake, banners ...). */
+  private isSilentActor(): boolean {
+    return this.hero.isBot || this.hero.isRemote;
   }
 
   /** A hero that is part of the dungeon simulation: on its feet and not away in the local town. */
@@ -980,7 +1139,7 @@ export class EmbervaultEngine {
     this.debrisGroup.visible = !town;
     this.townGroup.visible = town;
     // Teammates live in the dungeon scene graph root: hide them while the camera is in town
-    for (const h of this.heroes) if (h.isBot) h.rig.root.visible = !town;
+    for (const h of this.heroes) if (h.isBot || h.isRemote) h.rig.root.visible = !town && !h.inTown;
   }
 
   /** Runs `fn` once for every living hero with that hero as the actor, then restores the previous actor. */
@@ -1016,10 +1175,12 @@ export class EmbervaultEngine {
 
   /** (Re)creates the bot teammates. Their starting kit is a copy of `base` (the local loadout) or the bare class. */
   private setupBots(base: CharacterLoadout | null): void {
-    for (const h of this.heroes) if (h.isBot) this.disposeBot(h);
-    this.heroes = this.heroes.filter((h) => !h.isBot);
+    for (const h of this.heroes) if (h.isBot || h.isRemote) this.disposeBot(h);
+    this.heroes = this.heroes.filter((h) => !h.isBot && !h.isRemote);
     if (!this.sharedShadowMap) return;
-    for (let i = 0; i < this.botCount; i++) {
+    // Room games never have local bots (every other hero is a real teammate)
+    const botTotal = this.mp ? 0 : this.botCount;
+    for (let i = 0; i < botTotal; i++) {
       const bot = new Hero(`bot-${i + 1}`);
       bot.isBot = true;
       bot.botIndex = i + 1;
@@ -1120,7 +1281,8 @@ export class EmbervaultEngine {
   private refreshBotPlate(bot: Hero, colorHex?: number): void {
     const marker = this.botMarkers.get(bot.id);
     if (!marker) return;
-    const label = bot.isDead ? `Bot ${bot.botIndex} 倒地` : `Bot ${bot.botIndex}`;
+    const baseName = bot.displayName || `Bot ${bot.botIndex}`;
+    const label = bot.isDead ? `${baseName} 倒地` : baseName;
     if (marker.label === label) return;
     marker.label = label;
     const mat = marker.plate.material as THREE.SpriteMaterial;
@@ -1221,17 +1383,20 @@ export class EmbervaultEngine {
     const R = EmbervaultEngine.RESCUE_RADIUS;
     let anyDowned = false;
     for (const h of this.heroes) if (h.isDead) anyDowned = true;
+    const simulateRescue = !this.mpGuestDungeon();
     if (!anyDowned || this.inTown) {
       this.rescueHudActive = false;
       if (this.rescueBars.size > 0) for (const bar of this.rescueBars.values()) bar.group.visible = false;
-      for (const h of this.heroes) {
-        h.rescueTargetId = null;
-        h.rescueProgress = 0;
+      if (simulateRescue) {
+        for (const h of this.heroes) {
+          h.rescueTargetId = null;
+          h.rescueProgress = 0;
+        }
       }
       return;
     }
     const local = this.localHero;
-    for (const h of this.heroes) {
+    for (const h of simulateRescue ? this.heroes : []) {
       if (h.isDead || h.inTown) {
         h.rescueTargetId = null;
         h.rescueProgress = 0;
@@ -1324,7 +1489,7 @@ export class EmbervaultEngine {
     if (!near) return { beingRescued: 0, prompt: null };
     return {
       beingRescued: 0,
-      prompt: { name: near.isBot ? `Bot ${near.botIndex}` : '隊友', progress: local.rescueTargetId === near.id ? Math.min(1, local.rescueProgress / EmbervaultEngine.RESCUE_SECONDS) : 0 },
+      prompt: { name: near.displayName || (near.isBot ? `Bot ${near.botIndex}` : '隊友'), progress: local.rescueTargetId === near.id ? Math.min(1, local.rescueProgress / EmbervaultEngine.RESCUE_SECONDS) : 0 },
     };
   }
 
@@ -1662,7 +1827,7 @@ export class EmbervaultEngine {
 
   private buildLevel(
     depth: number,
-    options?: { savedSnapshot?: SavedDungeonSnapshot; tickBuffFloor?: boolean }
+    options?: { savedSnapshot?: SavedDungeonSnapshot; tickBuffFloor?: boolean; mpSeed?: number; guest?: boolean }
   ): void {
     // `bg`: a floor change that happens while the local hero is in town (a teammate took the stairs). The dungeon's
     // fields are swapped in for it, and nothing may touch the screen, the camera or the local hero.
@@ -1708,7 +1873,8 @@ export class EmbervaultEngine {
         h.chronosUsedThisFloor = false;
         h.floorKills = 0;
       }
-      this.dungeon = generateDungeon(depth);
+      // Room game teammates build the host's floor from its seed (everything static comes out of this generator)
+      this.dungeon = generateDungeon(depth, options?.mpSeed);
     }
     const biome = this.dungeon.biome;
 
@@ -2157,7 +2323,7 @@ export class EmbervaultEngine {
           rig: spikeRig,
           x,
           z,
-          phaseOffset: Math.random() * 4,
+          phaseOffset: this.mp ? this.mpSpikePhase(prop.gx, prop.gz) : Math.random() * 4,
           extended: false,
         });
       }
@@ -2315,7 +2481,8 @@ export class EmbervaultEngine {
 
     // 9. Spawn Enemies across non-start rooms (protect Town Portal safe zone when returning)
     this.portalSafePos = snap ? { x: snap.returnX, z: snap.returnZ } : null;
-    this.spawnEnemies();
+    // A teammate's client never spawns monsters: they arrive in the host's snapshots
+    if (!options?.guest) this.spawnEnemies();
     this.portalSafePos = null;
     const spawnG = worldToGrid(spawnW.x, spawnW.z);
     this.markExplored(spawnG.gx, spawnG.gz);
@@ -2357,6 +2524,8 @@ export class EmbervaultEngine {
     if (!bg) this.updateWallOcclusion();
     this.emitHud();
     this.emitMinimap();
+    // Room game host: the new floor (or the rebuilt one) goes to every teammate that is in the dungeon
+    if (this.mp?.role === 'host') this.mpHostAnnounceLevel(!snap);
   }
 
   /** Scene atmosphere (background, fog, ambient / rim light, lantern colour) of the dungeon floor in `this.dungeon`. */
@@ -3362,7 +3531,10 @@ export class EmbervaultEngine {
 
       if (code === 'Space' && !this.inTown) {
         // Space auto-turns toward the nearest enemy (both classes) before attacking
-        if (this.hero.attackCooldown <= 0) this.autoFaceNearestEnemy();
+        if (this.hero.attackCooldown <= 0) {
+          this.autoFaceNearestEnemy();
+          if (this.mpGuestDungeon()) this.mpQueueAction(ACT_ATTACK);
+        }
         this.performAttack();
       } else if (code === 'ShiftLeft' || code === 'ShiftRight') {
         this.performDash();
@@ -3406,6 +3578,12 @@ export class EmbervaultEngine {
 
   /** Turns the hero toward the cursor. Returns false if the cursor can't be projected. */
   private faceCursor(): boolean {
+    if (this.hero.isRemote) {
+      // A remote teammate on the host has no cursor here: its client reports the facing it aimed at
+      this.hero.facing = this.hero.input.aimFacing;
+      this.hero.rig.body.rotation.y = this.hero.facing;
+      return true;
+    }
     const target = this.screenToGround(this.hero.input.pointerClientX, this.hero.input.pointerClientY);
     if (!target) return false;
     const ax = target.x - this.hero.x;
@@ -3442,6 +3620,7 @@ export class EmbervaultEngine {
   }
 
   public setControlMode(mode: 'auto' | 'manual'): void {
+    if (this.mp?.role === 'guest' && mode === 'auto') return; // a teammate's hero is always steered by its player
     this.hero.controlMode = mode;
     this.hero.ai.path = [];
     this.hero.ai.combatPath = [];
@@ -3461,7 +3640,7 @@ export class EmbervaultEngine {
   }
 
   public triggerNewDungeon(): void {
-    if (this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (this.mp || this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
@@ -3470,7 +3649,7 @@ export class EmbervaultEngine {
   }
 
   private triggerSkipFloorCheat(): void {
-    if (this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (this.mp || this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (this.audio.isEnabled()) {
       this.audio.playDescend();
     }
@@ -3588,6 +3767,10 @@ export class EmbervaultEngine {
   public confirmDeathReturn(): void {
     if (!this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
+    if (this.mp?.role === 'guest') {
+      this.mpGuestAskTown(true);
+      return;
+    }
     const portal = this.hero.portal ?? { x: this.hero.x, z: this.hero.z, depth: this.depth };
     this.hero.portal = portal;
     const cost = this.getTownReturnCost();
@@ -3640,6 +3823,10 @@ export class EmbervaultEngine {
   public returnToTown(): void {
     if (this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
+    if (this.mp?.role === 'guest') {
+      this.mpGuestAskTown(false);
+      return;
+    }
 
     const cost = this.getTownReturnCost();
     const spent = Math.min(this.hero.gold, cost);
@@ -3711,7 +3898,14 @@ export class EmbervaultEngine {
       if (!h.portal || h.portal.depth !== this.depth) continue;
       opts.push({
         id: h.id,
-        label: h === local ? '我的傳送門' : h.isBot ? `Bot ${h.botIndex} 的傳送門` : '隊友的傳送門',
+        label:
+          h === local
+            ? '我的傳送門'
+            : h.displayName
+            ? `${h.displayName} 的傳送門`
+            : h.isBot
+            ? `Bot ${h.botIndex} 的傳送門`
+            : '隊友的傳送門',
         isOwn: h === local,
         downed: h.isDead,
       });
@@ -3784,6 +3978,10 @@ export class EmbervaultEngine {
   /** Walks through the town gate. `portalId` picks one of `getTownPortalOptions()` (default: the first). */
   public returnToDungeon(portalId?: string): void {
     if (this.hero.isDead || !this.inTown || this.transitionState !== 'none') return;
+    if (this.mp?.role === 'guest') {
+      this.mpGuestReturn(portalId);
+      return;
+    }
     if (!this.savedDungeon && !this.dungeonCtx) return;
     const target = this.resolveGateTarget(portalId);
     if (!target) return;
@@ -3931,6 +4129,14 @@ export class EmbervaultEngine {
       this.hero.input.keys.clear();
       this.hero.rig.body.rotation.z = 0;
       this.hero.rig.body.position.y = 0;
+      if (this.mp) {
+        // Room game: the floor comes later (host: once every loadout is in; teammate: the host's level message)
+        this.setupBots(null);
+        this.hero.controlMode = 'manual';
+        this.mp.hold = true;
+        if (this.mp.role === 'host') this.mp.host!.waitStart = performance.now();
+        return;
+      }
       // Bot teammates start from a copy of the local loadout (fresh each run); none when ?bots=0
       this.setupBots(loadout ?? null);
       this.buildLevel(startDepth);
@@ -3941,12 +4147,12 @@ export class EmbervaultEngine {
   /** Snapshot of the persistent character state (gold, upgrades, relics, potions, max depth) for saving. */
   public exportCharacterState(): CharacterLoadout {
     // A local hero in town has not reached a floor a teammate may have descended to meanwhile
-    return this.hero.exportLoadout(this.localHero.inTown ? this.localHero.maxDepthReached : this.depth);
+    return this.localHero.exportLoadout(this.localHero.inTown ? this.localHero.maxDepthReached : this.depth);
   }
 
   private requestSave(reason: SaveCheckpointReason): void {
-    // Only the local character is ever saved (bots never touch the API)
-    if (this.hero.isBot) return;
+    // Only the local character is ever saved (bots and remote teammates never touch the API)
+    if (this.hero.isBot || this.hero.isRemote) return;
     if (this.persistRun && !this.loadingRun) this.callbacks.onSaveCheckpoint?.(reason);
   }
 
@@ -3956,6 +4162,10 @@ export class EmbervaultEngine {
 
   public equipRelic(relicId: string, replaceSlotIndex?: number): boolean {
     if (this.hero.isDead) return false;
+    if (this.mpGuestDungeon()) {
+      this.mpGuestCmd({ c: 'eq', id: relicId, s: replaceSlotIndex });
+      return true;
+    }
     const bagIdx = this.hero.relicBag.findIndex((r) => r.id === relicId);
     if (bagIdx === -1) return false;
 
@@ -3986,6 +4196,10 @@ export class EmbervaultEngine {
 
   public unequipRelic(slotIndex: number): boolean {
     if (this.hero.isDead) return false;
+    if (this.mpGuestDungeon()) {
+      this.mpGuestCmd({ c: 'uneq', s: slotIndex });
+      return true;
+    }
     if (slotIndex < 0 || slotIndex >= this.hero.equippedRelics.length) return false;
     if (this.hero.relicBag.length >= this.hero.relicBagCap) return false;
 
@@ -3999,6 +4213,10 @@ export class EmbervaultEngine {
 
   public sellRelic(relicId: string): boolean {
     if (this.hero.isDead || !this.isHeroNearShop()) return false;
+    if (this.mpGuestDungeon()) {
+      this.mpGuestCmd({ c: 'sell', id: relicId });
+      return true;
+    }
     const bagIdx = this.hero.relicBag.findIndex((r) => r.id === relicId);
     if (bagIdx === -1) return false;
 
@@ -4017,6 +4235,10 @@ export class EmbervaultEngine {
 
   public sellCommonBagRelics(includeYellow = true): number {
     if (this.hero.isDead || !this.isHeroNearShop()) return 0;
+    if (this.mpGuestDungeon()) {
+      this.mpGuestCmd({ c: 'sellc', y: includeYellow ? 1 : 0 });
+      return 0;
+    }
     let earned = 0;
     const keep: RelicItem[] = [];
     for (const r of this.hero.relicBag) {
@@ -4204,6 +4426,11 @@ export class EmbervaultEngine {
 
   public purchaseUpgrade(kind: UpgradeKind): boolean {
     if (!this.dungeon?.altarPos || !this.isHeroNearAltar()) return false;
+    if (this.mpGuestDungeon()) {
+      if (this.hero.gold < this.getUpgradeCost() || this.hero.getUpgradeMax(kind) <= 0 || this.hero.isUpgradeMaxed(kind)) return false;
+      this.mpGuestCmd({ c: 'up', kind });
+      return true;
+    }
     const cost = this.getUpgradeCost();
     if (this.hero.gold < cost) return false;
     if (this.hero.getUpgradeMax(kind) <= 0 || this.hero.isUpgradeMaxed(kind)) return false;
@@ -4324,6 +4551,10 @@ export class EmbervaultEngine {
     if (!nearShop && !nearAltar) return false;
     const cost = this.getPotionCost();
     if (this.hero.gold < cost) return false;
+    if (this.mpGuestDungeon()) {
+      this.mpGuestCmd({ c: 'buy' });
+      return true;
+    }
 
     if (!this.audio.isEnabled() && this.hero.controlMode === 'manual') {
       this.audio.unlockAndEnable();
@@ -4364,6 +4595,11 @@ export class EmbervaultEngine {
   private usePotion(): void {
     const effMax = this.hero.getEffectiveMaxHp();
     if (this.hero.isDead || this.hero.potions <= 0 || this.hero.hp >= effMax) return;
+    if (this.mpGuestDungeon()) {
+      // The host drinks it for me (HP / potions come back with its next snapshot / private state)
+      this.mpQueueAction(ACT_POTION);
+      return;
+    }
 
     const hasAlchemist = this.hero.hasUnique('alchemist_free_flask');
     const savedFlask = hasAlchemist && Math.random() < 0.2;
@@ -4412,6 +4648,7 @@ export class EmbervaultEngine {
 
   private performDash(): void {
     if (this.hero.dashCooldown > 0 || this.hero.dashTimer > 0) return;
+    if (this.mpGuestDungeon()) this.mpQueueAction(ACT_DASH); // predicted here, executed by the host too
     if (this.hero.isMage()) {
       this.performBlink();
       return;
@@ -4634,7 +4871,7 @@ export class EmbervaultEngine {
 
     if (landedHit) {
       this.audio.playHit(isCleave);
-      if (!this.hero.isBot) this.hitStopTimer = isCleave ? 0.055 : 0.03;
+      if (!this.isSilentActor() && !this.mp) this.hitStopTimer = isCleave ? 0.055 : 0.03;
       this.addScreenShake(isCleave ? 0.26 : 0.14, 0.14);
     }
   }
@@ -4889,6 +5126,7 @@ export class EmbervaultEngine {
 
   private performPommelStrike(): void {
     if (this.hero.isDead || this.hero.pommelCooldown > 0) return;
+    if (this.mpGuestDungeon()) this.mpQueueAction(ACT_POMMEL);
     if (this.hero.isMage()) {
       this.performFrostNova();
       return;
@@ -5118,7 +5356,7 @@ export class EmbervaultEngine {
     }
 
     if (landedHit) {
-      if (!this.hero.isBot) this.hitStopTimer = 0.04;
+      if (!this.isSilentActor() && !this.mp) this.hitStopTimer = 0.04;
     }
     this.emitHud();
   }
@@ -5197,7 +5435,7 @@ export class EmbervaultEngine {
     const range = mage ? FROST_MAGE.projectileRange : 3.2;
     let best: EnemyEntity | null = null;
     let bestDist = Infinity;
-    for (const e of this.enemies) {
+    for (const e of this.viewEnemies()) {
       if (e.dead) continue;
       const d = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
       if (d > range + this.getEnemyHitRadius(e) || d >= bestDist) continue;
@@ -5305,6 +5543,7 @@ export class EmbervaultEngine {
   private updateHeroProjectiles(dt: number): void {
     for (let i = this.heroProjectiles.length - 1; i >= 0; i--) {
       const p = this.heroProjectiles[i];
+      if (p.pid !== undefined) continue; // teammate view: another hero's spike is moved by mpGuestWorld
       // The spike explodes with its owner's stats / relics and credits the kill to them
       const owner = this.heroById(p.ownerId);
       if (!owner) {
@@ -5329,7 +5568,11 @@ export class EmbervaultEngine {
         p.z = nz;
         p.traveled += speed * sdt;
 
-        for (const e of this.enemies) {
+        // A teammate's client has no real monsters, only the host's interpolated puppets: collide with those so
+        // the spike visibly bursts on impact. explodeIceSpike only damages `this.enemies` (empty on a guest), so
+        // this is visual only; the host still decides the actual hit and damage.
+        const hitTargets = this.mpGuestDungeon() && this.mp ? this.mp.guest.enemyList : this.enemies;
+        for (const e of hitTargets) {
           if (e.dead) continue;
           if (Math.hypot(e.x - p.x, e.z - p.z) <= FROST_MAGE.projectileHitRadius + this.getEnemyHitRadius(e)) {
             this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
@@ -5473,7 +5716,7 @@ export class EmbervaultEngine {
     }
 
     if (landedHit) {
-      if (!this.hero.isBot) this.hitStopTimer = Math.max(this.hitStopTimer, empowered ? 0.045 : 0.02);
+      if (!this.isSilentActor() && !this.mp) this.hitStopTimer = Math.max(this.hitStopTimer, empowered ? 0.045 : 0.02);
       this.addScreenShake(empowered ? 0.2 : 0.08, 0.1);
     }
   }
@@ -5602,7 +5845,7 @@ export class EmbervaultEngine {
         this.breakProp(br);
       }
     }
-    if (landedHit && !this.hero.isBot) this.hitStopTimer = 0.05;
+    if (landedHit && !this.isSilentActor() && !this.mp) this.hitStopTimer = 0.05;
     this.emitHud();
   }
 
@@ -5706,6 +5949,8 @@ export class EmbervaultEngine {
   }
 
   private breakProp(br: BreakableEntity): void {
+    // Teammate client: the host decides what breaks (and what drops); the crate vanishes with its next snapshot
+    if (this.mpGuestDungeon()) return;
     br.broken = true;
     br.mesh.visible = false;
     this.audio.playCrateBreak();
@@ -5760,6 +6005,7 @@ export class EmbervaultEngine {
   private killEnemy(enemy: EnemyEntity): void {
     enemy.dead = true;
     enemy.rig.root.visible = false;
+    if (this.mp?.role === 'host') this.mpEmit(['x', q100(enemy.x), q100(enemy.z), enemy.isBoss || enemy.isElite ? 1 : 0]);
     if (enemy.telegraph) {
       enemy.telegraph.group.visible = false;
     }
@@ -6624,14 +6870,18 @@ export class EmbervaultEngine {
   }
 
   private addScreenShake(magnitude: number, duration: number): void {
-    if (this.bgSim || this.hero.isBot) return; // only the local player feels the shake
+    if (this.mp?.role === 'host' && this.hero.isRemote) this.mpEmit(['k', q100(magnitude), q100(duration), this.hero.id]);
+    if (this.bgSim || this.isSilentActor()) return; // only the local player feels the shake
     this.shakeMag = Math.max(this.shakeMag, magnitude);
     this.shakeTime = Math.max(this.shakeTime, duration);
   }
 
   /** Bot actions stay quiet unless `force` (team-wide events like the key / gate / boss kill). */
   private pushBanner(title: string, subtitle?: string, force = false): void {
-    if (this.bgSim || (this.hero.isBot && !force)) return;
+    if (this.mp?.role === 'host' && (force || this.hero.isRemote)) {
+      this.mpEmit(['b', title, subtitle ?? '', force ? '' : this.hero.id]);
+    }
+    if (this.bgSim || (this.isSilentActor() && !force)) return;
     this.callbacks.onBanner({ id: this.nextId++, title, subtitle });
   }
 
@@ -6643,8 +6893,9 @@ export class EmbervaultEngine {
     tone: FloatingLabelData['tone'],
     force = false
   ): void {
+    if (this.mp?.role === 'host') this.mpCaptureFloat(wx, wy, wz, text, tone);
     if (!this.camera || !this.renderer || this.bgSim) return;
-    if (this.hero.isBot && !force) return;
+    if (this.isSilentActor() && !force) return;
     _projVec.set(wx, wy, wz).project(this.camera);
     if (_projVec.z > 1) return;
     const w = this.container.clientWidth || window.innerWidth;
@@ -6661,10 +6912,10 @@ export class EmbervaultEngine {
   }
 
   private emitHud(): void {
-    if (this.bgSim || this.hero.isBot) return; // the HUD only ever shows the local hero
+    if (this.bgSim || this.isSilentActor()) return; // the HUD only ever shows the local hero
     const lh = this.localHero;
     const rescueHud = this.getRescueHud();
-    const activeBoss = this.enemies.find(
+    const activeBoss = this.viewEnemies().find(
       (e) =>
         e.isBoss &&
         !e.dead &&
@@ -6748,7 +6999,7 @@ export class EmbervaultEngine {
   }
 
   private emitMinimap(): void {
-    if (this.bgSim || this.hero.isBot) return;
+    if (this.bgSim || this.isSilentActor()) return;
     const lh = this.localHero;
     const heroG = worldToGrid(lh.x, lh.z);
     this.callbacks.onMinimapUpdate({
@@ -6771,17 +7022,17 @@ export class EmbervaultEngine {
       shopX: this.dungeon.shopPos?.gx,
       shopZ: this.dungeon.shopPos?.gz,
       terrainTheme: this.dungeon.biome.terrainTheme,
-      enemies: this.enemies
+      enemies: this.viewEnemies()
         .filter((e) => !e.dead)
         .map((e) => {
           const g = worldToGrid(e.x, e.z);
           return { x: g.gx, z: g.gz, isBoss: e.isBoss, isElite: e.isElite };
         }),
       relics: this.loots
-        .filter((l) => !l.collected && l.type === 'relic' && l.relic && l.ownerId === this.localHeroId)
+        .filter((l) => !l.collected && l.type === 'relic' && (l.relic || l.rarity) && l.ownerId === this.localHeroId)
         .map((l) => {
           const g = worldToGrid(l.x, l.z);
-          return { x: g.gx, z: g.gz, rarity: l.relic!.rarity };
+          return { x: g.gx, z: g.gz, rarity: (l.relic?.rarity ?? l.rarity)! };
         }),
     });
   }
@@ -8263,6 +8514,7 @@ export class EmbervaultEngine {
 
   private update(dt: number): void {
     this.elapsed += dt;
+    if (this.mp) this.mpPump(dt);
 
     // Fade-in / Fade-out floor transition
     if (this.transitionState === 'fadeOut') {
@@ -8276,6 +8528,12 @@ export class EmbervaultEngine {
       }
       return;
     } else if (this.transitionState === 'fadeIn') {
+      if (this.mp?.hold) {
+        // Room game: stay black until the host's answer (new floor, town hand-off, start) has arrived
+        this.fadeOpacity = 1;
+        this.emitHud();
+        return;
+      }
       this.fadeOpacity = Math.max(0, this.fadeOpacity - dt * 2.0);
       this.emitHud();
       if (this.fadeOpacity <= 0) {
@@ -8289,6 +8547,7 @@ export class EmbervaultEngine {
     // Everybody is downed: the dungeon freezes (spec §3.4) until a hero walks back through a portal / is
     // revived by the "back to town" button. As long as one hero stands, the world keeps running (spec §3.3).
     if (this.heroes.every((h) => h.isDead)) {
+      this.mpHostFrozenTick();
       this.animateHeroPortal(dt);
       this.updateParticles(dt);
       return;
@@ -8311,7 +8570,16 @@ export class EmbervaultEngine {
       this.updateHeroFrame(dt, true);
       this.updateRescue(dt);
       this.runDungeonBackground(dt);
+      if (this.mp?.role === 'host' && !this.dungeonCtx) this.mpHostFrozenTick();
+    } else if (this.mp?.role === 'guest') {
+      // Teammate client: predict my own hero, draw everybody else from the host's snapshots
+      this.mpGuestFrame(dt);
+      this.updateRescue(dt);
+      if (this.botMarkers.size > 0) {
+        for (const h of this.heroes) if (h.isBot || h.isRemote) this.refreshBotPlate(h);
+      }
     } else {
+      if (this.mp) this.mpHostPre();
       for (const h of this.heroes) {
         if (h.isDead || h.inTown) continue;
         this.setActor(h);
@@ -8320,12 +8588,16 @@ export class EmbervaultEngine {
       this.setActor(localHero);
       this.updateRescue(dt);
       if (this.botMarkers.size > 0) {
-        for (const h of this.heroes) if (h.isBot) this.refreshBotPlate(h);
+        for (const h of this.heroes) if (h.isBot || h.isRemote) this.refreshBotPlate(h);
       }
     }
 
     // 4. Key Pickup, Locked Gate Unlock, Stairwell Descent (dungeon only)
-    if (!this.inTown) {
+    if (!this.inTown && this.mp?.role === 'guest') {
+      // The host simulates monsters / loot / objectives; only my own spikes fly here
+      this.updateHeroProjectiles(dt);
+      this.mpGuestWorld(dt);
+    } else if (!this.inTown) {
       this.updateObjectives(dt);
 
       // 5. Update Enemies & Projectiles
@@ -8335,6 +8607,7 @@ export class EmbervaultEngine {
 
       // 6. Update Loot Drops
       this.updateLoot(dt);
+      if (this.mp) this.mpHostPost(dt);
     }
 
     // 7. Update Animated Light Props, Rune Wells, Spike Traps & Wall Occlusion Fade
@@ -8408,6 +8681,7 @@ export class EmbervaultEngine {
     this.bgSim = true;
     this.audio.suppressed = true;
     try {
+      if (this.mp) this.mpHostPre();
       for (const h of this.heroes) {
         if (!this.isInDungeonAlive(h)) continue;
         this.setActor(h);
@@ -8419,7 +8693,9 @@ export class EmbervaultEngine {
       this.updateEnemies(dt);
       this.updateProjectiles(dt);
       this.updateHeroProjectiles(dt);
+      if (this.mp) this.updateLoot(dt);
       this.updateEnvironmentBackground();
+      if (this.mp) this.mpHostPost(dt);
     } finally {
       this.dungeonCtx = this.captureCtx();
       this.applyCtx(townCtx);
@@ -9926,12 +10202,22 @@ export class EmbervaultEngine {
   }
 
   private updateLoot(dt: number): void {
+    const loopActor = this.hero;
     for (const l of this.loots) {
       if (l.collected) continue;
       // Everyone sees only their own drops: other heroes' loot is neither drawn nor simulated here
+      let remote: Hero | null = null;
       if (l.ownerId !== this.localHeroId) {
         l.mesh.visible = false;
-        continue;
+        // Room game host: a teammate's drops are simulated (invisible) so they can pick them up
+        if (this.mp?.role === 'host') {
+          const o = this.heroById(l.ownerId);
+          if (o && o.isRemote && !o.inTown) remote = o;
+        }
+        if (!remote) continue;
+        this.setActor(remote);
+      } else if (this.bgSim && this.mp) {
+        continue; // the host is in town: its own drops wait for it
       }
       l.age += dt;
       if (l.y > 0 || l.vy > 0) {
@@ -10063,6 +10349,7 @@ export class EmbervaultEngine {
         }
         this.emitHud();
       }
+      if (remote) this.setActor(loopActor);
     }
   }
 
@@ -10221,7 +10508,7 @@ export class EmbervaultEngine {
             -0.15
           );
         }
-        this.tryRuneDrink(lp);
+        if (this.mp?.role !== 'guest') this.tryRuneDrink(lp);
       } else if (lp.kind === 'stash') {
         intensity = lp.baseIntensity + Math.sin(this.elapsed * 2.2 + lp.phase) * 3.5;
         if (lp.halo) {
@@ -10336,7 +10623,7 @@ export class EmbervaultEngine {
 
     // Periodic Spike Traps
     for (const sp of this.spikes) {
-      const cycle = (this.elapsed + sp.phaseOffset) % 3.6;
+      const cycle = (this.elapsed + sp.phaseOffset + this.mpSpikeClock()) % 3.6;
       const isWarning = cycle > 1.8 && cycle <= 2.35;
       const isUp = cycle > 2.35 && cycle <= 3.15;
       sp.extended = isUp;
@@ -10350,7 +10637,7 @@ export class EmbervaultEngine {
       );
       sp.rig.warningMat.emissiveIntensity = isWarning ? 1.1 : isUp ? 1.5 : 0.15;
 
-      if (isUp) {
+      if (isUp && !this.mpGuestDungeon()) {
         this.forEachLiveHero(() => {
           if (Math.hypot(this.hero.x - sp.x, this.hero.z - sp.z) < 0.72) {
             this.damageHero(6 * this.getDepthDamageScale(), sp.x, sp.z, '尖刺陷阱');
@@ -10566,6 +10853,1815 @@ export class EmbervaultEngine {
       this.frameId = requestAnimationFrame(this.tick);
     }
   };
+
+  // ---------------------------------------------------------------------------------------------------------
+  // P5-B multiplayer: host-authoritative dungeon sync (docs/multiplayer-spec.md section 5.2)
+  // The host's engine simulates everything; a teammate's engine runs in "guest" mode: it builds the same floor
+  // (seed) without monsters, draws what the host's snapshots say, and only predicts its own hero's movement.
+  // None of this runs unless `mp` is set (single player and the attract mode never touch it).
+  // ---------------------------------------------------------------------------------------------------------
+
+  private static readonly MP_PRIVATE_TONES = new Set(['gold', 'heal', 'key', 'info', 'relicBlue', 'relicYellow', 'relicOrange', 'relicGreen']);
+  private static readonly MP_PRIVATE_SOUNDS = new Set([
+    'playCoin',
+    'playPotion',
+    'playRelicEquip',
+    'playRelicSell',
+    'playRelicDrop',
+    'playUpgrade',
+    'playPlayerHurt',
+    'playShieldBreak',
+  ]);
+  /** Sounds a teammate's own client already played when it predicted the action. */
+  private static readonly MP_PREDICTED_SOUNDS = new Set([
+    'playSwordSlash',
+    'playDash',
+    'playPommelStrike',
+    'playIceCast',
+    'playFrostNova',
+    'playBlink',
+    'playMageCast',
+    'playBowShot',
+  ]);
+  private static readonly MP_BOSS_STATES: BossAttackState[] = ['chase', 'windup', 'strike', 'recover'];
+  private static readonly MP_RARITIES: Array<'blue' | 'yellow' | 'orange' | 'green'> = ['blue', 'yellow', 'orange', 'green'];
+
+  /** True while this engine is a teammate's (guest) client with the camera in the dungeon. */
+  private mpGuestDungeon(): boolean {
+    return this.mp?.role === 'guest' && !this.inTown;
+  }
+
+  /** The monsters to show on the HUD / minimap (a guest keeps its puppets out of `enemies` so nothing hits them). */
+  private viewEnemies(): EnemyEntity[] {
+    return this.mp?.role === 'guest' ? this.mp.guest.enemyList : this.enemies;
+  }
+
+  /** Starts a room game (called when the host pressed start). The caller then sees the dungeon appear. */
+  public mpStart(cfg: MpConfig, classId: HeroClassId, loadout: CharacterLoadout): void {
+    this.mpEnd();
+    const base = {
+      selfId: cfg.selfId,
+      hostId: cfg.hostId,
+      members: cfg.members.map((m) => ({ ...m })),
+      send: cfg.send,
+      onNotice: cfg.onNotice,
+      hold: false,
+      inbox: [] as Array<{ kind: GameKind; payload: unknown }>,
+      clockOff: Infinity,
+      classId,
+      loadout,
+    };
+    if (cfg.role === 'host') {
+      this.mp = {
+        ...base,
+        role: 'host',
+        host: {
+          pending: new Map(),
+          waitStart: performance.now(),
+          launched: false,
+          inputs: new Map(),
+          actions: new Map(),
+          cmds: [],
+          handbacks: [],
+          sendAcc: 0,
+          sentEnemies: new Map(),
+          sentProj: new Map(),
+          sentHproj: new Map(),
+          sentLoot: new Set(),
+          events: [],
+          eventKeys: new Set(),
+          nextPid: 1,
+          privSig: new Map(),
+          privAt: new Map(),
+          doorSig: '',
+          worldSig: '',
+          tapped: false,
+          pids: new WeakMap(),
+          lastHeroSig: '',
+          lastSentAt: 0,
+          lastDepthSent: 0,
+        },
+        guest: this.mpNewGuest(),
+      };
+      this.mpInstallAudioTap();
+    } else {
+      this.mp = { ...base, role: 'guest', guest: this.mpNewGuest() };
+    }
+    this.mp.hostId = cfg.hostId;
+    this.hero.id = cfg.selfId;
+    this.localHeroId = cfg.selfId;
+    this.persistRun = true;
+    this.restartRun(classId, loadout);
+    // The stash (up to 200 relics) stays on the owner's machine: the host never needs it and it would not fit a message
+    if (cfg.role === 'guest') cfg.send('loadout', { classId, loadout: { ...loadout, stash: [] }, angel: null } as LoadoutPayload, cfg.hostId);
+  }
+
+  private mpNewGuest(): MpGuestState {
+    return {
+      enemies: new Map(),
+      enemyList: [],
+      projs: new Map(),
+      hprojs: new Map(),
+      loots: new Map(),
+      heroBufs: new Map(),
+      history: [],
+      lastSent: { k: -1, f: 0, h: -1, at: 0 },
+      actions: [],
+      lastHasKey: false,
+      lastUnlocked: false,
+      usedRunes: new Set(),
+      brokenProps: new Set(),
+      doorSig: '',
+      lastSnapAt: 0,
+      depth: 0,
+      built: false,
+    };
+  }
+
+  /** Leaves the room game: the engine goes back to being a plain single-player engine. */
+  public mpEnd(): void {
+    if (!this.mp) return;
+    if (this.mp.role === 'host') this.mpRemoveAudioTap();
+    const heroes = this.heroes.filter((h) => h.isRemote);
+    for (const h of heroes) this.disposeBot(h);
+    this.heroes = this.heroes.filter((h) => !h.isRemote);
+    this.mpGuestClearEntities();
+    this.mp = null;
+    this.localHeroId = 'hero-0';
+    this.hero = this.heroes[0] ?? this.hero;
+    this.hero.id = 'hero-0';
+    this.localHeroId = this.hero.id;
+  }
+
+  public mpActive(): boolean {
+    return this.mp !== null;
+  }
+
+  /** Relay message from the room (already stamped with the sender's id by the server). */
+  public mpOnRelay(from: string, kind: string, payload: unknown): void {
+    const mp = this.mp;
+    if (!mp) return;
+    if (mp.role === 'host') {
+      if (from === mp.selfId) return;
+      this.mpHostOnMessage(from, kind as GameKind, payload);
+    } else {
+      if (from !== mp.hostId) return;
+      if (kind === 's') {
+        mp.inbox.push({ kind: 's', payload });
+        if (mp.inbox.length > 60) mp.inbox.splice(0, mp.inbox.length - 40);
+      } else if (kind === 'level' || kind === 'tw' || kind === 'priv' || kind === 'abort') {
+        mp.inbox.push({ kind: kind as GameKind, payload });
+      }
+    }
+  }
+
+  public mpOnMemberJoined(m: RoomMember): void {
+    if (!this.mp) return;
+    if (!this.mp.members.some((x) => x.playerId === m.playerId)) this.mp.members.push({ ...m });
+  }
+
+  /** A teammate left the room (closed the tab, pressed leave, got disconnected). */
+  public mpOnMemberLeft(playerId: string): void {
+    const mp = this.mp;
+    if (!mp) return;
+    const name = this.heroById(playerId)?.displayName || mp.members.find((m) => m.playerId === playerId)?.name || '隊友';
+    mp.members = mp.members.filter((m) => m.playerId !== playerId);
+    const h = this.heroById(playerId);
+    if (mp.role === 'host') {
+      mp.host!.pending.delete(playerId);
+      mp.host!.inputs.delete(playerId);
+      mp.host!.actions.delete(playerId);
+      mp.host!.privSig.delete(playerId);
+      mp.host!.cmds = mp.host!.cmds.filter((c) => c.from !== playerId);
+      mp.host!.handbacks = mp.host!.handbacks.filter((c) => c.from !== playerId);
+    }
+    if (!h || !h.isRemote) return;
+    this.mpRemoveHero(h);
+    mp.onNotice(`${name} 已離開`);
+    this.emitHud();
+  }
+
+  private mpRemoveHero(h: Hero): void {
+    const rig = this.heroPortalRigs.get(h.id);
+    if (rig) {
+      rig.root.parent?.remove(rig.root);
+      this.heroPortalRigs.delete(h.id);
+    }
+    this.dungeonCtx?.heroPortalRigs.delete(h.id);
+    this.lightProps = this.lightProps.filter((lp) => !(lp.kind === 'portal' && lp.heroId === h.id));
+    for (const l of this.loots) {
+      if (l.ownerId === h.id) {
+        l.collected = true;
+        l.mesh.visible = false;
+      }
+    }
+    const bar = this.rescueBars.get(h.id);
+    if (bar) {
+      bar.group.visible = false;
+      this.rescueBars.delete(h.id);
+      this.scene.remove(bar.group);
+    }
+    this.disposeBot(h);
+    this.heroes = this.heroes.filter((x) => x !== h);
+    this.mp?.guest.heroBufs.delete(h.id);
+  }
+
+  /** A remote teammate (host: simulated from their inputs; guest: puppet driven by snapshots). */
+  private mpCreateHero(id: string, name: string, classId: HeroClassId, loadout: CharacterLoadout | null, angel: AngelBuff | null): Hero {
+    const h = new Hero(id);
+    h.isRemote = true;
+    h.displayName = name;
+    const wantMage = classId === 'frost_mage';
+    h.rig = wantMage ? createFrostMageModel(this.sharedShadowMap) : createHeroModel(this.sharedShadowMap);
+    h.rig.root.userData.isFrostMage = wantMage;
+    h.setAura = createHeroSetAura();
+    h.rig.root.add(h.setAura.group);
+    this.scene.add(h.rig.root);
+    h.resetForNewRun();
+    h.applyClassStats(classId);
+    if (loadout) {
+      h.applyLoadout(loadout);
+      h.maxDepthReached = Math.max(1, Math.floor(loadout.maxDepth));
+    }
+    h.angelBuff = angel;
+    h.controlMode = 'manual';
+    h.recomputeRelicStats(false);
+    h.hp = h.getEffectiveMaxHp();
+    h.shield = h.getEffectiveMaxShield();
+    this.createBotMarker(h);
+    this.heroes.push(h);
+    return h;
+  }
+
+  /** Room games: a spike trap's phase comes from its tile, so every client's trap cycle lines up with the host's. */
+  private mpSpikePhase(gx: number, gz: number): number {
+    return (((gx * 73856093) ^ (gz * 19349663)) >>> 0) % 4000 / 1000;
+  }
+
+  /** Offset that lines the trap clock of a teammate client up with the host's (0 everywhere else). */
+  private mpSpikeClock(): number {
+    return this.mp?.role === 'guest' ? this.mp.guest.spikeOffset ?? 0 : 0;
+  }
+
+  private mpNameOf(id: string): string {
+    return this.mp?.members.find((m) => m.playerId === id)?.name ?? '隊友';
+  }
+
+  /** Per-frame work that must run for every frame, whatever state the fade is in (message inbox, host launch). */
+  private mpPump(dt: number): void {
+    const mp = this.mp;
+    if (!mp) return;
+    if (mp.role === 'host') {
+      if (!mp.host!.launched && mp.hold && this.transitionState === 'fadeIn') this.mpHostTryLaunch();
+      return;
+    }
+    const g = mp.guest;
+    // Snapshots: keep the newest, apply the rest immediately in order (they are deltas)
+    const rest: typeof mp.inbox = [];
+    for (const m of mp.inbox) {
+      if (m.kind === 'priv') {
+        this.mpGuestApplyPrivate(m.payload as PrivatePayload);
+      } else if (m.kind === 'abort') {
+        mp.onNotice('房主無法開始遊戲（沒有收到你的角色資料）');
+      } else {
+        rest.push(m);
+      }
+    }
+    mp.inbox = [];
+    for (const m of rest) {
+      if (m.kind === 's') {
+        if (g.built && !this.inTown) this.mpGuestApplySnapshot(m.payload as SnapshotPayload, false);
+        else if (this.inTown) this.mpGuestTownSnapshot(m.payload as SnapshotPayload);
+      } else if (m.kind === 'level') {
+        const lv = m.payload as LevelPayload;
+        if (mp.hold && this.transitionState === 'fadeIn') {
+          this.mpGuestBuild(lv);
+          mp.hold = false;
+        } else if (this.transitionState === 'none' && !mp.hold) {
+          // A floor change the host made: fade out, then the held message builds the new floor
+          mp.hold = true;
+          this.beginTransition(() => undefined);
+          mp.inbox.push(m);
+        } else {
+          mp.inbox.push(m); // wait for the fade
+        }
+      } else if (m.kind === 'tw') {
+        if (mp.hold && this.transitionState === 'fadeIn') {
+          this.mpGuestEnterTown(m.payload as TownPayload);
+          mp.hold = false;
+        } else {
+          mp.inbox.push(m);
+        }
+      }
+    }
+  }
+
+  private mpHostTryLaunch(): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host') return;
+    const host = mp.host!;
+    const others = mp.members.filter((m) => m.playerId !== mp.selfId);
+    const waited = performance.now() - host.waitStart;
+    const missing = others.filter((m) => !host.pending.has(m.playerId));
+    if (missing.length > 0 && waited < LOADOUT_WAIT_MS) return;
+    host.launched = true;
+    for (const m of missing) {
+      mp.send('abort', {}, m.playerId);
+      mp.members = mp.members.filter((x) => x.playerId !== m.playerId);
+    }
+    this.setupBots(null);
+    for (const m of others) {
+      const p = host.pending.get(m.playerId);
+      if (!p) continue;
+      this.mpCreateHero(m.playerId, m.name, (p.classId as HeroClassId) ?? 'warrior', p.loadout, p.angel ?? null);
+    }
+    const startDepth = Math.max(1, Math.floor(mp.loadout.maxDepth));
+    this.mpApplyViewGroupsForRemotes();
+    this.buildLevel(startDepth);
+    this.loadingRun = false;
+    mp.hold = false;
+  }
+
+  private mpApplyViewGroupsForRemotes(): void {
+    for (const h of this.heroes) if (h.isRemote) h.rig.root.visible = !this.inTown && !h.inTown;
+  }
+
+  // ---------------------------------------------------------------------------------------------------------
+  // Host
+  // ---------------------------------------------------------------------------------------------------------
+
+  private mpHostOnMessage(from: string, kind: GameKind, payload: unknown): void {
+    const mp = this.mp!;
+    const host = mp.host!;
+    if (kind === 'loadout') {
+      host.pending.set(from, payload as LoadoutPayload);
+      return;
+    }
+    const h = this.heroById(from);
+    if (!h || !h.isRemote) return;
+    if (kind === 'in') {
+      const p = payload as InputPayload;
+      let st = host.inputs.get(from);
+      if (!st) {
+        st = { t: 0, k: 0, f: 0, h: 0, at: 0 };
+        host.inputs.set(from, st);
+      }
+      st.t = p.t;
+      st.k = p.k | 0;
+      st.f = Number(p.f) || 0;
+      st.h = p.h ? 1 : 0;
+      st.at = performance.now();
+      if (p.a && p.a.length > 0) {
+        const q = host.actions.get(from) ?? [];
+        for (const a of p.a) if (q.length < 8) q.push(a);
+        host.actions.set(from, q);
+      }
+    } else if (kind === 'cmd') {
+      if (host.cmds.length < 64) host.cmds.push({ from, cmd: payload as CommandPayload });
+    } else if (kind === 'handback') {
+      host.handbacks.push({ from, hb: payload as HandbackPayload });
+    }
+  }
+
+  /** Applies the teammates' latest inputs to their heroes (before the hero loop of the dungeon in progress). */
+  private mpHostPre(): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host') return;
+    const host = mp.host!;
+    const now = performance.now();
+    const prev = this.hero;
+    for (const h of this.heroes) {
+      if (!h.isRemote) continue;
+      const st = host.inputs.get(h.id);
+      if (!st || h.inTown || h.isDead) {
+        h.input.keys.clear();
+        h.input.leftMouseHeld = false;
+        host.actions.delete(h.id);
+        continue;
+      }
+      const stale = now - st.at > INPUT_STALE_MS;
+      const k = stale ? 0 : st.k;
+      const keys = h.input.keys;
+      keys.clear();
+      if (k & KEY_W) keys.add('KeyW');
+      if (k & KEY_A) keys.add('KeyA');
+      if (k & KEY_S) keys.add('KeyS');
+      if (k & KEY_D) keys.add('KeyD');
+      if (k & KEY_F) keys.add('KeyF');
+      h.input.leftMouseHeld = !stale && st.h === 1;
+      h.input.aimFacing = st.f / 100;
+      h.controlMode = 'manual';
+      const acts = host.actions.get(h.id);
+      if (acts && acts.length > 0) {
+        host.actions.delete(h.id);
+        this.setActor(h);
+        for (const a of acts) {
+          if (a === ACT_ATTACK) {
+            h.facing = h.input.aimFacing;
+            this.performAttack();
+          } else if (a === ACT_DASH) {
+            h.facing = h.input.aimFacing;
+            this.performDash();
+          } else if (a === ACT_POMMEL) {
+            h.facing = h.input.aimFacing;
+            this.performPommelStrike();
+          } else if (a === ACT_POTION) {
+            this.usePotion();
+          }
+        }
+        this.setActor(prev);
+      }
+    }
+    this.setActor(prev);
+  }
+
+  /** After the dungeon simulation step: UI commands, hand-backs from town, snapshot / private state sending. */
+  private mpHostPost(dt: number): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host') return;
+    const host = mp.host!;
+    if (host.cmds.length > 0) {
+      const cmds = host.cmds;
+      host.cmds = [];
+      for (const c of cmds) this.mpHostRunCmd(c.from, c.cmd);
+    }
+    if (host.handbacks.length > 0) {
+      const hbs = host.handbacks;
+      host.handbacks = [];
+      for (const hb of hbs) this.mpHostOnHandback(hb.from, hb.hb);
+    }
+    host.sendAcc += dt;
+    if (host.sendAcc >= 1 / SNAPSHOT_HZ) {
+      host.sendAcc = host.sendAcc % (1 / SNAPSHOT_HZ);
+      this.mpHostSendSnapshot();
+      this.mpHostFlushPrivate(false);
+    }
+  }
+
+  /** Teammates that asked to go to town while the whole dungeon is parked / frozen (nobody can run commands). */
+  private mpHostFrozenTick(): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host') return;
+    const host = mp.host!;
+    if (host.cmds.length === 0) return;
+    const keep: typeof host.cmds = [];
+    for (const c of host.cmds) {
+      if (c.cmd.c === 'town' || c.cmd.c === 'death') this.mpHostRunCmd(c.from, c.cmd);
+      else keep.push(c);
+    }
+    host.cmds = keep;
+  }
+
+  private mpHostRunCmd(from: string, cmd: CommandPayload): void {
+    const h = this.heroById(from);
+    if (!h || !h.isRemote || h.inTown) return;
+    const prev = this.hero;
+    this.setActor(h);
+    try {
+      switch (cmd.c) {
+        case 'eq':
+          this.equipRelic(cmd.id, cmd.s);
+          break;
+        case 'uneq':
+          this.unequipRelic(cmd.s);
+          break;
+        case 'sell':
+          this.sellRelic(cmd.id);
+          break;
+        case 'sellc':
+          this.sellCommonBagRelics(cmd.y !== 0);
+          break;
+        case 'up':
+          this.purchaseUpgrade(cmd.kind as UpgradeKind);
+          break;
+        case 'buy':
+          this.purchasePotion();
+          break;
+        case 'town':
+          if (!h.isDead) this.mpHostSendToTown(h, false);
+          break;
+        case 'death':
+          if (h.isDead) this.mpHostSendToTown(h, true);
+          break;
+      }
+    } finally {
+      this.setActor(prev);
+    }
+    this.mpHostFlushPrivate(true, from);
+  }
+
+  /** `h` (a remote hero) goes to the town: it leaves the simulation and receives its final state. */
+  private mpHostSendToTown(h: Hero, fromDeath: boolean): void {
+    const mp = this.mp!;
+    const cost = this.getTownReturnCost();
+    const spent = Math.min(h.gold, cost);
+    h.gold = Math.max(0, h.gold - cost);
+    void spent;
+    if (fromDeath) {
+      h.isDead = false;
+      h.restoreAfterDowned();
+    }
+    const active = !this.inTown || this.dungeonCtx !== null;
+    if (active && this.textures) this.placeHeroPortal(h, h.x, h.z, this.depth);
+    else h.portal = { x: h.x, z: h.z, depth: this.depth };
+    h.inTown = true;
+    h.input.keys.clear();
+    h.input.leftMouseHeld = false;
+    h.rig.root.visible = false;
+    h.rescueTargetId = null;
+    h.rescueProgress = 0;
+    const payload: TownPayload = {
+      priv: this.mpPrivOf(h),
+      hp: h.hp,
+      sh: h.shield,
+    };
+    mp.send('tw', payload, h.id);
+    mp.host!.privSig.delete(h.id);
+  }
+
+  /** A teammate comes back from town through one of the doors (or the entrance). */
+  private mpHostOnHandback(from: string, hb: HandbackPayload): void {
+    const mp = this.mp!;
+    const h = this.heroById(from);
+    if (!h || !h.isRemote || !h.inTown) return;
+    // Their town character is authoritative: take over what they bought / equipped there
+    h.applyLoadout(hb.loadout);
+    h.angelBuff = hb.angel ?? null;
+    h.recomputeRelicStats(false);
+    h.hp = Math.min(h.getEffectiveMaxHp(), Math.max(1, hb.hp));
+    h.shield = Math.min(h.getEffectiveMaxShield(), hb.shield);
+    h.maxDepthReached = Math.max(h.maxDepthReached, hb.loadout.maxDepth, this.depth);
+    let tx: number;
+    let tz: number;
+    const door = hb.door !== 'entrance' ? this.heroById(hb.door)?.portal : null;
+    if (door && door.depth === this.depth) {
+      tx = door.x;
+      tz = door.z;
+    } else {
+      const sp = gridToWorld(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
+      tx = sp.x;
+      tz = sp.z;
+    }
+    h.inTown = false;
+    h.isDead = false;
+    h.x = tx;
+    h.z = tz;
+    h.vx = 0;
+    h.vz = 0;
+    h.dashTimer = 0;
+    h.invuln = 1.2;
+    h.rig.root.position.set(tx, 0, tz);
+    h.rig.root.visible = !this.inTown;
+    h.rig.body.rotation.z = 0;
+    h.rig.body.position.y = 0;
+    this.mpHostSendLevelTo(h.id, false);
+    mp.host!.privSig.delete(h.id);
+  }
+
+  /** Called at the end of `buildLevel` on the host: every teammate in the dungeon gets the new floor. */
+  private mpHostAnnounceLevel(isNewFloor: boolean): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host' || !mp.host!.launched) return;
+    const host = mp.host!;
+    host.sentEnemies.clear();
+    host.sentProj.clear();
+    host.sentHproj.clear();
+    host.sentLoot.clear();
+    host.doorSig = '';
+    host.worldSig = '';
+    host.events = [];
+    host.eventKeys.clear();
+    const snap = this.mpBuildSnapshot(true);
+    for (const h of this.heroes) {
+      if (!h.isRemote || h.inTown) continue;
+      this.mpSendLevel(h, snap, isNewFloor);
+    }
+    this.mpHostFlushPrivate(true);
+  }
+
+  private mpHostSendLevelTo(id: string, isNewFloor: boolean): void {
+    const h = this.heroById(id);
+    if (!h) return;
+    this.mpSendLevel(h, this.mpBuildSnapshot(true), isNewFloor);
+  }
+
+  private mpSendLevel(h: Hero, snap: SnapshotPayload, isNewFloor: boolean): void {
+    const mp = this.mp!;
+    const roster: RosterEntry[] = this.heroes.map((o) => ({
+      id: o.id,
+      name: o.id === mp.selfId ? this.mpNameOf(o.id) : o.displayName || this.mpNameOf(o.id),
+      cls: o.classId,
+      x: q100(o.x),
+      z: q100(o.z),
+      ...(o.inTown ? { tw: 1 as const } : {}),
+    }));
+    const payload: LevelPayload = {
+      n: this.depth,
+      seed: this.dungeon.genSeed ?? 0,
+      roster,
+      snap,
+      priv: this.mpPrivOf(h),
+      ...(isNewFloor ? { fl: 1 as const } : {}),
+    };
+    mp.send('level', payload, h.id);
+  }
+
+  private mpPrivOf(h: Hero): PrivatePayload {
+    return {
+      ld: { ...h.exportLoadout(this.depth), stash: [] },
+      ab: h.angelBuff ? { ...h.angelBuff } : null,
+      st: [h.kills, h.normalKills, h.eliteKills, h.bossKills, h.totalGoldEarned, h.totalDamageDealt, h.critCount, h.potionsUsed],
+      ch: h.chronosUsedThisFloor ? 1 : 0,
+      sl: h.slainBy,
+    };
+  }
+
+  /** Sends each teammate's private state when it changed (gold, potions, relics, upgrades, death ...). */
+  private mpHostFlushPrivate(force: boolean, only?: string): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host') return;
+    const host = mp.host!;
+    const now = performance.now();
+    for (const h of this.heroes) {
+      if (!h.isRemote || h.inTown) continue;
+      if (only && h.id !== only) continue;
+      const sig = JSON.stringify([
+        h.gold,
+        h.potions,
+        h.hpUpgrades,
+        h.atkUpgrades,
+        h.armorUpgrades,
+        h.critUpgrades,
+        h.hpShieldUpgrades,
+        h.shieldSpeedUpgrades,
+        h.equippedRelics.map((r) => r.id),
+        h.relicBag.map((r) => r.id),
+        h.angelBuff?.floorsLeft ?? -1,
+        h.isDead,
+        h.kills,
+        h.chronosUsedThisFloor,
+      ]);
+      if (host.privSig.get(h.id) === sig) continue;
+      if (!force && now - (host.privAt.get(h.id) ?? 0) < 400) continue;
+      host.privSig.set(h.id, sig);
+      host.privAt.set(h.id, now);
+      mp.send('priv', this.mpPrivOf(h), h.id);
+    }
+  }
+
+  private mpEmit(ev: GameEvent): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host') return;
+    const host = mp.host!;
+    if (host.events.length >= MAX_EVENTS_PER_SNAPSHOT) return;
+    // Identical events within one snapshot window are merged (a sound / text a dozen times is still one)
+    const key = ev.join('|');
+    if (host.eventKeys.has(key)) return;
+    host.eventKeys.add(key);
+    host.events.push(ev);
+  }
+
+  private mpCaptureFloat(wx: number, wy: number, wz: number, text: string, tone: string): void {
+    if (EmbervaultEngine.MP_PRIVATE_TONES.has(tone)) {
+      if (!this.hero.isRemote) return; // the host sees its own pickups itself
+      this.mpEmit(['f', q100(wx), q100(wy), q100(wz), text, tone, this.hero.id]);
+    } else {
+      this.mpEmit(['f', q100(wx), q100(wy), q100(wz), text, tone, '']);
+    }
+  }
+
+  private mpInstallAudioTap(): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host' || mp.host!.tapped) return;
+    const audio = this.audio as unknown as Record<string, unknown>;
+    const proto = Object.getPrototypeOf(this.audio) as object;
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (!name.startsWith('play') || name === 'playFootstep') continue;
+      const orig = audio[name] as (...a: unknown[]) => void;
+      const wrapped = (...args: unknown[]): void => {
+        this.mpAudioEvent(name, args);
+        orig.apply(this.audio, args);
+      };
+      audio[name] = wrapped;
+    }
+    mp.host!.tapped = true;
+  }
+
+  private mpRemoveAudioTap(): void {
+    const audio = this.audio as unknown as Record<string, unknown>;
+    const proto = Object.getPrototypeOf(this.audio) as Record<string, unknown>;
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (!name.startsWith('play')) continue;
+      if (Object.prototype.hasOwnProperty.call(audio, name)) delete audio[name];
+    }
+    if (this.mp?.host) this.mp.host.tapped = false;
+  }
+
+  private mpAudioEvent(name: string, args: unknown[]): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host') return;
+    const actor = this.hero;
+    if (EmbervaultEngine.MP_PRIVATE_SOUNDS.has(name)) {
+      if (!actor.isRemote) return;
+      this.mpEmit(['s', name, actor.id, actor.id, ...(args as Array<string | number>)]);
+    } else {
+      this.mpEmit(['s', name, actor.id, '', ...(args as Array<string | number>)]);
+    }
+  }
+
+  // --- Host: snapshot builder -----------------------------------------------------------------------------------
+
+  private mpPid(host: MpHostState, obj: object): number {
+    let pid = host.pids.get(obj);
+    if (pid === undefined) {
+      pid = host.nextPid++;
+      host.pids.set(obj, pid);
+    }
+    return pid;
+  }
+
+  private mpEnemyEntry(e: EnemyEntity): EnemySnap {
+    let flags = 0;
+    if (e.stunTimer > 0) flags |= EF_STUN;
+    if ((e.frozenTimer ?? 0) > 0) flags |= EF_FROZEN;
+    if ((e.slowTimer ?? 0) > 0) flags |= EF_SLOW;
+    if (e.hitFlash > 0) flags |= EF_HIT;
+    const entry: EnemySnap = [e.id, q100(e.x), q100(e.z), q100(e.facing), Math.max(0, Math.ceil(e.hp)), flags];
+    if (e.isBoss) {
+      const st = Math.max(0, EmbervaultEngine.MP_BOSS_STATES.indexOf(e.bossState ?? 'chase'));
+      entry[5] = flags | (st << EF_BOSS_SHIFT);
+      const dur = e.bossStateDuration ?? 0;
+      entry.push(dur > 0 ? q100(Math.min(1, (e.bossStateTimer ?? 0) / dur)) : 0);
+      entry.push(q100(e.telegraphX ?? e.x), q100(e.telegraphZ ?? e.z), q100(e.telegraphRadius ?? 0));
+    }
+    return entry;
+  }
+
+  /**
+   * The world as the teammates should see it. `full` = everything (a new floor / a teammate coming back from town),
+   * otherwise only what changed since the last delta. `commit` records what was sent (and takes the queued events).
+   */
+  private mpBuildSnapshot(full: boolean, commit = true): SnapshotPayload {
+    const mp = this.mp!;
+    const host = mp.host!;
+    const now = performance.now();
+    const hs: HeroSnap[] = this.heroes.map((h) => {
+      const st = host.inputs.get(h.id);
+      let flags = 0;
+      if (h.isDead) flags |= HF_DEAD;
+      if (h.inTown) flags |= HF_TOWN;
+      if (h.dashTimer > 0) flags |= HF_DASH;
+      if (h.hitFlash > 0) flags |= HF_HIT;
+      if (h.hitFlash > 0 && h.hitShieldOnly) flags |= HF_HIT_SHIELD;
+      return [
+        h.id,
+        q100(h.x),
+        q100(h.z),
+        q100(h.facing),
+        Math.round(h.hp),
+        Math.round(h.getEffectiveMaxHp()),
+        Math.round(h.shield),
+        flags,
+        q100(h.attackAnim),
+        q100(h.pommelAnim),
+        st ? st.t : 0,
+        st ? Math.round(now - st.at) : 0,
+        0,
+        h.rescueTargetId ?? '',
+        q100(h.rescueProgress),
+      ] as HeroSnap;
+    });
+    const snap: SnapshotPayload = { ts: Math.round(now), d: this.depth, el: q100(this.elapsed), hs };
+
+    // Monsters
+    const en: EnemyStatic[] = [];
+    const es: EnemySnap[] = [];
+    const seen = new Set<number>();
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      seen.add(e.id);
+      const known = host.sentEnemies.has(e.id);
+      if (full || !known) {
+        const st: EnemyStatic = { i: e.id, k: e.kind, m: e.maxHp, e: e.isSpecialElite ? 2 : e.isElite ? 1 : 0 };
+        if (e.customName) st.n = e.customName;
+        if (e.bossName) st.bn = e.bossName;
+        if (e.bossTitle) st.bt = e.bossTitle;
+        en.push(st);
+      }
+      const entry = this.mpEnemyEntry(e);
+      const sig = entry.join(',');
+      if (full || host.sentEnemies.get(e.id) !== sig) {
+        es.push(entry);
+        if (commit) host.sentEnemies.set(e.id, sig);
+      }
+    }
+    const er: number[] = [];
+    if (commit) {
+      for (const id of host.sentEnemies.keys()) {
+        if (!seen.has(id)) {
+          er.push(id);
+          host.sentEnemies.delete(id);
+        }
+      }
+    }
+    if (en.length) snap.en = en;
+    if (es.length) snap.es = es;
+    if (er.length) snap.er = er;
+
+    // Projectiles (monster arrows / orbs and the ice spikes of every hero): sent once, the receiver flies them
+    const ps: ProjSnap[] = [];
+    const hp: HeroProjSnap[] = [];
+    const livePids = new Set<number>();
+    for (const p of this.projectiles) {
+      const pid = this.mpPid(host, p);
+      livePids.add(pid);
+      if (full || !host.sentProj.has(p)) {
+        ps.push([pid, p.kind, q100(p.x), q100(p.z), q100(p.vx), q100(p.vz)]);
+        if (commit) host.sentProj.set(p, pid);
+      }
+    }
+    for (const p of this.heroProjectiles) {
+      const pid = this.mpPid(host, p);
+      livePids.add(pid);
+      if (full || !host.sentHproj.has(p)) {
+        hp.push([pid, p.ownerId, q100(p.x), q100(p.z), q100(p.vx), q100(p.vz), p.shotIdx]);
+        if (commit) host.sentHproj.set(p, pid);
+      }
+    }
+    const pr: number[] = [];
+    if (commit) {
+      for (const [p, pid] of host.sentProj) {
+        if (!livePids.has(pid)) {
+          pr.push(pid);
+          host.sentProj.delete(p);
+        }
+      }
+      for (const [p, pid] of host.sentHproj) {
+        if (!livePids.has(pid)) {
+          pr.push(pid);
+          host.sentHproj.delete(p);
+        }
+      }
+    }
+    if (ps.length) snap.ps = ps;
+    if (hp.length) snap.hp = hp;
+    if (pr.length) snap.pr = pr;
+
+    // Loot of the teammates (the host sees its own drops itself, everybody else's are not drawn on this screen)
+    const ls: LootSnap[] = [];
+    const liveLoot = new Set<number>();
+    for (const l of this.loots) {
+      if (l.collected) continue;
+      const owner = this.heroById(l.ownerId);
+      if (!owner || !owner.isRemote) continue;
+      liveLoot.add(l.id);
+      if (full || !host.sentLoot.has(l.id)) {
+        const rar = l.relic ? Math.max(0, EmbervaultEngine.MP_RARITIES.indexOf(l.relic.rarity)) : 0;
+        ls.push([l.id, l.ownerId, l.type === 'gold' ? 0 : l.type === 'potion' ? 1 : 2, q100(l.x), q100(l.z), rar]);
+        if (commit) host.sentLoot.add(l.id);
+      }
+    }
+    const lr: number[] = [];
+    if (commit) {
+      for (const id of host.sentLoot) {
+        if (!liveLoot.has(id)) {
+          lr.push(id);
+          host.sentLoot.delete(id);
+        }
+      }
+    }
+    if (ls.length) snap.ls = ls;
+    if (lr.length) snap.lr = lr;
+
+    // Doors (the portals heroes left behind) and the shared objectives
+    const dr: DoorSnap[] = [];
+    for (const h of this.heroes) {
+      if (h.portal && h.portal.depth === this.depth) dr.push([h.id, q100(h.portal.x), q100(h.portal.z), h.isDead ? 1 : 0]);
+    }
+    const doorSig = JSON.stringify(dr);
+    if (full || doorSig !== host.doorSig) {
+      snap.dr = dr;
+      if (commit) host.doorSig = doorSig;
+    }
+    const world: WorldSnap = {
+      k: this.hasKey ? 1 : 0,
+      u: this.doorUnlocked ? 1 : 0,
+      ru: this.lightProps.filter((lp) => lp.kind === 'rune').flatMap((lp, i) => (lp.used ? [i] : [])),
+      br: this.breakables.flatMap((b, i) => (b.broken ? [i] : [])),
+    };
+    const worldSig = JSON.stringify(world);
+    if (full || worldSig !== host.worldSig) {
+      snap.w = world;
+      if (commit) host.worldSig = worldSig;
+    }
+    if (commit && host.events.length > 0) {
+      snap.ev = host.events;
+      host.events = [];
+      host.eventKeys.clear();
+    }
+    return snap;
+  }
+
+  private mpHostSendSnapshot(): void {
+    const mp = this.mp!;
+    const host = mp.host!;
+    const anyRemote = this.heroes.some((h) => h.isRemote);
+    if (!anyRemote) return; // nobody to tell
+    const snap = this.mpBuildSnapshot(false, true);
+    const now = performance.now();
+    if (!this.heroes.some((h) => h.isRemote && !h.inTown)) {
+      // Everybody else is in town: they only need to hear about doors and floor changes
+      if (!snap.dr && host.lastDepthSent === this.depth) return;
+      host.lastDepthSent = this.depth;
+      host.lastSentAt = now;
+      mp.send('s', snap);
+      return;
+    }
+    host.lastDepthSent = this.depth;
+    // Idle floor: skip the message when nothing at all changed (a keepalive every second keeps the clocks in step)
+    const sig = JSON.stringify(snap.hs.map((h) => [h[1], h[2], h[3], h[4], h[6], h[7], h[8], h[9], h[13], h[14]]));
+    const quiet =
+      !snap.en && !snap.es && !snap.er && !snap.ps && !snap.hp && !snap.pr && !snap.ls && !snap.lr && !snap.dr && !snap.w && !snap.ev;
+    if (quiet && sig === host.lastHeroSig && now - host.lastSentAt < 1000) return;
+    host.lastHeroSig = sig;
+    host.lastSentAt = now;
+    mp.send('s', snap);
+  }
+
+  // ---------------------------------------------------------------------------------------------------------
+  // Guest (teammate): remote mode
+  // ---------------------------------------------------------------------------------------------------------
+
+  /** Drops every puppet entity (the meshes themselves go with the level groups). */
+  private mpGuestClearEntities(): void {
+    const g = this.mp?.guest;
+    if (!g) return;
+    g.enemies.clear();
+    g.enemyList = [];
+    g.projs.clear();
+    g.hprojs.clear();
+    g.loots.clear();
+    g.heroBufs.clear();
+    g.history = [];
+    g.usedRunes.clear();
+    g.brokenProps.clear();
+    g.lastHasKey = false;
+    g.lastUnlocked = false;
+    g.doorSig = '';
+  }
+
+  private mpGuestBuild(lv: LevelPayload): void {
+    const mp = this.mp!;
+    const g = mp.guest;
+    this.mpGuestClearEntities();
+    g.built = false;
+    // Everybody in the party (a teammate that joined the roster late is simply created here)
+    const ids = new Set(lv.roster.map((r) => r.id));
+    for (const h of [...this.heroes]) if (h.isRemote && !ids.has(h.id)) this.mpRemoveHero(h);
+    for (const r of lv.roster) {
+      if (r.id === mp.selfId) continue;
+      let h = this.heroById(r.id);
+      if (!h) h = this.mpCreateHero(r.id, r.name, (r.cls as HeroClassId) ?? 'warrior', null, null);
+      h.inTown = r.tw === 1;
+    }
+    this.mpGuestApplyPrivate(lv.priv);
+    const local = this.localHero;
+    local.isDead = false;
+    local.inTown = false;
+    local.rig.body.rotation.z = 0;
+    local.rig.body.position.y = 0;
+    g.depth = lv.n;
+    this.depth = lv.n;
+    this.buildLevel(lv.n, { mpSeed: lv.seed, guest: true });
+    g.built = true;
+    this.mpApplyViewGroupsForRemotes();
+    this.mpGuestApplySnapshot(lv.snap, true);
+    const me = lv.snap.hs.find((s) => s[0] === mp.selfId);
+    if (me) {
+      local.x = me[1] / 100;
+      local.z = me[2] / 100;
+      local.rig.root.position.set(local.x, 0, local.z);
+      this.camera.position.set(local.x + 14.5 * this.camZoom, 14.5 * this.camZoom * 1.16, local.z + 14.5 * this.camZoom);
+    }
+    g.history = [];
+    this.loadingRun = false;
+    this.emitHud();
+    this.emitMinimap();
+  }
+
+  private mpGuestApplyPrivate(p: PrivatePayload): void {
+    const h = this.localHero;
+    const ownStash = h.stash; // never sent over the wire: this machine owns it
+    h.applyLoadout(p.ld);
+    h.stash = ownStash;
+    h.angelBuff = p.ab ? { ...p.ab } : null;
+    [h.kills, h.normalKills, h.eliteKills, h.bossKills, h.totalGoldEarned, h.totalDamageDealt, h.critCount, h.potionsUsed] = p.st;
+    h.chronosUsedThisFloor = p.ch === 1;
+    h.slainBy = p.sl;
+    h.maxDepthReached = Math.max(h.maxDepthReached, Math.floor(p.ld.maxDepth));
+    h.recomputeRelicStats(false);
+    if (h.hp > h.getEffectiveMaxHp()) h.hp = h.getEffectiveMaxHp();
+    this.emitHud();
+  }
+
+  /** Remote hero's pose when downed / back up. */
+  private mpSetDownedPose(h: Hero, downed: boolean): void {
+    if (downed) {
+      h.vx = 0;
+      h.vz = 0;
+      h.dashTimer = 0;
+      h.input.keys.clear();
+      h.rig.body.rotation.z = Math.PI * 0.46;
+      h.rig.body.position.y = 0.22;
+      for (const m of h.rig.flashMaterials) {
+        m.emissive.setHex(0x000000);
+        m.emissiveIntensity = 0;
+      }
+    } else {
+      h.rig.body.rotation.z = 0;
+      h.rig.body.position.y = 0;
+    }
+  }
+
+  private mpGuestApplySnapshot(s: SnapshotPayload, full: boolean): void {
+    const mp = this.mp!;
+    const g = mp.guest;
+    if (!full && s.d !== this.depth) return;
+    const recv = performance.now();
+    const off = recv - s.ts;
+    mp.clockOff = Math.min(mp.clockOff + 0.05, off);
+    g.lastSnapAt = recv;
+    const local = this.localHero;
+
+    // Heroes
+    for (const e of s.hs) {
+      const id = e[0];
+      const flags = e[7];
+      if (id === mp.selfId) {
+        const wasDead = local.isDead;
+        const dead = (flags & HF_DEAD) !== 0;
+        local.hp = e[4];
+        local.shield = e[6];
+        if (dead && !wasDead) {
+          local.isDead = true;
+          this.mpSetDownedPose(local, true);
+          this.requestSave('death');
+        } else if (!dead && wasDead) {
+          local.isDead = false;
+          this.mpSetDownedPose(local, false);
+          local.invuln = 1.5;
+          this.emitFloatingText(local.x, 2.1, local.z, '被救起！', 'heal');
+        }
+        local.hp = e[4];
+        local.rescueTargetId = e[13] || null;
+        local.rescueProgress = e[14] / 100;
+        // Reconcile the predicted position with the host's (it is the authority: knockback, spikes, rescue ...)
+        const hx = e[1] / 100;
+        const hz = e[2] / 100;
+        if (local.isDead || full) {
+          local.x = hx;
+          local.z = hz;
+          g.history = [];
+        } else if (e[10] > 0) {
+          const tEq = e[10] + e[11];
+          const at = this.mpHistoryAt(g, tEq);
+          if (at) {
+            const ex = hx - at.x;
+            const ez = hz - at.z;
+            const err = Math.hypot(ex, ez);
+            if (err > 2.5) {
+              local.x = hx;
+              local.z = hz;
+              g.history = [];
+            } else if (err > 0.04) {
+              const gain = 0.3;
+              const nx = local.x + ex * gain;
+              const nz = local.z + ez * gain;
+              if (this.canMoveTo(nx, nz, 0.4)) {
+                local.x = nx;
+                local.z = nz;
+                for (const hp of g.history) {
+                  hp.x += ex * gain;
+                  hp.z += ez * gain;
+                }
+              }
+            }
+          }
+        }
+        continue;
+      }
+      let h = this.heroById(id);
+      if (!h) h = this.mpCreateHero(id, this.mpNameOf(id), 'warrior', null, null);
+      h.inTown = (flags & HF_TOWN) !== 0;
+      const dead = (flags & HF_DEAD) !== 0;
+      if (dead !== h.isDead) {
+        h.isDead = dead;
+        this.mpSetDownedPose(h, dead);
+      }
+      h.hp = e[4];
+      h.maxHp = e[5];
+      h.shield = e[6];
+      h.hitFlash = (flags & HF_HIT) !== 0 ? 0.12 : h.hitFlash;
+      h.hitShieldOnly = (flags & HF_HIT_SHIELD) !== 0;
+      if (e[8] > 0 && h.attackAnim <= 0.02) h.attackAnim = e[8] / 100;
+      if (e[9] > 0 && h.pommelAnim <= 0.02) h.pommelAnim = e[9] / 100;
+      h.rescueTargetId = e[13] || null;
+      h.rescueProgress = e[14] / 100;
+      let hb = g.heroBufs.get(id);
+      if (!hb) {
+        hb = { buf: [], speed: 0 };
+        g.heroBufs.set(id, hb);
+        h.x = e[1] / 100;
+        h.z = e[2] / 100;
+      }
+      hb.buf.push({ t: s.ts, x: e[1] / 100, z: e[2] / 100, f: e[3] / 100 });
+      if (hb.buf.length > 6) hb.buf.shift();
+    }
+
+    // Monsters
+    if (s.en) for (const st of s.en) this.mpGuestSpawnEnemy(st);
+    if (s.es) {
+      for (const en of s.es) {
+        const p = g.enemies.get(en[0]);
+        if (!p) continue;
+        p.buf.push({ t: s.ts, x: en[1] / 100, z: en[2] / 100, f: en[3] / 100 });
+        if (p.buf.length > 5) p.buf.shift();
+        const prevHp = p.e.hp;
+        p.e.hp = en[4];
+        const flags = en[5];
+        p.e.stunTimer = flags & EF_STUN ? 0.3 : 0;
+        p.e.frozenTimer = flags & EF_FROZEN ? 0.3 : 0;
+        p.e.slowTimer = flags & EF_SLOW ? 0.3 : 0;
+        if (flags & EF_HIT || en[4] < prevHp) p.e.hitFlash = 0.12;
+        if (p.e.isBoss) {
+          p.e.bossState = EmbervaultEngine.MP_BOSS_STATES[(flags >> EF_BOSS_SHIFT) & 3] ?? 'chase';
+          p.e.bossStateDuration = 1;
+          p.e.bossStateTimer = (en[6] ?? 0) / 100;
+          p.e.telegraphX = (en[7] ?? 0) / 100;
+          p.e.telegraphZ = (en[8] ?? 0) / 100;
+          p.e.telegraphRadius = (en[9] ?? 0) / 100;
+        }
+      }
+    }
+    if (s.er) for (const id of s.er) this.mpGuestRemoveEnemy(id);
+
+    // Projectiles
+    if (s.ps) {
+      for (const [pid, kind, x, z, vx, vz] of s.ps) {
+        if (g.projs.has(pid)) continue;
+        const mesh = createProjectileMesh(kind as ProjectileKind);
+        mesh.position.set(x / 100, 0.85, z / 100);
+        mesh.rotation.y = Math.atan2(vx, vz);
+        this.dynamicGroup.add(mesh);
+        const ent: ProjectileEntity = {
+          kind: kind as ProjectileKind,
+          mesh,
+          x: x / 100,
+          z: z / 100,
+          vx: vx / 100,
+          vz: vz / 100,
+          damage: 0,
+          sourceLabel: '',
+          life: 0,
+          maxLife: 3.2,
+          pid,
+        };
+        this.projectiles.push(ent);
+        g.projs.set(pid, ent);
+      }
+    }
+    if (s.hp) {
+      for (const [pid, owner, x, z, vx, vz, shot] of s.hp) {
+        if (owner === mp.selfId || g.hprojs.has(pid)) continue;
+        const mesh = createIceSpikeMesh(shot === 2);
+        mesh.position.set(x / 100, 0.85, z / 100);
+        mesh.rotation.y = Math.atan2(vx, vz);
+        this.dynamicGroup.add(mesh);
+        const ent: HeroProjectileEntity = {
+          mesh,
+          x: x / 100,
+          z: z / 100,
+          vx: vx / 100,
+          vz: vz / 100,
+          traveled: 0,
+          shotIdx: shot,
+          phantomCrit: false,
+          ownerId: owner,
+          pid,
+        };
+        this.heroProjectiles.push(ent);
+        g.hprojs.set(pid, ent);
+      }
+    }
+    if (s.pr) {
+      for (const pid of s.pr) {
+        const p = g.projs.get(pid);
+        if (p) {
+          const i = this.projectiles.indexOf(p);
+          if (i >= 0) this.removeProjectileAt(i);
+          g.projs.delete(pid);
+        }
+        const hpj = g.hprojs.get(pid);
+        if (hpj) {
+          const i = this.heroProjectiles.indexOf(hpj);
+          if (i >= 0) this.removeHeroProjectileAt(i);
+          g.hprojs.delete(pid);
+        }
+      }
+    }
+
+    // My own loot
+    if (s.ls) {
+      for (const [id, owner, type, x, z, rar] of s.ls) {
+        if (owner !== mp.selfId || g.loots.has(id)) continue;
+        const rarity = EmbervaultEngine.MP_RARITIES[rar] ?? 'blue';
+        if (type === 2) {
+          const rig = createRelicLootMesh(rarity, this.textures?.glowMap);
+          rig.root.position.set(x / 100, 0, z / 100);
+          this.dynamicGroup.add(rig.root);
+          const ent: LootEntity = {
+            id,
+            ownerId: owner,
+            type: 'relic',
+            value: 0,
+            mesh: rig.root,
+            relicRig: rig,
+            x: x / 100,
+            z: z / 100,
+            y: 0.32,
+            vy: 4.6,
+            age: 0,
+            collected: false,
+            rarity,
+          };
+          this.loots.push(ent);
+          g.loots.set(id, ent);
+        } else {
+          const kind = type === 1 ? 'potion' : 'gold';
+          const mesh = createLootMesh(kind);
+          mesh.position.set(x / 100, 0.3, z / 100);
+          this.dynamicGroup.add(mesh);
+          const ent: LootEntity = { id, ownerId: owner, type: kind, value: 0, mesh, x: x / 100, z: z / 100, y: 0.3, vy: 3.8, age: 0, collected: false };
+          this.loots.push(ent);
+          g.loots.set(id, ent);
+        }
+      }
+    }
+    if (s.lr) {
+      for (const id of s.lr) {
+        const l = g.loots.get(id);
+        if (l) {
+          l.collected = true;
+          l.mesh.visible = false;
+          g.loots.delete(id);
+        }
+      }
+    }
+
+    // Doors
+    if (s.dr) this.mpGuestApplyDoors(s.dr);
+    // Objectives, wells, crates
+    if (s.w) this.mpGuestApplyWorld(s.w);
+    if (s.el !== undefined) g.spikeOffset = s.el / 100 - this.elapsed;
+    if (s.ev) for (const ev of s.ev) this.mpGuestEvent(ev);
+  }
+
+  /** In town the teammate client only follows which floor the party is on and where the doors (portals) are. */
+  private mpGuestTownSnapshot(s: SnapshotPayload): void {
+    const g = this.mp!.guest;
+    if (s.d !== this.depth) {
+      this.depth = s.d;
+      for (const h of this.heroes) h.portal = null;
+      g.doorSig = '';
+    }
+    if (s.dr) this.mpGuestApplyDoors(s.dr);
+  }
+
+  private mpHistoryAt(g: MpGuestState, t: number): { x: number; z: number } | null {
+    const h = g.history;
+    if (h.length === 0) return null;
+    if (t <= h[0].t) return h[0];
+    for (let i = h.length - 1; i > 0; i--) {
+      if (h[i - 1].t <= t) {
+        const a = h[i - 1];
+        const b = h[i];
+        const k = b.t > a.t ? Math.min(1, (t - a.t) / (b.t - a.t)) : 0;
+        return { x: a.x + (b.x - a.x) * k, z: a.z + (b.z - a.z) * k };
+      }
+    }
+    return h[h.length - 1];
+  }
+
+  private mpGuestSpawnEnemy(st: EnemyStatic): void {
+    const g = this.mp!.guest;
+    if (g.enemies.has(st.i)) return;
+    const kind = st.k as EnemyKind;
+    const rig = createEnemyModel(kind, this.dungeon.biome, this.sharedShadowMap);
+    rig.root.position.set(0, -50, 0);
+    this.dynamicGroup.add(rig.root);
+    let telegraph: BossTelegraphRig | undefined;
+    const isBoss = isFloorBoss(kind);
+    if (isBoss) {
+      telegraph = createBossTelegraph(BOSS_CONFIGS[kind].telegraphColor);
+      this.dynamicGroup.add(telegraph.group);
+    }
+    if (st.e > 0 && !isBoss) {
+      applyEliteVisuals(rig, st.n ?? `菁英 ${this.getEnemyBaseLabel(kind)}`, st.e === 2);
+    }
+    const e: EnemyEntity = {
+      id: st.i,
+      kind,
+      rig,
+      x: 0,
+      z: 0,
+      vx: 0,
+      vz: 0,
+      hp: st.m,
+      maxHp: st.m,
+      speed: 0,
+      attackCooldown: 0,
+      windupTimer: 0,
+      stunTimer: 0,
+      hitFlash: 0,
+      hopPhase: st.i,
+      facing: 0,
+      dead: false,
+      isBoss,
+      isRanged: isRangedEnemy(kind),
+      isElite: st.e > 0,
+      isSpecialElite: st.e === 2,
+      customName: st.n,
+      damageMult: 1,
+      bossName: st.bn,
+      bossTitle: st.bt,
+      bossState: 'chase',
+      telegraph,
+    };
+    g.enemies.set(st.i, { e, buf: [], placed: false });
+    g.enemyList.push(e);
+  }
+
+  private mpGuestRemoveEnemy(id: number): void {
+    const g = this.mp!.guest;
+    const p = g.enemies.get(id);
+    if (!p) return;
+    p.e.dead = true;
+    p.e.rig.root.visible = false;
+    if (p.e.telegraph) p.e.telegraph.group.visible = false;
+    this.dynamicGroup.remove(p.e.rig.root);
+    if (p.e.telegraph) this.dynamicGroup.remove(p.e.telegraph.group);
+    g.enemies.delete(id);
+    g.enemyList = g.enemyList.filter((e) => e !== p.e);
+  }
+
+  private mpGuestApplyDoors(dr: DoorSnap[]): void {
+    const g = this.mp!.guest;
+    const sig = JSON.stringify(dr);
+    if (sig === g.doorSig) return;
+    g.doorSig = sig;
+    const present = new Set<string>();
+    for (const [id, x, z, downed] of dr) {
+      present.add(id);
+      const h = this.heroById(id);
+      if (!h) continue;
+      const px = x / 100;
+      const pz = z / 100;
+      void downed;
+      if (!h.portal || h.portal.x !== px || h.portal.z !== pz || h.portal.depth !== this.depth || !this.heroPortalRigs.has(id)) {
+        if (this.inTown || !this.textures) h.portal = { x: px, z: pz, depth: this.depth };
+        else this.placeHeroPortal(h, px, pz, this.depth);
+      }
+    }
+    for (const h of this.heroes) {
+      if (present.has(h.id) || !h.portal) continue;
+      h.portal = null;
+      const rig = this.heroPortalRigs.get(h.id);
+      if (rig) {
+        rig.root.parent?.remove(rig.root);
+        this.heroPortalRigs.delete(h.id);
+      }
+      this.lightProps = this.lightProps.filter((lp) => !(lp.kind === 'portal' && lp.heroId === h.id));
+    }
+  }
+
+  private mpGuestApplyWorld(w: WorldSnap): void {
+    const g = this.mp!.guest;
+    this.hasKey = w.k === 1;
+    this.doorUnlocked = w.u === 1;
+    if (this.hasKey && !g.lastHasKey && this.keyPedestal) {
+      this.keyPedestal.keyMesh.visible = false;
+      this.keyPedestal.halo.visible = false;
+    }
+    g.lastHasKey = this.hasKey;
+    if (this.doorUnlocked && this.gateRig) this.gateRig.lockGlow.visible = false;
+    g.lastUnlocked = this.doorUnlocked;
+    const runes = this.lightProps.filter((lp) => lp.kind === 'rune');
+    for (const i of w.ru) {
+      const lp = runes[i];
+      if (!lp || lp.used) continue;
+      lp.used = true;
+      if (lp.crystal) lp.crystal.visible = false;
+      if (lp.halo) lp.halo.visible = false;
+      if (lp.decal) (lp.decal.material as THREE.MeshBasicMaterial).opacity = 0.46;
+      if (lp.pool) (lp.pool.material as THREE.MeshBasicMaterial).opacity = 0.12;
+    }
+    for (const i of w.br) {
+      const br = this.breakables[i];
+      if (!br || br.broken) continue;
+      br.broken = true;
+      br.mesh.visible = false;
+      for (let k = 0; k < 8; k++) {
+        this.spawnParticle(
+          br.x + (Math.random() - 0.5) * 0.4,
+          0.5,
+          br.z + (Math.random() - 0.5) * 0.4,
+          (Math.random() - 0.5) * 4,
+          2 + Math.random() * 2.4,
+          (Math.random() - 0.5) * 4,
+          br.kind === 'crate' ? 0x7c502d : 0xb38252,
+          1.2,
+          0.5,
+          9.5
+        );
+      }
+    }
+  }
+
+  private mpGuestEvent(ev: GameEvent): void {
+    const mp = this.mp!;
+    const t = ev[0];
+    if (t === 'f') {
+      const to = String(ev[6] ?? '');
+      if (to && to !== mp.selfId) return;
+      this.emitFloatingText(Number(ev[1]) / 100, Number(ev[2]) / 100, Number(ev[3]) / 100, String(ev[4]), ev[5] as FloatingLabelData['tone'], true);
+    } else if (t === 's') {
+      const name = String(ev[1]);
+      const origin = String(ev[2]);
+      const to = String(ev[3] ?? '');
+      if (to && to !== mp.selfId) return;
+      if (origin === mp.selfId && EmbervaultEngine.MP_PREDICTED_SOUNDS.has(name)) return;
+      const fn = (this.audio as unknown as Record<string, unknown>)[name];
+      if (typeof fn === 'function') (fn as (...a: unknown[]) => void).apply(this.audio, ev.slice(4));
+    } else if (t === 'b') {
+      const to = String(ev[3] ?? '');
+      if (to && to !== mp.selfId) return;
+      this.pushBanner(String(ev[1]), String(ev[2]) || undefined, true);
+    } else if (t === 'k') {
+      if (String(ev[3]) !== mp.selfId) return;
+      this.addScreenShake(Number(ev[1]) / 100, Number(ev[2]) / 100);
+    } else if (t === 'x') {
+      const x = Number(ev[1]) / 100;
+      const z = Number(ev[2]) / 100;
+      const big = Number(ev[3]) === 1;
+      for (let i = 0; i < (big ? 22 : 9); i++) {
+        const a = (i / (big ? 22 : 9)) * Math.PI * 2;
+        this.spawnParticle(x, 0.6, z, Math.cos(a) * 3.2, 1.6 + Math.random() * 2, Math.sin(a) * 3.2, big ? 0xffd24a : 0xcfd6e6, 1.1, 0.5, 6);
+      }
+    }
+  }
+
+  /** Samples a buffer of host-timestamped positions at the (delayed) render time. */
+  private mpSample(buf: MpSample[], t: number, out: { x: number; z: number; f: number }): boolean {
+    const n = buf.length;
+    if (n === 0) return false;
+    if (n === 1 || t <= buf[0].t) {
+      const a = buf[0];
+      out.x = a.x;
+      out.z = a.z;
+      out.f = a.f;
+      return true;
+    }
+    for (let i = n - 1; i > 0; i--) {
+      const a = buf[i - 1];
+      const b = buf[i];
+      if (a.t <= t) {
+        const span = b.t - a.t;
+        const k = span > 0 ? Math.min(1, (t - a.t) / span) : 1;
+        out.x = a.x + (b.x - a.x) * k;
+        out.z = a.z + (b.z - a.z) * k;
+        let df = b.f - a.f;
+        while (df > Math.PI) df -= Math.PI * 2;
+        while (df < -Math.PI) df += Math.PI * 2;
+        out.f = a.f + df * k;
+        return true;
+      }
+    }
+    const last = buf[n - 1];
+    out.x = last.x;
+    out.z = last.z;
+    out.f = last.f;
+    return true;
+  }
+
+  /** One frame of the teammate client in the dungeon: predict my hero, draw the others from the host's snapshots. */
+  private mpGuestFrame(dt: number): void {
+    const mp = this.mp!;
+    const g = mp.guest;
+    const local = this.localHero;
+    const now = performance.now();
+    this.setActor(local);
+    if (g.built && !local.isDead) {
+      this.updateHeroFrame(dt, true);
+      g.history.push({ t: now, x: local.x, z: local.z });
+      while (g.history.length > 0 && now - g.history[0].t > 2000) g.history.shift();
+    } else if (g.built) {
+      this.updateHeroFrame(dt, true);
+    }
+    this.mpGuestSendInput(now);
+    // The others
+    const renderT = now - (Number.isFinite(mp.clockOff) ? mp.clockOff : 0) - INTERP_DELAY_MS;
+    const tmp = { x: 0, z: 0, f: 0 };
+    for (const h of this.heroes) {
+      if (!h.isRemote) continue;
+      const hb = g.heroBufs.get(h.id);
+      const px = h.x;
+      const pz = h.z;
+      if (hb && !h.inTown && this.mpSample(hb.buf, renderT, tmp)) {
+        h.x = tmp.x;
+        h.z = tmp.z;
+        h.facing = tmp.f;
+        const sp = dt > 0 ? Math.hypot(h.x - px, h.z - pz) / dt : 0;
+        hb.speed += (sp - hb.speed) * Math.min(1, dt * 10);
+      }
+      this.mpAnimatePuppetHero(h, dt, hb?.speed ?? 0);
+    }
+    this.setActor(local);
+  }
+
+  private mpAnimatePuppetHero(h: Hero, dt: number, speed: number): void {
+    h.rig.root.visible = !this.inTown && !h.inTown;
+    h.rig.root.position.set(h.x, 0, h.z);
+    h.rig.body.rotation.y = h.facing;
+    h.hitFlash = Math.max(0, h.hitFlash - dt);
+    h.attackAnim = Math.max(0, h.attackAnim - dt);
+    h.pommelAnim = Math.max(0, h.pommelAnim - dt);
+    if (h.isDead) return;
+    const moving = speed > 0.5;
+    if (moving) h.walkCycle += dt * 11.5;
+    else h.walkCycle *= 0.85;
+    const stride = Math.sin(h.walkCycle) * (moving ? 0.55 : 0);
+    h.rig.leftLeg.rotation.x = stride;
+    h.rig.rightLeg.rotation.x = -stride;
+    h.rig.body.position.y = Math.abs(Math.sin(h.walkCycle)) * (moving ? 0.08 : 0);
+    h.rig.cape.rotation.x = 0.14 + (moving ? 0.22 : 0) + Math.sin(this.elapsed * 3.5) * 0.05;
+    if (h.pommelAnim > 0) {
+      const p = 1 - h.pommelAnim / 0.34;
+      h.rig.swordGroup.rotation.x = -Math.PI * 0.56;
+      const slam = Math.sin(p * Math.PI);
+      h.rig.rightArm.rotation.x = -1.35 + slam * 1.15;
+      h.rig.rightArm.rotation.y = -0.35 + p * 1.35;
+      h.rig.body.rotation.y = h.facing + slam * 0.72;
+    } else if (h.attackAnim > 0) {
+      const p = 1 - h.attackAnim / 0.28;
+      h.rig.swordGroup.rotation.x = THREE.MathUtils.damp(h.rig.swordGroup.rotation.x, Math.PI * 0.42, 22, dt);
+      h.rig.rightArm.rotation.x = -1.6 + p * 2.4;
+      h.rig.rightArm.rotation.y = -0.7 + p * 1.6;
+    } else {
+      h.rig.swordGroup.rotation.x = THREE.MathUtils.damp(h.rig.swordGroup.rotation.x, Math.PI * 0.42, 16, dt);
+      h.rig.rightArm.rotation.x = THREE.MathUtils.damp(h.rig.rightArm.rotation.x, -stride * 0.4, 12, dt);
+      h.rig.rightArm.rotation.y = THREE.MathUtils.damp(h.rig.rightArm.rotation.y, 0, 12, dt);
+    }
+    const em = h.hitFlash > 0 ? (h.hitShieldOnly ? 0x6fd8ff : 0xff3b3b) : 0x000000;
+    for (const m of h.rig.flashMaterials) {
+      m.emissive.setHex(em);
+      m.emissiveIntensity = h.hitFlash > 0 ? 0.75 : 0;
+    }
+  }
+
+  /** The teammate's controls to the host: only on change, at most 20 per second, one keepalive per second. */
+  private mpGuestSendInput(now: number): void {
+    const mp = this.mp!;
+    const g = mp.guest;
+    const local = this.localHero;
+    if (!g.built || this.inTown || mp.hold) return;
+    const keys = local.input.keys;
+    let k = 0;
+    if (keys.has('KeyW') || keys.has('ArrowUp')) k |= KEY_W;
+    if (keys.has('KeyA') || keys.has('ArrowLeft')) k |= KEY_A;
+    if (keys.has('KeyS') || keys.has('ArrowDown')) k |= KEY_S;
+    if (keys.has('KeyD') || keys.has('ArrowRight')) k |= KEY_D;
+    if (keys.has('KeyF')) k |= KEY_F;
+    const f = q100(local.facing);
+    const h: 0 | 1 = local.input.leftMouseHeld ? 1 : 0;
+    const ls = g.lastSent;
+    const changed = k !== ls.k || h !== ls.h || (h === 1 && Math.abs(f - ls.f) > 6);
+    const hasActions = g.actions.length > 0;
+    const due = now - ls.at >= 1000 / INPUT_MAX_HZ;
+    const keepalive = now - ls.at >= INPUT_KEEPALIVE_MS;
+    if (!((changed || hasActions) && due) && !keepalive) return;
+    const payload: InputPayload = { t: Math.round(now), k, f, h };
+    if (hasActions) payload.a = g.actions.splice(0, 8);
+    ls.k = k;
+    ls.f = f;
+    ls.h = h;
+    ls.at = now;
+    mp.send('in', payload, mp.hostId);
+  }
+
+  private mpQueueAction(a: number): void {
+    const mp = this.mp;
+    if (mp?.role === 'guest' && mp.guest.actions.length < 8) mp.guest.actions.push(a);
+  }
+
+  /** Teammate: everything that is not the hero's own movement (monsters, projectiles, loot, objectives). */
+  private mpGuestWorld(dt: number): void {
+    const mp = this.mp!;
+    const g = mp.guest;
+    const renderT = performance.now() - (Number.isFinite(mp.clockOff) ? mp.clockOff : 0) - INTERP_DELAY_MS;
+    const tmp = { x: 0, z: 0, f: 0 };
+    for (const p of g.enemies.values()) {
+      const e = p.e;
+      if (!this.mpSample(p.buf, renderT, tmp)) continue;
+      const moved = Math.hypot(tmp.x - e.x, tmp.z - e.z);
+      e.x = tmp.x;
+      e.z = tmp.z;
+      e.facing = tmp.f;
+      const first = !p.placed;
+      p.placed = true;
+      e.rig.root.position.set(e.x, 0, e.z);
+      e.rig.body.rotation.y = e.facing;
+      e.hitFlash = Math.max(0, e.hitFlash - dt);
+      if (!first && moved > 0.002) {
+        e.hopPhase += dt * 9;
+        e.rig.body.position.y = Math.abs(Math.sin(e.hopPhase)) * 0.07;
+        const sw = Math.sin(e.hopPhase) * 0.5;
+        if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = sw;
+        if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -sw;
+      } else {
+        e.rig.body.position.y *= 0.8;
+      }
+      const frozen = (e.frozenTimer ?? 0) > 0;
+      const slowed = (e.slowTimer ?? 0) > 0;
+      if (e.rig.frozenShell) e.rig.frozenShell.visible = frozen;
+      if (e.rig.slowMarker) e.rig.slowMarker.visible = slowed && !frozen;
+      if (e.rig.stunStars) {
+        e.rig.stunStars.visible = e.stunTimer > 0;
+        if (e.stunTimer > 0) e.rig.stunStars.rotation.y += dt * 5.8;
+      }
+      for (const m of e.rig.flashMaterials) {
+        if (e.hitFlash > 0) {
+          m.emissive.setHex(0xffffff);
+          m.emissiveIntensity = 0.85;
+        } else if (frozen) {
+          m.emissive.setHex(0x7fdcff);
+          m.emissiveIntensity = 0.45;
+        } else if (e.isElite) {
+          m.emissive.setHex(0xffd24d);
+          m.emissiveIntensity = 0.16;
+        } else {
+          m.emissive.setHex(0x000000);
+          m.emissiveIntensity = 0;
+        }
+      }
+      if (e.rig.auraRing) e.rig.auraRing.rotation.z += dt * 1.1;
+      if (e.telegraph) {
+        if (e.bossState === 'windup') {
+          const prog = e.bossStateTimer ?? 0;
+          e.telegraph.group.position.set(e.telegraphX ?? e.x, 0, e.telegraphZ ?? e.z);
+          e.telegraph.group.scale.setScalar(e.telegraphRadius ?? 3);
+          e.telegraph.fillDisk.scale.setScalar(0.12 + prog * 0.88);
+          e.telegraph.fillMat.opacity = 0.2 + prog * 0.34;
+          e.telegraph.ringMat.opacity = 0.72 + Math.sin(this.elapsed * 26) * 0.24;
+          e.telegraph.group.visible = true;
+        } else {
+          e.telegraph.group.visible = false;
+        }
+      }
+    }
+    // Monster projectiles and the other heroes' ice spikes fly in a straight line until the host says they ended
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const p = this.projectiles[i];
+      p.x += p.vx * dt;
+      p.z += p.vz * dt;
+      p.life += dt;
+      p.mesh.position.set(p.x, 0.85, p.z);
+      if (p.life >= p.maxLife || this.isPointInWall(p.x, p.z)) {
+        if (p.pid !== undefined) g.projs.delete(p.pid);
+        this.removeProjectileAt(i);
+      }
+    }
+    for (let i = this.heroProjectiles.length - 1; i >= 0; i--) {
+      const p = this.heroProjectiles[i];
+      if (p.pid === undefined) continue; // my own spikes are simulated by updateHeroProjectiles
+      p.x += p.vx * dt;
+      p.z += p.vz * dt;
+      p.traveled += Math.hypot(p.vx, p.vz) * dt;
+      p.mesh.position.set(p.x, 0.85, p.z);
+      if (this.isPointInWall(p.x, p.z) || p.traveled > 22) {
+        g.hprojs.delete(p.pid);
+        this.removeHeroProjectileAt(i);
+      }
+    }
+    // My loot (hovering only: the host decides when it is picked up)
+    for (const l of this.loots) {
+      if (l.collected) continue;
+      l.age += dt;
+      if (l.y > 0 || l.vy > 0) {
+        l.vy -= 13.5 * dt;
+        l.y = Math.max(0, l.y + l.vy * dt);
+        if (l.y === 0) l.vy = 0;
+      }
+      if (l.type === 'relic' && l.relicRig) {
+        l.mesh.position.set(l.x, 0, l.z);
+        l.relicRig.artifact.position.y = 0.36 + l.y + Math.sin(this.elapsed * 3.8 + l.id) * 0.1;
+        l.relicRig.artifact.rotation.y += dt * 2.4;
+        l.relicRig.ring.rotation.z -= dt * 1.2;
+        if (l.relicRig.beam) l.relicRig.beam.rotation.y += dt * 0.85;
+      } else {
+        l.mesh.position.set(l.x, l.y + Math.sin(this.elapsed * 4.5 + l.id) * 0.08, l.z);
+        l.mesh.rotation.y += dt * 2.8;
+      }
+    }
+    // Key pedestal / gate animation (the flags themselves come from the host)
+    if (this.keyPedestal && !this.hasKey) {
+      this.keyPedestal.keyMesh.rotation.y += dt * 2.1;
+      this.keyPedestal.keyMesh.position.y = 1.05 + Math.sin(this.elapsed * 3.4) * 0.14;
+    }
+    if (this.gateRig && this.doorUnlocked && this.gateOpenProgress < 1) {
+      this.gateOpenProgress = Math.min(1, this.gateOpenProgress + dt * 2.4);
+      const ease = 1 - Math.pow(1 - this.gateOpenProgress, 3);
+      this.gateRig.leftPivot.rotation.y = -ease * Math.PI * 0.62;
+      this.gateRig.rightPivot.rotation.y = ease * Math.PI * 0.62;
+    }
+  }
+
+  // --- Guest: town hand-off -----------------------------------------------------------------------------------
+
+  /** The host sent me to town: I own my character from here on (the town runs locally, spec 5.2). */
+  private mpGuestEnterTown(tw: TownPayload): void {
+    const mp = this.mp!;
+    const g = mp.guest;
+    const local = this.localHero;
+    this.mpGuestApplyPrivate(tw.priv);
+    local.hp = tw.hp;
+    local.shield = tw.sh;
+    local.isDead = false;
+    this.mpSetDownedPose(local, false);
+    local.restoreAfterDowned();
+    local.inTown = true;
+    this.awayAnchor = { x: local.x, z: local.z };
+    g.built = false;
+    g.enemies.clear();
+    g.enemyList = [];
+    g.projs.clear();
+    g.hprojs.clear();
+    g.loots.clear();
+    this.clearLevel();
+    this.applyCtx(this.blankCtx());
+    this.setViewGroups(true);
+    this.buildTown();
+    this.requestSave('town');
+    this.emitHud();
+  }
+
+  /** Town gate: tell the host which door and hand my final state back. */
+  private mpGuestReturn(portalId?: string): void {
+    const mp = this.mp!;
+    const local = this.localHero;
+    const opts = this.getTownPortalOptions();
+    const pick = opts.find((o) => o.id === portalId) ?? opts[0];
+    this.requestSave('leaveTown');
+    const hb: HandbackPayload = {
+      door: pick?.id ?? 'entrance',
+      classId: local.classId,
+      loadout: { ...local.exportLoadout(local.maxDepthReached), stash: [] },
+      angel: local.angelBuff ? { ...local.angelBuff } : null,
+      hp: local.getEffectiveMaxHp(),
+      shield: local.getEffectiveMaxShield(),
+    };
+    this.audio.playPortal();
+    mp.hold = true;
+    this.beginTransition(() => {
+      this.mpGuestTownToHold();
+      mp.send('handback', hb, mp.hostId);
+    });
+  }
+
+  /** At the black of a fade: the town is dropped, the next 'level' message builds the dungeon. */
+  private mpGuestTownToHold(): void {
+    const local = this.localHero;
+    this.leaveTownScene();
+    local.inTown = false;
+    this.applyCtx(this.blankCtx());
+    this.clearLevel();
+  }
+
+  /** Guest: send a UI command to the host (the answer is a `priv` message). */
+  private mpGuestCmd(cmd: CommandPayload): void {
+    const mp = this.mp;
+    if (mp?.role === 'guest') mp.send('cmd', cmd, mp.hostId);
+  }
+
+  /** Guest in the dungeon asked for town (B / death screen): hold at black until the host's reply arrives. */
+  private mpGuestAskTown(death: boolean): void {
+    const mp = this.mp!;
+    mp.hold = true;
+    this.audio.playPortal();
+    this.localHero.input.keys.clear();
+    this.localHero.input.leftMouseHeld = false;
+    this.beginTransition(() => undefined);
+    this.mpGuestCmd(death ? { c: 'death' } : { c: 'town' });
+  }
 
   public dispose(): void {
     this.disposed = true;

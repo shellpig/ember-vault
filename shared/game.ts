@@ -1,0 +1,228 @@
+// P5-B game protocol: the payloads carried inside `relay` messages (see shared/room.ts) between the host's engine
+// (authoritative dungeon simulation) and the teammates' engines (render-only "remote mode" + movement prediction).
+// Everything here is plain JSON. Numbers are quantised (x100 integers) to keep messages small.
+// Spec: docs/multiplayer-spec.md section 5.2.
+
+import type { CharacterLoadout } from '../src/game/hero';
+import type { AngelBuff, RelicItem } from '../src/game/relics';
+
+// --- Rates (spec 5.2.1: inbound DO messages are what costs requests, so everything is "send on change") ---------
+/** Host -> everybody snapshot rate. */
+export const SNAPSHOT_HZ = 15;
+/** Highest rate of a teammate's input messages (only sent when the input changed). */
+export const INPUT_MAX_HZ = 20;
+/** A teammate whose input did not change still sends one message this often (loss guard + movement echo). */
+export const INPUT_KEEPALIVE_MS = 1000;
+/** Remote entities are drawn this far in the past so there are always two snapshots to blend between. */
+export const INTERP_DELAY_MS = 110;
+/** Host stops moving a teammate whose input stream went silent for this long. */
+export const INPUT_STALE_MS = 3000;
+/** Host waits this long for the teammates' loadouts after the start. */
+export const LOADOUT_WAIT_MS = 10_000;
+/** Cap on events per snapshot (damage numbers / sounds / banners are merged into the snapshot, never sent alone). */
+export const MAX_EVENTS_PER_SNAPSHOT = 28;
+
+/** `relay.kind` values. */
+export type GameKind =
+  | 'loadout' // member -> host: character to bring into the dungeon
+  | 'abort' // host -> member: the host could not start with you (loadout missing)
+  | 'level' // host -> member(s): build this floor + the complete world state
+  | 's' // host -> all: snapshot (delta)
+  | 'priv' // host -> one member: that hero's private state (gold, relics, upgrades ...)
+  | 'in' // member -> host: input state + one-shot actions
+  | 'cmd' // member -> host: UI command (equip, sell, buy, go to town ...)
+  | 'tw' // host -> one member: you are in town now (final private state)
+  | 'handback'; // member -> host: leaving town through a door, here is my current loadout
+
+// --- Teammate -> host ------------------------------------------------------------------------------------------
+export const KEY_W = 1;
+export const KEY_A = 2;
+export const KEY_S = 4;
+export const KEY_D = 8;
+/** Held "interact" key = revive a downed teammate. */
+export const KEY_F = 16;
+
+export const ACT_ATTACK = 1;
+export const ACT_DASH = 2;
+export const ACT_POMMEL = 3;
+export const ACT_POTION = 4;
+
+export interface LoadoutPayload {
+  classId: string;
+  loadout: CharacterLoadout;
+  angel: AngelBuff | null;
+}
+
+export interface InputPayload {
+  /** The sender's clock (performance.now, integer ms). The host echoes it back so the sender can reconcile. */
+  t: number;
+  /** KEY_* bit mask of held keys. */
+  k: number;
+  /** Facing angle x100 (what the cursor / auto aim chose). */
+  f: number;
+  /** Left mouse (hold to attack) held. */
+  h: 0 | 1;
+  /** One-shot actions since the last message (ACT_*). */
+  a?: number[];
+}
+
+export type CommandPayload =
+  | { c: 'eq'; id: string; s?: number }
+  | { c: 'uneq'; s: number }
+  | { c: 'sell'; id: string }
+  | { c: 'sellc'; y?: 0 | 1 }
+  | { c: 'up'; kind: string }
+  | { c: 'buy' }
+  /** Back to town (B). */
+  | { c: 'town' }
+  /** The "回到城鎮" button on the downed screen. */
+  | { c: 'death' };
+
+export interface HandbackPayload {
+  /** Hero id whose portal to leave through, or 'entrance'. */
+  door: string;
+  classId: string;
+  loadout: CharacterLoadout;
+  angel: AngelBuff | null;
+  hp: number;
+  shield: number;
+}
+
+// --- Host -> teammates -------------------------------------------------------------------------------------------
+/** The state of ONE hero that only its owner needs (everybody else sees position / HP only). */
+export interface PrivatePayload {
+  /** gold, potions, upgrades, equipped / bag relics, max depth (the shape of a character save; the stash never travels). */
+  ld: CharacterLoadout;
+  /** Angel blessing. */
+  ab: AngelBuff | null;
+  /** kills, normal, elite, boss, goldEarned, damage, crits, potionsUsed */
+  st: [number, number, number, number, number, number, number, number];
+  /** Chronos hourglass used on this floor. */
+  ch: 0 | 1;
+  /** Name of what downed this hero (death screen). */
+  sl: string;
+}
+
+export interface RosterEntry {
+  id: string;
+  name: string;
+  cls: string;
+  x: number;
+  z: number;
+  /** In town right now. */
+  tw?: 1;
+}
+
+export interface LevelPayload {
+  n: number;
+  seed: number;
+  roster: RosterEntry[];
+  /** 1 = a new floor (not a rebuild of the same one). */
+  fl?: 1;
+  /** The complete world (all enemies etc.). */
+  snap: SnapshotPayload;
+  /** The receiver's own private state. */
+  priv: PrivatePayload;
+}
+
+/**
+ * Hero entry of a snapshot:
+ * [id, x100, z100, facing100, hp, maxHp, shield, flags, attackAnim100, pommelAnim100, echoT, echoAgeMs,
+ *  rescueProgressOnMe100, myRescueTargetId, myRescueProgress100]
+ */
+export type HeroSnap = [string, number, number, number, number, number, number, number, number, number, number, number, number, string, number];
+export const HF_DEAD = 1;
+export const HF_TOWN = 2;
+export const HF_DASH = 4;
+export const HF_HIT = 8;
+export const HF_HIT_SHIELD = 16;
+
+export interface EnemyStatic {
+  i: number;
+  k: string;
+  m: number;
+  /** 0 normal, 1 elite, 2 special elite */
+  e: 0 | 1 | 2;
+  n?: string;
+  bn?: string;
+  bt?: string;
+}
+
+/**
+ * Enemy entry: [id, x100, z100, facing100, hp, flags, (boss) windupProgress100, telegraphX100, telegraphZ100,
+ * telegraphRadius100, skillIndex]. Only entries that changed since the last snapshot are sent.
+ */
+export type EnemySnap = number[];
+export const EF_STUN = 1;
+export const EF_FROZEN = 2;
+export const EF_SLOW = 4;
+export const EF_HIT = 8;
+export const EF_AC34 = 16;
+export const EF_AC75 = 32;
+/** Boss state is `flags >> EF_BOSS_SHIFT` (0 chase, 1 windup, 2 strike, 3 recover). */
+export const EF_BOSS_SHIFT = 6;
+
+/** Enemy projectile (flies straight, the receiver moves it): [pid, kind, x100, z100, vx100, vz100] */
+export type ProjSnap = [number, string, number, number, number, number];
+/** Hero ice spike: [pid, ownerId, x100, z100, vx100, vz100, shotIdx] */
+export type HeroProjSnap = [number, string, number, number, number, number, number];
+/** Loot of a teammate (only the owner draws it): [id, ownerId, type 0 gold / 1 potion / 2 relic, x100, z100, rarity 0-3] */
+export type LootSnap = [number, string, number, number, number, number];
+/** A hero's lingering portal: [ownerId, x100, z100, downed] */
+export type DoorSnap = [string, number, number, number];
+
+export interface WorldSnap {
+  k: 0 | 1;
+  u: 0 | 1;
+  /** Indices (in build order) of the rune wells that were used up */
+  ru: number[];
+  /** Indices (in build order) of the broken crates / urns */
+  br: number[];
+}
+
+/**
+ * Event: batched into the snapshot (never sent alone). The first element is the type:
+ *  ['f', x100, y100, z100, text, tone, toId?]   floating text (damage numbers are public, pickups private)
+ *  ['s', soundName, originId, toId?]            sound
+ *  ['b', title, subtitle, toId?]                banner
+ *  ['k', mag100, dur100, toId]                  screen shake (private)
+ *  ['x', x100, z100, big]                       an enemy died here (burst)
+ */
+export type GameEvent = Array<string | number>;
+
+export interface SnapshotPayload {
+  /** Host clock (performance.now ms) when it was built. */
+  ts: number;
+  d: number;
+  /** Host `elapsed` x100, keeps the spike trap cycle in step. */
+  el: number;
+  hs: HeroSnap[];
+  /** New enemies (static part). */
+  en?: EnemyStatic[];
+  /** Changed enemies. */
+  es?: EnemySnap[];
+  /** Enemies that died / vanished. */
+  er?: number[];
+  /** New projectiles. */
+  ps?: ProjSnap[];
+  hp?: HeroProjSnap[];
+  /** Ended projectiles (enemy + hero). */
+  pr?: number[];
+  /** Loot: new or moved, and gone. */
+  ls?: LootSnap[];
+  lr?: number[];
+  w?: WorldSnap;
+  dr?: DoorSnap[];
+  ev?: GameEvent[];
+}
+
+export interface TownPayload {
+  priv: PrivatePayload;
+  /** The hero's HP / shield when leaving the dungeon. */
+  hp: number;
+  sh: number;
+}
+
+export function q100(v: number): number {
+  return Math.round(v * 100);
+}

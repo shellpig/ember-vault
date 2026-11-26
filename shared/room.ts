@@ -8,11 +8,23 @@ export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export const ROOM_CODE_PATTERN = new RegExp(`^[${ROOM_CODE_ALPHABET}]{${ROOM_CODE_LENGTH}}$`);
 
 export const MAX_CHAT_LENGTH = 200;
-/** Largest accepted inbound WebSocket message (UTF-16 code units of the JSON text). */
+/** Largest accepted inbound WebSocket message from a member (UTF-16 code units of the JSON text). */
 export const MAX_MESSAGE_BYTES = 4096;
-/** Token bucket per connection: burst of RATE_BUCKET_SIZE messages, refilled at RATE_REFILL_PER_SEC. */
-export const RATE_BUCKET_SIZE = 20;
-export const RATE_REFILL_PER_SEC = 5;
+/**
+ * P5-B: the host's relay messages (snapshots, full level state) are bigger; the host gets a higher cap. Members may
+ * send big messages only for the rare `BIG_MEMBER_RELAY_KINDS` (a character loadout is ~10 KB of relics).
+ */
+export const HOST_MAX_MESSAGE_BYTES = 32768;
+export const BIG_MEMBER_RELAY_KINDS: readonly string[] = ['loadout', 'handback'];
+/**
+ * Token bucket per connection: a burst of `bucket` messages, refilled at `refill` per second. Chosen from the steady
+ * traffic of section 5.2.1: the host sends a 15 Hz snapshot + a few events / private states (about 20 / s), a member
+ * sends at most 20 Hz input + commands (about 22 / s). Sustained flooding beyond that is closed with 1008.
+ */
+export const RATE_LIMITS = {
+  host: { bucket: 80, refill: 40 },
+  member: { bucket: 50, refill: 30 },
+} as const;
 /** Application-level latency ping interval (ms). Keep it low: inbound messages are billed 20:1. */
 export const PING_INTERVAL_MS = 5000;
 /** Plain-text keep-alive answered by setWebSocketAutoResponse (never wakes the DO, not billed). */
@@ -49,17 +61,21 @@ export interface PingSend {
   rtt?: number;
 }
 /**
- * RESERVED FOR P5-B (not enabled in P5-A; the DO ignores it while RELAY_ENABLED is false).
- * Host -> everybody else: `to` omitted (or 'all'). Member -> host only: `to` omitted / 'host'.
- * The server stamps `from`; `payload` is opaque and its size is bounded by MAX_MESSAGE_BYTES.
+ * P5-B relay. Host -> everybody else (`to` omitted / 'all') or one member (`to` = that member's playerId).
+ * Member -> host only (`to` is ignored). The server stamps `from`; `payload` is opaque and bounded by the message size
+ * limits above. Only accepted after the game has started. The `kind` list lives in shared/game.ts.
  */
 export interface RelaySend {
   type: 'relay';
-  to?: 'all' | 'host';
-  kind: string; // e.g. 'input', 'snapshot', 'event', 'location'
+  to?: string;
+  kind: string;
   payload: unknown;
 }
-export type ClientMessage = ChatSend | PingSend | RelaySend;
+/** Host only: close the room to new members and tell everybody the game begins (spec section 5.2). */
+export interface StartGameSend {
+  type: 'startGame';
+}
+export type ClientMessage = ChatSend | PingSend | RelaySend | StartGameSend;
 
 // --- Server -> client ---------------------------------------------------------------------------
 
@@ -69,6 +85,12 @@ export interface WelcomeMsg {
   playerId: string;
   isHost: boolean;
   members: RoomMember[];
+  /** True once the host pressed start (only reachable by a reconnect of an existing member). */
+  started?: boolean;
+}
+/** The host started the game: every member leaves the lobby and loads the dungeon. */
+export interface GameStartedMsg {
+  type: 'gameStarted';
 }
 export interface MemberJoinedMsg {
   type: 'memberJoined';
@@ -113,6 +135,7 @@ export type ServerMessage =
   | ChatMsg
   | PongMsg
   | ReplacedMsg
+  | GameStartedMsg
   | RelayMsg;
 
 /** Header the Pages Function uses to hand the verified identity to the DO (URI-encoded JSON). */
@@ -124,4 +147,10 @@ export interface VerifiedIdentity {
   maxDepth: number;
 }
 
-export type RoomErrorCode = 'unauthorized' | 'forbidden' | 'room_not_found' | 'room_full' | 'bad_request';
+export type RoomErrorCode =
+  | 'unauthorized'
+  | 'forbidden'
+  | 'room_not_found'
+  | 'room_full'
+  | 'game_started'
+  | 'bad_request';

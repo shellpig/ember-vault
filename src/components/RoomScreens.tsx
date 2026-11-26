@@ -9,17 +9,29 @@ import { BTN_PLAIN, PANEL, Shell } from './AccountScreens';
 
 export type RoomEntry = { kind: 'create' } | { kind: 'join'; code: string };
 
+/** What the lobby hands to the game when the host starts it (P5-B): the open connection and who is in the room. */
+export interface RoomGameStart {
+  client: RoomClient;
+  selfId: string;
+  hostId: string;
+  isHost: boolean;
+  members: RoomMember[];
+}
+
 const MAX_CHAT_LINES = 100;
 
 export function RoomLobbyScreen({
   save,
   entry,
   onExit,
+  onGameStart,
 }: {
   save: CharacterSave;
   entry: RoomEntry;
   /** Back to the lobby; `notice` is shown there (omit for a plain leave). */
   onExit: (notice?: string) => void;
+  /** The host started the game: the connection now belongs to the game. */
+  onGameStart: (info: RoomGameStart) => void;
 }) {
   const [code, setCode] = useState(entry.kind === 'join' ? entry.code : '');
   const [members, setMembers] = useState<RoomMember[]>([]);
@@ -36,6 +48,11 @@ export function RoomLobbyScreen({
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+  const onGameStartRef = useRef(onGameStart);
+  onGameStartRef.current = onGameStart;
+  const membersRef = useRef<RoomMember[]>([]);
+  const selfIdRef = useRef<string | null>(null);
+  const handedOffRef = useRef(false);
 
   const exit = useCallback((notice?: string) => {
     if (exitedRef.current) return;
@@ -55,15 +72,29 @@ export function RoomLobbyScreen({
         if (cancelled) return;
         switch (msg.type) {
           case 'welcome':
+            selfIdRef.current = msg.playerId;
+            membersRef.current = msg.members;
             setSelfId(msg.playerId);
             setMembers(msg.members);
             setCode(msg.code);
             setStatus('open');
             break;
           case 'memberJoined':
+            membersRef.current = [...membersRef.current.filter((m) => m.playerId !== msg.member.playerId), msg.member];
             setMembers((prev) => [...prev.filter((m) => m.playerId !== msg.member.playerId), msg.member]);
             break;
+          case 'gameStarted': {
+            const selfId = selfIdRef.current;
+            const members = membersRef.current;
+            const host = members.find((m) => m.isHost);
+            if (!selfId || !host || handedOffRef.current) break;
+            handedOffRef.current = true;
+            exitedRef.current = true;
+            onGameStartRef.current({ client, selfId, hostId: host.playerId, isHost: host.playerId === selfId, members });
+            break;
+          }
           case 'memberLeft':
+            membersRef.current = membersRef.current.filter((m) => m.playerId !== msg.playerId);
             setMembers((prev) => prev.filter((m) => m.playerId !== msg.playerId));
             setLatencies((prev) => {
               const next = { ...prev };
@@ -111,7 +142,8 @@ export function RoomLobbyScreen({
 
     return () => {
       cancelled = true;
-      client.close();
+      // After the hand-off the game owns the connection
+      if (!handedOffRef.current) client.close();
       clientRef.current = null;
     };
     // The connection is set up once per mount; entry / save never change while this screen is shown.
@@ -238,18 +270,18 @@ export function RoomLobbyScreen({
               <button
                 type="button"
                 data-testid="start-game"
-                disabled
-                aria-disabled="true"
-                className="px-4 py-2 border border-[#2c2f3a] bg-[#10131c] font-hud text-sm text-[#6a6f80] cursor-not-allowed"
+                disabled={status !== 'open'}
+                onClick={() => clientRef.current?.startGame()}
+                className="px-4 py-2 border border-[#d6b25e] bg-[#2a2110] font-hud text-sm text-[#ffe7a8] hover:bg-[#3a2d15] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                開始遊戲（下一階段開放）
+                開始遊戲
               </button>
             )}
           </div>
           {isHost ? (
-            <p className="font-hud text-[11px] text-[#8d93a6]">你是房主：你離開時房間會關閉。</p>
+            <p className="font-hud text-[11px] text-[#8d93a6]">你是房主：按下「開始遊戲」後大家一起進入地城；你離開時房間會關閉。</p>
           ) : (
-            <p className="font-hud text-[11px] text-[#8d93a6]">等待房主開始遊戲（下一階段開放）。</p>
+            <p className="font-hud text-[11px] text-[#8d93a6]">等待房主開始遊戲。</p>
           )}
         </div>
       </div>

@@ -45,6 +45,8 @@ export interface HeroInput {
   leftMouseHeld: boolean;
   pointerClientX: number;
   pointerClientY: number;
+  /** Remote teammate on the host: the facing (radians) that player's client reported with its last input. */
+  aimFacing: number;
 }
 
 /** Auto-pilot (attract mode / bot) bookkeeping of one hero. The behaviour itself lives in the engine. */
@@ -81,12 +83,20 @@ export interface HeroAiState {
  * and operates on Hero instances. Pure rules that only touch a hero's own state live here.
  */
 export class Hero {
-  public readonly id: string;
+  /** Single player: 'hero-0'. In a room it is the room's playerId (set before the run starts). */
+  public id: string;
 
   /** Local AI teammate (P4-B): never saved, never talks to the API, no HUD / camera / input binding. */
   public isBot = false;
   /** 1-based index shown on a bot's nameplate ("Bot 1"). */
   public botIndex = 0;
+  /**
+   * A human teammate in a room (P5-B). On the host it is a full simulated hero driven by that player's input; on a
+   * teammate's client it is a render-only puppet fed by snapshots. Never saved by this client.
+   */
+  public isRemote = false;
+  /** Nameplate text of a remote teammate (character name). */
+  public displayName = '';
 
   // Visual rig (owned by the hero; the engine adds it to the scene)
   public rig!: HeroRig;
@@ -204,6 +214,7 @@ export class Hero {
     leftMouseHeld: false,
     pointerClientX: 0,
     pointerClientY: 0,
+    aimFacing: 0,
   };
   public readonly ai: HeroAiState = {
     path: [],

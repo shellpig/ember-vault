@@ -5,12 +5,13 @@ import {
   CLOSE_ROOM_CLOSED,
   CLOSE_TOO_BIG,
   IDENTITY_HEADER,
+  BIG_MEMBER_RELAY_KINDS,
+  HOST_MAX_MESSAGE_BYTES,
   KEEPALIVE_PING,
   KEEPALIVE_PONG,
   MAX_CHAT_LENGTH,
   MAX_MESSAGE_BYTES,
-  RATE_BUCKET_SIZE,
-  RATE_REFILL_PER_SEC,
+  RATE_LIMITS,
   ROOM_IDLE_TTL_MS,
   ROOM_MAX_PLAYERS,
   type ClientMessage,
@@ -32,14 +33,15 @@ import {
  * while idle, keep-alive pings are answered by setWebSocketAutoResponse without waking it, and
  * P5-A has no high-frequency messages (only join / leave / chat / a ping every few seconds).
  *
- * RESERVED FOR P5-B: `relay` messages (host -> all, member -> host). The routing below is written
- * but switched off with RELAY_ENABLED. P5-B must send only on change, snapshots at <= 15 Hz.
+ * P5-B: `relay` messages (host -> everybody or one member, member -> host) carry the game traffic. They are only
+ * accepted once the host has started the game. The sender id is stamped here. Sizes and rates depend on the role
+ * (the host sends 15 Hz snapshots up to 32 KB, members send small inputs). Clients must send only on change.
  */
-const RELAY_ENABLED = false;
-
 interface RoomMeta {
   hostAccountId: string;
   createdAt: number;
+  /** Set by the host's `startGame`; from then on new members are refused (409 game_started). */
+  started?: boolean;
 }
 
 /** Stored with serializeAttachment so it survives hibernation. */
@@ -152,6 +154,7 @@ export class Room extends DurableObject<Record<string, never>> {
     const existing = live.find((s) => s.att.accountId === identity.accountId);
     // A guest can only join a room whose host is present (the room ends when the host leaves).
     if (!isHost && !live.some((s) => s.att.isHost)) return errorResponse(404, 'room_not_found');
+    if (!existing && meta.started) return errorResponse(409, 'game_started');
     if (!existing && live.length >= ROOM_MAX_PLAYERS) return errorResponse(409, 'room_full');
 
     // A plain GET (no Upgrade) is a dry run the browser uses to learn the exact error before opening the socket.
@@ -189,7 +192,14 @@ export class Room extends DurableObject<Record<string, never>> {
     if (isHost) await this.ctx.storage.deleteAlarm();
 
     const members = this.liveSockets().map((s) => this.publicMember(s.att));
-    this.send(server, { type: 'welcome', code: this.codeFromRequest(request), playerId, isHost, members });
+    this.send(server, {
+      type: 'welcome',
+      code: this.codeFromRequest(request),
+      playerId,
+      isHost,
+      members,
+      started: meta.started === true,
+    });
     this.broadcast({ type: 'memberJoined', member: this.publicMember(att) }, server);
 
     return new Response(null, { status: 101, webSocket: client });
@@ -226,10 +236,11 @@ export class Room extends DurableObject<Record<string, never>> {
   // --- Hibernation handlers ------------------------------------------------------------------------
 
   /** Token bucket. Returns false when the connection is over its rate. */
-  private allow(ws: WebSocket): boolean {
+  private allow(ws: WebSocket, isHost: boolean): boolean {
     const now = Date.now();
-    const b = this.buckets.get(ws) ?? { tokens: RATE_BUCKET_SIZE, last: now };
-    b.tokens = Math.min(RATE_BUCKET_SIZE, b.tokens + ((now - b.last) / 1000) * RATE_REFILL_PER_SEC);
+    const lim = isHost ? RATE_LIMITS.host : RATE_LIMITS.member;
+    const b = this.buckets.get(ws) ?? { tokens: lim.bucket, last: now };
+    b.tokens = Math.min(lim.bucket, b.tokens + ((now - b.last) / 1000) * lim.refill);
     b.last = now;
     this.buckets.set(ws, b);
     if (b.tokens < 1) return false;
@@ -244,11 +255,12 @@ export class Room extends DurableObject<Record<string, never>> {
       ws.close(1003, 'binary_not_supported');
       return;
     }
-    if (message.length > MAX_MESSAGE_BYTES) {
+    // Absolute cap for everybody; members are held to the small limit below unless the relay kind is allowed to be big
+    if (message.length > HOST_MAX_MESSAGE_BYTES) {
       ws.close(CLOSE_TOO_BIG, 'message_too_big');
       return;
     }
-    if (!this.allow(ws)) {
+    if (!this.allow(ws, att.isHost)) {
       ws.close(CLOSE_RATE_LIMITED, 'rate_limited');
       return;
     }
@@ -282,8 +294,22 @@ export class Room extends DurableObject<Record<string, never>> {
         this.broadcast({ type: 'chat', from: att.playerId, name: att.name, text, ts: Date.now() });
         return;
       }
+      case 'startGame': {
+        if (!att.isHost) return;
+        const meta = await this.loadMeta();
+        if (!meta || meta.started) return;
+        meta.started = true;
+        await this.ctx.storage.put('meta', meta);
+        this.broadcast({ type: 'gameStarted' });
+        return;
+      }
       case 'relay': {
-        if (!RELAY_ENABLED) return;
+        if (!(await this.loadMeta())?.started) return;
+        // Members may only send small messages, except for the rare loadout hand-over
+        if (!att.isHost && message.length > MAX_MESSAGE_BYTES && !BIG_MEMBER_RELAY_KINDS.includes(String(msg.kind))) {
+          ws.close(CLOSE_TOO_BIG, 'message_too_big');
+          return;
+        }
         this.relay(att, msg);
         return;
       }
@@ -293,15 +319,24 @@ export class Room extends DurableObject<Record<string, never>> {
   }
 
   /**
-   * P5-B routing (disabled in P5-A): the host may address everybody else, a member may only talk to the host.
-   * The sender id is stamped here so nobody can spoof `from`.
+   * Relay routing: the host may address everybody else or one member (`to` = playerId), a member may only talk to the
+   * host. The sender id is stamped here so nobody can spoof `from`.
    */
   private relay(att: Attachment, msg: Extract<ClientMessage, { type: 'relay' }>): void {
     if (typeof msg.kind !== 'string' || msg.kind.length > 32) return;
     const out: ServerMessage = { type: 'relay', from: att.playerId, kind: msg.kind, payload: msg.payload };
     const targets = this.liveSockets().filter((s) => s.att.playerId !== att.playerId);
     if (att.isHost) {
-      for (const t of targets) this.send(t.ws, out);
+      const to = typeof msg.to === 'string' && msg.to !== 'all' ? msg.to : null;
+      const text = JSON.stringify(out);
+      for (const t of targets) {
+        if (to && t.att.playerId !== to) continue;
+        try {
+          t.ws.send(text);
+        } catch {
+          // socket already closed
+        }
+      }
     } else {
       const host = targets.find((t) => t.att.isHost);
       if (host) this.send(host.ws, out);
