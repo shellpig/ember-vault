@@ -12,15 +12,19 @@ import {
   worldToWalkableGrid,
 } from './dungeon';
 import {
+  AngelRig,
   BossTelegraphRig,
   EnemyRig,
   GateRig,
   HeroRig,
   RelicLootRig,
   SpikeTrapRig,
+  TownPortalRig,
   applyEliteVisuals,
+  createAngelModel,
   createBossTelegraph,
   createBrazier,
+  createCentralWell,
   createCrateProp,
   createEnemyModel,
   createHeroModel,
@@ -32,13 +36,18 @@ import {
   createRelicLootMesh,
   createRuneWell,
   createStairwell,
+  createTownHouse,
+  createTownPortal,
   createUpgradeAltar,
+  createVillageLampPost,
+  createVillageTree,
   createWallTorch,
   createLockedGate,
   createSpikeTrap,
   createStunStars,
 } from './models';
 import {
+  AngelBuff,
   RelicDropSource,
   RelicItem,
   RelicSetId,
@@ -47,11 +56,13 @@ import {
   computeRelicSummary,
   evaluateRelicLoadoutScore,
   getRarityColorHex,
+  rollAngelBlessing,
   rollRelicDrops,
 } from './relics';
 import { DungeonTextureSet, createDungeonTextures } from './textures';
 import {
   BannerEvent,
+  BiomeConfig,
   BossAttackState,
   DungeonData,
   EnemyKind,
@@ -61,6 +72,7 @@ import {
   ProjectileKind,
   RunSummary,
   TerrainTheme,
+  TileType,
 } from './types';
 
 interface EngineCallbacks {
@@ -354,6 +366,15 @@ function isGuardianEnemy(kind: EnemyKind): boolean {
   );
 }
 
+function isSwarmEnemy(kind: EnemyKind): boolean {
+  return (
+    kind === 'dungeon_rat' ||
+    kind === 'cavern_mite' ||
+    kind === 'flesh_leech' ||
+    kind === 'alien_nanobot'
+  );
+}
+
 function getRangedProjectileKind(kind: EnemyKind): ProjectileKind {
   switch (kind) {
     case 'cavern_spitter':
@@ -492,8 +513,32 @@ interface AnimatedLightProp {
   decal?: THREE.Mesh;
   pool?: THREE.Mesh;
   halo?: THREE.Sprite;
-  kind: 'torch' | 'brazier' | 'rune' | 'key' | 'gate' | 'stairs' | 'altar' | 'shop';
+  kind:
+    | 'torch'
+    | 'brazier'
+    | 'rune'
+    | 'key'
+    | 'gate'
+    | 'stairs'
+    | 'altar'
+    | 'shop'
+    | 'portal'
+    | 'angel'
+    | 'lamp';
   used?: boolean;
+}
+
+interface SavedDungeonSnapshot {
+  depth: number;
+  dungeon: DungeonData;
+  hasKey: boolean;
+  doorUnlocked: boolean;
+  chronosUsedThisFloor: boolean;
+  floorKills: number;
+  returnX: number;
+  returnZ: number;
+  usedRuneKeys: Set<string>;
+  brokenBreakableKeys: Set<string>;
 }
 
 interface WallOcclusionTile {
@@ -576,6 +621,17 @@ export class EmbervaultEngine {
   } | null = null;
   private gateRig: GateRig | null = null;
   private gateOpenProgress = 0;
+
+  // Sanctuary Town & Angel Blessing State
+  private inTown = false;
+  private savedDungeon: SavedDungeonSnapshot | null = null;
+  private townPortalPos: { x: number; z: number } | null = null;
+  private angelPos: { x: number; z: number } | null = null;
+  private angelRig: AngelRig | null = null;
+  private townPortalRig: TownPortalRig | null = null;
+  private angelBuff: AngelBuff | null = null;
+  private portalSafePos: { x: number; z: number } | null = null;
+  private extraTextures: THREE.Texture[] = [];
 
   // Dynamic 50% translucency for foreground walls occluding the hero
   private readonly wallHeight = 2.65;
@@ -954,6 +1010,10 @@ export class EmbervaultEngine {
       this.textures.dispose();
       this.textures = null;
     }
+    if (this.extraTextures.length > 0) {
+      this.extraTextures.forEach((t) => t.dispose());
+      this.extraTextures = [];
+    }
 
     this.enemies = [];
     this.projectiles = [];
@@ -966,6 +1026,10 @@ export class EmbervaultEngine {
     this.shopRig = null;
     this.gateRig = null;
     this.gateOpenProgress = 0;
+    this.angelRig = null;
+    this.townPortalRig = null;
+    this.townPortalPos = null;
+    this.angelPos = null;
     this.wallOpaqueMeshes = [];
     this.wallFadeMeshes = [];
     this.capOpaqueMesh = null;
@@ -986,14 +1050,38 @@ export class EmbervaultEngine {
     this.autoUpgradeCooldown = 0;
   }
 
-  private buildLevel(depth: number): void {
+  private buildLevel(
+    depth: number,
+    options?: { savedSnapshot?: SavedDungeonSnapshot; tickBuffFloor?: boolean }
+  ): void {
     this.clearLevel();
+    this.inTown = false;
     this.depth = depth;
-    this.hasKey = false;
-    this.doorUnlocked = false;
-    this.chronosUsedThisFloor = false;
-    this.floorKills = 0;
-    this.dungeon = generateDungeon(depth);
+
+    let buffExpired = false;
+    if (options?.tickBuffFloor && this.angelBuff) {
+      this.angelBuff.floorsLeft -= 1;
+      if (this.angelBuff.floorsLeft <= 0) {
+        this.angelBuff = null;
+        this.recomputeRelicStats(true);
+        buffExpired = true;
+      }
+    }
+
+    const snap = options?.savedSnapshot;
+    if (snap) {
+      this.hasKey = snap.hasKey;
+      this.doorUnlocked = snap.doorUnlocked;
+      this.chronosUsedThisFloor = snap.chronosUsedThisFloor;
+      this.floorKills = snap.floorKills;
+      this.dungeon = snap.dungeon;
+    } else {
+      this.hasKey = false;
+      this.doorUnlocked = false;
+      this.chronosUsedThisFloor = false;
+      this.floorKills = 0;
+      this.dungeon = generateDungeon(depth);
+    }
     const biome = this.dungeon.biome;
     const isAlienDeck = biome.terrainTheme === 'alien';
 
@@ -1402,6 +1490,13 @@ export class EmbervaultEngine {
       } else if (prop.type === 'rune_well') {
         const rw = createRuneWell(biome, this.textures);
         rw.root.position.set(x, 0, z);
+        const alreadyUsed = Boolean(snap?.usedRuneKeys.has(`${prop.gx},${prop.gz}`));
+        if (alreadyUsed) {
+          rw.crystal.visible = false;
+          rw.halo.visible = false;
+          (rw.decal.material as THREE.MeshBasicMaterial).opacity = 0.46;
+          (rw.pool.material as THREE.MeshBasicMaterial).opacity = 0.12;
+        }
         this.levelGroup.add(rw.root);
         this.lightProps.push({
           color: biome.runeColor,
@@ -1417,9 +1512,12 @@ export class EmbervaultEngine {
           pool: rw.pool,
           halo: rw.halo,
           kind: 'rune',
-          used: false,
+          used: alreadyUsed,
         });
       } else if (prop.type === 'crate' || prop.type === 'urn') {
+        if (snap?.brokenBreakableKeys.has(`${prop.gx},${prop.gz}`)) {
+          continue;
+        }
         const mesh = createCrateProp(prop.type, this.textures);
         mesh.position.set(x, 0, z);
         mesh.rotation.y = (Math.random() - 0.5) * 0.35;
@@ -1451,6 +1549,10 @@ export class EmbervaultEngine {
       const { x, z } = gridToWorld(this.dungeon.keyPos.gx, this.dungeon.keyPos.gz);
       const ped = createKeyPedestal(this.sharedShadowMap, this.textures.glowMap);
       ped.root.position.set(x, 0, z);
+      if (this.hasKey) {
+        ped.keyMesh.visible = false;
+        ped.halo.visible = false;
+      }
       this.dynamicGroup.add(ped.root);
       this.keyPedestal = ped;
       this.lightProps.push({
@@ -1473,6 +1575,12 @@ export class EmbervaultEngine {
       const { x, z } = gridToWorld(gx, gz);
       this.gateRig = createLockedGate(horizontal, this.textures);
       this.gateRig.root.position.set(x, 0, z);
+      if (this.doorUnlocked) {
+        this.gateRig.lockGlow.visible = false;
+        this.gateOpenProgress = 1;
+        this.gateRig.leftPivot.rotation.y = -Math.PI * 0.62;
+        this.gateRig.rightPivot.rotation.y = Math.PI * 0.62;
+      }
       this.levelGroup.add(this.gateRig.root);
       this.lightProps.push({
         color: 0xffd052,
@@ -1552,8 +1660,10 @@ export class EmbervaultEngine {
       });
     }
 
-    // 8. Spawn Hero at Room 0
-    const spawnW = gridToWorld(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
+    // 8. Spawn Hero at Room 0 (or at left-behind Town Portal when returning from Town)
+    const spawnW = snap
+      ? { x: snap.returnX, z: snap.returnZ }
+      : gridToWorld(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
     this.heroX = spawnW.x;
     this.heroZ = spawnW.z;
     this.aiProgressAnchorX = this.heroX;
@@ -1563,21 +1673,50 @@ export class EmbervaultEngine {
     this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
     this.heroLight.position.set(this.heroX, 2.0, this.heroZ);
 
+    // If returning from Town, place the lingering Town Portal landmark at the exact return spot
+    if (snap) {
+      const dPortal = createTownPortal(this.textures.glowMap);
+      dPortal.root.position.set(snap.returnX, 0, snap.returnZ);
+      dPortal.root.rotation.y = Math.PI / 4;
+      this.levelGroup.add(dPortal.root);
+      this.townPortalRig = dPortal;
+      this.lightProps.push({
+        color: 0x35a8db,
+        baseIntensity: 21,
+        distance: 8.2,
+        decay: 2.05,
+        phase: 0.4,
+        x: snap.returnX,
+        y: 1.4,
+        z: snap.returnZ,
+        kind: 'portal',
+      });
+    }
+
     // Snap camera immediately to new floor spawn
     const camOffset = 14.5 * this.camZoom;
     this.camera.position.set(this.heroX + camOffset, camOffset * 1.16, this.heroZ + camOffset);
     _camTarget.set(this.heroX, 0.7, this.heroZ);
     this.camera.lookAt(_camTarget);
 
-    // 9. Spawn Enemies across non-start rooms
+    // 9. Spawn Enemies across non-start rooms (protect Town Portal safe zone when returning)
+    this.portalSafePos = snap ? { x: snap.returnX, z: snap.returnZ } : null;
     this.spawnEnemies();
-    this.markExplored(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
+    this.portalSafePos = null;
+    const spawnG = worldToGrid(this.heroX, this.heroZ);
+    this.markExplored(spawnG.gx, spawnG.gz);
 
-    if (!this.isSoftwareGl && depth === 1) {
+    if (!this.isSoftwareGl && depth === 1 && !snap) {
       this.renderer.compile(this.scene, this.camera);
     }
 
-    if (depth % 5 === 0) {
+    if (buffExpired) {
+      this.emitFloatingText(this.heroX, 2.25, this.heroZ, '天使祝福已消散', 'info');
+    }
+
+    if (snap) {
+      this.pushBanner(`返回第 ${depth} 層`, '怪物已復活 · 傳送門周圍安全');
+    } else if (depth % 5 === 0) {
       const bossKind = getBossForDepth(depth, biome.terrainTheme);
       const cfg = BOSS_CONFIGS[bossKind];
       const shopNote = this.dungeon.shopPos ? ' · Elixir Shop Open' : '';
@@ -1597,6 +1736,404 @@ export class EmbervaultEngine {
       this.pushBanner(`DEPTH ${depth}`, biome.name);
     }
     this.updateWallOcclusion();
+    this.emitHud();
+    this.emitMinimap();
+  }
+
+  private buildTown(): void {
+    this.clearLevel();
+    this.inTown = true;
+
+    // 4x total plaza area (2x width x 2x length: 23x23 walkable tiles vs previous 11x11)
+    const W = 27;
+    const H = 27;
+    const tiles: TileType[][] = Array.from({ length: H }, () => new Array<TileType>(W).fill(2));
+    const explored: boolean[][] = Array.from({ length: H }, () => new Array<boolean>(W).fill(true));
+
+    // Expansive village plaza (gx 2..24, gz 2..24), exact center at (13, 13)
+    for (let gz = 2; gz <= 24; gz++) {
+      for (let gx = 2; gx <= 24; gx++) {
+        tiles[gz][gx] = 1;
+      }
+    }
+
+    // Solid non-enterable footprints:
+    // - Left Grand Timber & Brick Tavern (gx 4..6, gz 9..12 -> 3x4 tiles, non-square)
+    // - Right Stone Watch-Turret Guildhouse (gx 9..12, gz 4..6 -> 4x3 tiles, non-square)
+    // - Central Stone Well (13, 13)
+    for (let gz = 9; gz <= 12; gz++) {
+      for (let gx = 4; gx <= 6; gx++) {
+        tiles[gz][gx] = 2;
+      }
+    }
+    for (let gz = 4; gz <= 6; gz++) {
+      for (let gx = 9; gx <= 12; gx++) {
+        tiles[gz][gx] = 2;
+      }
+    }
+    tiles[13][13] = 2; // Central stone well
+
+    const townBiome: BiomeConfig = {
+      id: 'catacombs',
+      name: '庇護小鎮',
+      terrainTheme: 'dungeon',
+      fogColor: 0x090c14,
+      floorBase: '#3c4048',
+      floorAccent: '#484d57',
+      floorMortar: '#1c1f26',
+      wallBase: '#423c36',
+      wallAccent: '#544d45',
+      bannerColor: '#2d5770',
+      runeColor: 0x35a8db,
+      runeCss: '#35a8db',
+      torchColor: 0xffb24c,
+      hemiSky: 0x6c88b8,
+      hemiGround: 0x201a14,
+    };
+
+    this.dungeon = {
+      width: W,
+      height: H,
+      tiles,
+      explored,
+      rooms: [{ id: 0, x: 2, z: 2, w: 23, h: 23, cx: 13, cz: 13, role: 'start' }],
+      spawn: { gx: 15, gz: 15 },
+      keyPos: { gx: -10, gz: -10 },
+      doorPos: { gx: -10, gz: -10, horizontal: true },
+      stairsPos: { gx: 19, gz: 11 }, // Town Portal on screen RIGHT (cyan blip on minimap)
+      shopPos: { gx: 8, gz: 17 }, // Potion Shop on screen LEFT
+      altarPos: { gx: 11, gz: 20 }, // Upgrade Altar on screen LEFT (same side as Potion Shop)
+      props: [],
+      biome: townBiome,
+    };
+
+    // Moody dusk-night town atmosphere: low ambient lighting so facility & lantern lights drive the mood
+    this.scene.background = new THREE.Color(0x090c14);
+    this.scene.fog = new THREE.Fog(0x090c14, 36, 72);
+    this.hemiLight.color.setHex(0x6c88b8);
+    this.hemiLight.groundColor.setHex(0x201a14);
+    this.hemiLight.intensity = 0.18;
+    this.rimLight.color.setHex(0x9eb8df);
+    this.rimLight.intensity = 0.14;
+    this.scene.environmentIntensity = 0.08;
+    this.heroLight.color.setHex(0xffbe66);
+
+    this.textures = createDungeonTextures(
+      townBiome,
+      this.renderer.capabilities.getMaxAnisotropy(),
+      777
+    );
+
+    // 1. Dark twilight forest meadow surrounding the 4x village plaza
+    const grassCanvas = document.createElement('canvas');
+    grassCanvas.width = 256;
+    grassCanvas.height = 256;
+    const gctx = grassCanvas.getContext('2d')!;
+    gctx.fillStyle = '#121e16';
+    gctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 650; i++) {
+      gctx.fillStyle = i % 3 === 0 ? '#18281d' : i % 3 === 1 ? '#0e1811' : '#1e3023';
+      gctx.fillRect(Math.random() * 256, Math.random() * 256, 3 + Math.random() * 4, 3 + Math.random() * 4);
+    }
+    const grassTex = new THREE.CanvasTexture(grassCanvas);
+    grassTex.colorSpace = THREE.SRGBColorSpace;
+    grassTex.wrapS = THREE.RepeatWrapping;
+    grassTex.wrapT = THREE.RepeatWrapping;
+    grassTex.repeat.set(26, 26);
+    this.extraTextures.push(grassTex);
+
+    const meadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(130, 130),
+      new THREE.MeshStandardMaterial({ map: grassTex, roughness: 0.96, metalness: 0.02 })
+    );
+    meadow.rotation.x = -Math.PI / 2;
+    meadow.position.set(13 * TILE_SIZE, -0.06, 13 * TILE_SIZE);
+    meadow.receiveShadow = true;
+    this.levelGroup.add(meadow);
+
+    // 2. Dark Weathered Slate-Gray Cobblestone Village Plaza (gx 2..24, gz 2..24)
+    const cobbleCanvas = document.createElement('canvas');
+    cobbleCanvas.width = 256;
+    cobbleCanvas.height = 256;
+    const cctx = cobbleCanvas.getContext('2d')!;
+    cctx.fillStyle = '#1a1d24';
+    cctx.fillRect(0, 0, 256, 256);
+    const rows = 6;
+    const cols = 6;
+    const cw = 256 / cols;
+    const ch = 256 / rows;
+    for (let r = 0; r < rows; r++) {
+      const offsetX = (r % 2) * (cw * 0.5);
+      for (let c = -1; c <= cols; c++) {
+        const shade = 54 + (((r * 19 + c * 37) & 15) * 1.15);
+        const s = Math.round(shade);
+        cctx.fillStyle = `rgb(${s}, ${s + 2}, ${s + 6})`;
+        cctx.fillRect(c * cw + offsetX + 3, r * ch + 3, cw - 6, ch - 6);
+        cctx.fillStyle = 'rgba(205,215,232,0.04)';
+        cctx.fillRect(c * cw + offsetX + 4, r * ch + 4, cw - 10, 4);
+      }
+    }
+    const cobbleTex = new THREE.CanvasTexture(cobbleCanvas);
+    cobbleTex.colorSpace = THREE.SRGBColorSpace;
+    this.extraTextures.push(cobbleTex);
+
+    const plazaCoords: Array<[number, number]> = [];
+    for (let gz = 2; gz <= 24; gz++) {
+      for (let gx = 2; gx <= 24; gx++) {
+        plazaCoords.push([gx, gz]);
+      }
+    }
+    const plazaGeo = new THREE.BoxGeometry(TILE_SIZE, 0.24, TILE_SIZE);
+    const plazaMat = new THREE.MeshStandardMaterial({
+      map: cobbleTex,
+      roughness: 0.92,
+      metalness: 0.06,
+    });
+    const plazaMesh = new THREE.InstancedMesh(plazaGeo, plazaMat, plazaCoords.length);
+    plazaMesh.receiveShadow = true;
+    plazaMesh.frustumCulled = false;
+    plazaCoords.forEach(([gx, gz], i) => {
+      _pos.set(gx * TILE_SIZE, -0.12, gz * TILE_SIZE);
+      _quat.identity();
+      _scale.set(1, 1, 1);
+      _mat4.compose(_pos, _quat, _scale);
+      plazaMesh.setMatrixAt(i, _mat4);
+      const tint = 0.86 + ((gx * 13 + gz * 29) % 11) * 0.012;
+      _color.setRGB(tint, tint, tint);
+      plazaMesh.setColorAt(i, _color);
+    });
+    plazaMesh.instanceMatrix.needsUpdate = true;
+    if (plazaMesh.instanceColor) plazaMesh.instanceColor.needsUpdate = true;
+    this.levelGroup.add(plazaMesh);
+
+    // Low weathered wooden fence edging the 4x plaza perimeter
+    const fenceMat = new THREE.MeshStandardMaterial({ color: 0x453120, roughness: 0.92 });
+    const postGeo = new THREE.BoxGeometry(0.16, 0.72, 0.16);
+    const railGeo = new THREE.BoxGeometry(TILE_SIZE, 0.1, 0.08);
+    for (let i = 2; i <= 24; i++) {
+      const edges: Array<[number, number, number]> = [
+        [i * TILE_SIZE, 1.5 * TILE_SIZE, 0],
+        [i * TILE_SIZE, 24.5 * TILE_SIZE, 0],
+        [1.5 * TILE_SIZE, i * TILE_SIZE, Math.PI / 2],
+        [24.5 * TILE_SIZE, i * TILE_SIZE, Math.PI / 2],
+      ];
+      for (const [fx, fz, rot] of edges) {
+        const post = new THREE.Mesh(postGeo, fenceMat);
+        post.position.set(fx, 0.36, fz);
+        post.castShadow = true;
+        const rail = new THREE.Mesh(railGeo, fenceMat);
+        rail.position.set(fx, 0.48, fz);
+        rail.rotation.y = rot;
+        this.levelGroup.add(post, rail);
+      }
+    }
+
+    // 3. Two Distinct ~2x Larger Non-Square Exterior Houses
+    // Left: Grand Timber & Red-Brown Brick Tavern (no white walls) at gx 4..6, gz 9..12
+    const tavern = createTownHouse('tavern', this.textures.glowMap);
+    tavern.position.set(4.6 * TILE_SIZE, 0, 10.5 * TILE_SIZE);
+    tavern.rotation.y = Math.PI / 2; // Long timber porch, barrels & tavern sign face +X into the plaza
+    this.levelGroup.add(tavern);
+    this.lightProps.push({
+      color: 0xffaa44,
+      baseIntensity: 52,
+      distance: 13.5,
+      decay: 2.0,
+      phase: 0.5,
+      x: 6.45 * TILE_SIZE,
+      y: 2.35,
+      z: 10.5 * TILE_SIZE,
+      kind: 'lamp',
+    });
+
+    // Right: Asymmetrical Stone Watch-Turret Guildhouse at gx 9..12, gz 4..6
+    const cottage = createTownHouse('cottage', this.textures.glowMap);
+    cottage.position.set(10.5 * TILE_SIZE, 0, 4.65 * TILE_SIZE);
+    cottage.rotation.y = 0; // Stone portico & turret face +Z into the plaza
+    this.levelGroup.add(cottage);
+    this.lightProps.push({
+      color: 0xffb454,
+      baseIntensity: 48,
+      distance: 13.0,
+      decay: 2.0,
+      phase: 1.4,
+      x: 10.5 * TILE_SIZE,
+      y: 2.35,
+      z: 6.45 * TILE_SIZE,
+      kind: 'lamp',
+    });
+
+    // 4. Central Stone Water Well at exact plaza center (13, 13)
+    const well = createCentralWell();
+    well.position.set(13 * TILE_SIZE, 0, 13 * TILE_SIZE);
+    well.rotation.y = Math.PI / 4;
+    this.levelGroup.add(well);
+
+    // 5. Beautiful White-Robed Female Angel at (10, 10) framed between the two buildings & well
+    const angel = createAngelModel(this.sharedShadowMap, this.textures.glowMap);
+    const angelW = gridToWorld(10, 10);
+    angel.root.position.set(angelW.x, 0, angelW.z);
+    angel.root.rotation.y = Math.PI / 4;
+    this.levelGroup.add(angel.root);
+    this.angelRig = angel;
+    this.angelPos = { x: angelW.x, z: angelW.z };
+    this.lightProps.push({
+      color: 0xffe296,
+      baseIntensity: 42,
+      distance: 11.5,
+      decay: 2.0,
+      phase: 0.2,
+      x: angelW.x,
+      y: 2.2,
+      z: angelW.z,
+      kind: 'angel',
+    });
+
+    // 6. Outdoor Potion Shop on screen LEFT at (8, 17)
+    {
+      const sw = gridToWorld(8, 17);
+      const shop = createPotionShop(this.textures.glowMap);
+      shop.root.position.set(sw.x, 0, sw.z);
+      this.levelGroup.add(shop.root);
+      this.shopRig = shop;
+      this.lightProps.push({
+        color: 0xff5a7e,
+        baseIntensity: 52,
+        distance: 11.5,
+        decay: 2.0,
+        phase: 1.9,
+        x: sw.x,
+        y: 1.75,
+        z: sw.z,
+        crystal: shop.crystal,
+        decal: shop.ring,
+        halo: shop.halo,
+        kind: 'shop',
+      });
+    }
+
+    // 7. Outdoor Upgrade Altar on screen LEFT (same side as Potion Shop) at (11, 20)
+    {
+      const aw = gridToWorld(11, 20);
+      const altar = createUpgradeAltar(this.textures.glowMap);
+      altar.root.position.set(aw.x, 0, aw.z);
+      this.levelGroup.add(altar.root);
+      this.altarRig = altar;
+      this.lightProps.push({
+        color: 0xffd25c,
+        baseIntensity: 54,
+        distance: 11.8,
+        decay: 2.0,
+        phase: 0.7,
+        x: aw.x,
+        y: 1.8,
+        z: aw.z,
+        crystal: altar.crystal,
+        decal: altar.ring,
+        halo: altar.halo,
+        kind: 'altar',
+      });
+    }
+
+    // 8. Return-to-Dungeon Town Portal on opposite side (screen RIGHT) at (19, 11) with halved brightness
+    {
+      const pw = gridToWorld(19, 11);
+      const portal = createTownPortal(this.textures.glowMap);
+      portal.root.position.set(pw.x, 0, pw.z);
+      portal.root.rotation.y = Math.PI / 4;
+      this.levelGroup.add(portal.root);
+      this.townPortalRig = portal;
+      this.townPortalPos = { x: pw.x, z: pw.z };
+      this.lightProps.push({
+        color: 0x35a8db,
+        baseIntensity: 24,
+        distance: 9.0,
+        decay: 2.0,
+        phase: 2.5,
+        x: pw.x,
+        y: 1.5,
+        z: pw.z,
+        kind: 'portal',
+      });
+    }
+
+    // 9. Atmospheric Village Lamp Posts & Perimeter Forest Pine Trees across the 4x square
+    const lampCoords: Array<[number, number]> = [
+      [3.5, 3.5],
+      [22.5, 3.5],
+      [3.5, 22.5],
+      [22.5, 22.5],
+      [14.5, 11.5],
+      [11.5, 14.5],
+      [7.2, 13.5],
+      [18.2, 16.2],
+    ];
+    for (const [lx, lz] of lampCoords) {
+      const lamp = createVillageLampPost(this.textures.glowMap);
+      lamp.position.set(lx * TILE_SIZE, 0, lz * TILE_SIZE);
+      this.levelGroup.add(lamp);
+      this.lightProps.push({
+        color: 0xffb24c,
+        baseIntensity: 42,
+        distance: 11.2,
+        decay: 2.0,
+        phase: lx + lz,
+        x: lx * TILE_SIZE,
+        y: 2.35,
+        z: lz * TILE_SIZE,
+        kind: 'lamp',
+      });
+    }
+
+    const treeCoords: Array<[number, number, number]> = [
+      [0.5, 1.2, 1.2],
+      [0.9, 5.0, 1.0],
+      [0.6, 9.2, 1.25],
+      [1.0, 13.5, 1.05],
+      [0.7, 17.8, 1.18],
+      [0.8, 22.2, 1.1],
+      [2.8, 0.6, 1.15],
+      [6.6, 0.8, 0.96],
+      [10.8, 0.6, 1.22],
+      [15.2, 0.8, 1.05],
+      [19.6, 0.6, 1.18],
+      [23.8, 0.9, 1.08],
+      [25.6, 3.8, 1.2],
+      [25.8, 8.0, 1.02],
+      [25.5, 12.6, 1.18],
+      [25.7, 17.2, 1.06],
+      [25.4, 21.8, 1.22],
+      [24.2, 25.6, 1.12],
+      [19.8, 25.8, 1.04],
+      [15.0, 25.5, 1.18],
+      [10.4, 25.7, 1.08],
+      [5.8, 25.5, 1.16],
+      [1.6, 25.4, 1.02],
+    ];
+    for (const [tx, tz, sc] of treeCoords) {
+      const tree = createVillageTree(sc);
+      tree.position.set(tx * TILE_SIZE, 0, tz * TILE_SIZE);
+      tree.rotation.y = (tx * 1.7 + tz * 2.3) % (Math.PI * 2);
+      this.levelGroup.add(tree);
+    }
+
+    // 10. Place Hero in front of Central Well facing the Angel & Buildings
+    const heroStart = gridToWorld(15, 15);
+    this.heroX = heroStart.x;
+    this.heroZ = heroStart.z;
+    this.heroVx = 0;
+    this.heroVz = 0;
+    this.heroFacing = -Math.PI * 0.75;
+    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
+    this.heroRig.body.rotation.y = this.heroFacing;
+    this.heroLight.position.set(this.heroX, 2.0, this.heroZ);
+
+    const camOffset = 14.5 * this.camZoom;
+    this.camera.position.set(this.heroX + camOffset, camOffset * 1.16, this.heroZ + camOffset);
+    _camTarget.set(this.heroX, 0.7, this.heroZ);
+    this.camera.lookAt(_camTarget);
+
+    this.pushBanner('庇護小鎮', '左側補給藥水與祭壇強化、向天使祈福，或走入右側傳送門返回地下城');
     this.emitHud();
     this.emitMinimap();
   }
@@ -1645,14 +2182,69 @@ export class EmbervaultEngine {
         : theme === 'flesh'
         ? 'flesh_tendril'
         : 'skeleton';
+    const themeSwarm: EnemyKind =
+      theme === 'alien'
+        ? 'alien_nanobot'
+        : theme === 'cavern'
+        ? 'cavern_mite'
+        : theme === 'flesh'
+        ? 'flesh_leech'
+        : 'dungeon_rat';
     const themePool: EnemyKind[] =
       theme === 'alien'
-        ? ['alien_trooper', 'alien_gunner', 'alien_probe', 'alien_psion', 'alien_saucer']
+        ? [
+            'alien_trooper',
+            'alien_gunner',
+            'alien_probe',
+            'alien_psion',
+            'alien_saucer',
+            'alien_nanobot',
+          ]
         : theme === 'cavern'
-        ? ['cavern_beetle', 'cavern_spitter', 'cavern_golem', 'cavern_shaman', 'cavern_bat']
+        ? [
+            'cavern_beetle',
+            'cavern_spitter',
+            'cavern_golem',
+            'cavern_shaman',
+            'cavern_bat',
+            'cavern_mite',
+          ]
         : theme === 'flesh'
-        ? ['flesh_tendril', 'flesh_spiner', 'flesh_cell', 'flesh_eye', 'flesh_parasite']
-        : ['skeleton', 'archer', 'slime', 'mage', 'wisp'];
+        ? [
+            'flesh_tendril',
+            'flesh_spiner',
+            'flesh_cell',
+            'flesh_eye',
+            'flesh_parasite',
+            'flesh_leech',
+          ]
+        : ['skeleton', 'archer', 'slime', 'mage', 'wisp', 'dungeon_rat'];
+
+    // Fast small swarm pack size: always >= 2, scaling up with depth to max 4
+    const rollSwarmPackSize = (): number => {
+      const minPack = this.depth >= 15 ? 4 : this.depth >= 8 ? 3 : 2;
+      const maxPack = this.depth >= 11 ? 4 : this.depth >= 4 ? 3 : 2;
+      return minPack + Math.floor(Math.random() * (maxPack - minPack + 1));
+    };
+
+    const spawnSwarmPack = (gx: number, gz: number) => {
+      const packSize = rollSwarmPackSize();
+      for (let p = 0; p < packSize; p++) {
+        const angle = (p / packSize) * Math.PI * 2 + Math.random() * 0.55;
+        const radius = packSize === 1 ? 0 : 0.42 + Math.random() * 0.28;
+        this.addEnemy(
+          themeSwarm,
+          gx,
+          gz,
+          biome,
+          false,
+          Math.cos(angle) * radius,
+          Math.sin(angle) * radius
+        );
+      }
+    };
+
+    let swarmPacksSpawned = 0;
 
     for (const room of this.dungeon.rooms) {
       if (room.role === 'start') continue;
@@ -1749,11 +2341,24 @@ export class EmbervaultEngine {
         const gz = room.z + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
         if (this.dungeon.tiles[gz][gx] !== 1) continue;
         const kind = themePool[(room.id * 2 + i) % themePool.length];
+        if (kind === themeSwarm) {
+          spawnSwarmPack(gx, gz);
+          swarmPacksSpawned += 1;
+          continue;
+        }
         const forceFloorElite = room.id === lastCombatRoomId && elitesSpawned === 0;
         const isElite =
           forceFloorElite || (elitesSpawned < maxElites && Math.random() < 0.14);
         if (isElite) elitesSpawned += 1;
         this.addEnemy(kind, gx, gz, biome, isElite);
+      }
+    }
+
+    // Guarantee at least one fast swarm pack appears on every floor
+    if (swarmPacksSpawned === 0 && combatRooms.length > 0) {
+      const targetRoom = combatRooms[Math.floor(combatRooms.length / 2)];
+      if (this.dungeon.tiles[targetRoom.cz]?.[targetRoom.cx] === 1) {
+        spawnSwarmPack(targetRoom.cx, targetRoom.cz);
       }
     }
   }
@@ -1772,10 +2377,45 @@ export class EmbervaultEngine {
     gx: number,
     gz: number,
     biome: DungeonData['biome'],
-    isElite = false
+    isElite = false,
+    offsetX = 0,
+    offsetZ = 0
   ): void {
     if (this.dungeon.tiles[gz]?.[gx] !== 1) return;
-    const { x, z } = gridToWorld(gx, gz);
+    const baseW = gridToWorld(gx, gz);
+    let x = baseW.x + offsetX;
+    let z = baseW.z + offsetZ;
+    if (this.portalSafePos) {
+      const distToPortal = Math.hypot(x - this.portalSafePos.x, z - this.portalSafePos.z);
+      if (distToPortal < 7.2) {
+        if (!isFloorBoss(kind)) {
+          return;
+        }
+        // Relocate Floor Boss to the farthest walkable tile from the Town Portal so Boss floor remains completable
+        let bestDist = distToPortal;
+        let bestX = x;
+        let bestZ = z;
+        const keyRoom = this.dungeon.rooms.find((r) => r.role === 'key');
+        const searchRooms = keyRoom ? [keyRoom, ...this.dungeon.rooms] : this.dungeon.rooms;
+        for (const r of searchRooms) {
+          for (let rz = r.z + 1; rz < r.z + r.h - 1; rz++) {
+            for (let rx = r.x + 1; rx < r.x + r.w - 1; rx++) {
+              if (this.dungeon.tiles[rz]?.[rx] !== 1) continue;
+              const cand = gridToWorld(rx, rz);
+              const d = Math.hypot(cand.x - this.portalSafePos.x, cand.z - this.portalSafePos.z);
+              if (d > bestDist) {
+                bestDist = d;
+                bestX = cand.x;
+                bestZ = cand.z;
+              }
+            }
+          }
+          if (bestDist >= 7.2) break;
+        }
+        x = bestX;
+        z = bestZ;
+      }
+    }
     const rig = createEnemyModel(kind, biome, this.sharedShadowMap);
     rig.root.position.set(x, 0, z);
     this.dynamicGroup.add(rig.root);
@@ -1826,7 +2466,7 @@ export class EmbervaultEngine {
       return;
     }
 
-    const eliteEligible = isElite && !isGuardianEnemy(kind);
+    const eliteEligible = isElite && !isGuardianEnemy(kind) && !isSwarmEnemy(kind);
     const isSpecialElite = eliteEligible && Math.random() < 0.25;
     let customName: string | undefined;
     if (eliteEligible) {
@@ -1842,6 +2482,8 @@ export class EmbervaultEngine {
     const depthScale = 1 + (this.depth - 1) * 0.22;
     const baseHp = isGuardianEnemy(kind)
       ? 62
+      : isSwarmEnemy(kind)
+      ? 8
       : kind === 'cavern_golem' || kind === 'flesh_tendril' || kind === 'alien_trooper'
       ? 30
       : kind === 'skeleton' || kind === 'cavern_beetle'
@@ -1858,24 +2500,25 @@ export class EmbervaultEngine {
       : 18; // ranged mobs have slightly less HP than melee mobs
     const eliteHpMult = eliteEligible ? (isSpecialElite ? 4 * 1.25 : 4) : 1;
     const maxHp = Math.round(baseHp * depthScale * eliteHpMult);
-    const speed =
-      kind === 'wisp' ||
-      kind === 'cavern_bat' ||
-      kind === 'flesh_parasite' ||
-      kind === 'alien_saucer'
-        ? 3.55
-        : kind === 'skeleton' ||
-          kind === 'cavern_beetle' ||
-          kind === 'flesh_tendril' ||
-          kind === 'alien_trooper'
-        ? 2.8
-        : isArcherLikeRanged(kind)
-        ? 2.6
-        : isMageLikeRanged(kind)
-        ? 2.35
-        : isGuardianEnemy(kind) || kind === 'cavern_golem' || kind === 'alien_probe'
-        ? 2.3
-        : 2.1;
+    const speed = isSwarmEnemy(kind)
+      ? 8.4 // 3x normal melee speed (2.8 * 3)
+      : kind === 'wisp' ||
+        kind === 'cavern_bat' ||
+        kind === 'flesh_parasite' ||
+        kind === 'alien_saucer'
+      ? 3.55
+      : kind === 'skeleton' ||
+        kind === 'cavern_beetle' ||
+        kind === 'flesh_tendril' ||
+        kind === 'alien_trooper'
+      ? 2.8
+      : isArcherLikeRanged(kind)
+      ? 2.6
+      : isMageLikeRanged(kind)
+      ? 2.35
+      : isGuardianEnemy(kind) || kind === 'cavern_golem' || kind === 'alien_probe'
+      ? 2.3
+      : 2.1;
 
     this.enemies.push({
       id: this.nextId++,
@@ -1888,7 +2531,11 @@ export class EmbervaultEngine {
       hp: maxHp,
       maxHp,
       speed,
-      attackCooldown: isRangedEnemy(kind) ? 0.8 + Math.random() * 0.5 : 0.4 + Math.random() * 0.5,
+      attackCooldown: isRangedEnemy(kind)
+        ? 0.8 + Math.random() * 0.5
+        : isSwarmEnemy(kind)
+        ? 0.15 + Math.random() * 0.25
+        : 0.4 + Math.random() * 0.5,
       windupTimer: 0,
       stunTimer: 0,
       hitFlash: 0,
@@ -1955,6 +2602,15 @@ export class EmbervaultEngine {
       return;
     }
 
+    // Hotkey B: Teleport back to Sanctuary Town
+    if (code === 'KeyB' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      if (!this.inTown) {
+        this.returnToTown();
+      }
+      return;
+    }
+
     if (
       [
         'KeyW',
@@ -1974,9 +2630,15 @@ export class EmbervaultEngine {
     ) {
       e.preventDefault();
       this.keysPressed.add(code);
-      this.activateManualMode();
+      if (this.inTown) {
+        if (!this.audio.isEnabled()) {
+          this.audio.unlockAndEnable();
+        }
+      } else {
+        this.activateManualMode();
+      }
 
-      if (code === 'Space') {
+      if (code === 'Space' && !this.inTown) {
         this.performAttack();
       } else if (code === 'ShiftLeft' || code === 'ShiftRight') {
         this.performDash();
@@ -1991,7 +2653,7 @@ export class EmbervaultEngine {
   };
 
   private handlePointerDown = (e: PointerEvent): void => {
-    if (this.isDead) return;
+    if (this.isDead || this.inTown) return;
     this.activateManualMode();
     if (e.button === 2) {
       this.performPommelStrike();
@@ -2035,16 +2697,16 @@ export class EmbervaultEngine {
   }
 
   public triggerNewDungeon(): void {
-    if (this.isDead || this.transitionState !== 'none') return;
+    if (this.isDead || this.inTown || this.transitionState !== 'none') return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
-      this.buildLevel(this.depth + 1);
+      this.buildLevel(this.depth + 1, { tickBuffFloor: true });
     });
   }
 
   private triggerSkipFloorCheat(): void {
-    if (this.isDead || this.transitionState !== 'none') return;
+    if (this.isDead || this.inTown || this.transitionState !== 'none') return;
     if (this.audio.isEnabled()) {
       this.audio.playDescend();
     }
@@ -2053,9 +2715,161 @@ export class EmbervaultEngine {
     this.beginTransition(() => {
       this.gold += bonusGold;
       this.totalGoldEarned += bonusGold;
-      this.buildLevel(nextDepth);
+      this.buildLevel(nextDepth, { tickBuffFloor: true });
       this.emitFloatingText(this.heroX, 2.0, this.heroZ, `+${bonusGold} G`, 'gold');
     });
+  }
+
+  public getTownReturnCost(): number {
+    return this.depth * 10;
+  }
+
+  public returnToTown(): void {
+    if (this.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
+
+    const cost = this.getTownReturnCost();
+    const spent = Math.min(this.gold, cost);
+    this.gold = Math.max(0, this.gold - cost);
+
+    // Record consumed rune wells & broken crates so the floor stays consistent on return
+    const usedRuneKeys = new Set<string>();
+    for (const lp of this.lightProps) {
+      if (lp.kind === 'rune' && lp.used) {
+        const g = worldToGrid(lp.x, lp.z);
+        usedRuneKeys.add(`${g.gx},${g.gz}`);
+      }
+    }
+    const brokenBreakableKeys = new Set<string>();
+    for (const b of this.breakables) {
+      if (b.broken) {
+        const g = worldToGrid(b.x, b.z);
+        brokenBreakableKeys.add(`${g.gx},${g.gz}`);
+      }
+    }
+
+    this.savedDungeon = {
+      depth: this.depth,
+      dungeon: this.dungeon,
+      hasKey: this.hasKey,
+      doorUnlocked: this.doorUnlocked,
+      chronosUsedThisFloor: this.chronosUsedThisFloor,
+      floorKills: this.floorKills,
+      returnX: this.heroX,
+      returnZ: this.heroZ,
+      usedRuneKeys,
+      brokenBreakableKeys,
+    };
+
+    // Spawn instantaneous glowing portal at current spot before fading into Sanctuary Town
+    if (this.textures) {
+      const departPortal = createTownPortal(this.textures.glowMap);
+      departPortal.root.position.set(this.heroX, 0, this.heroZ);
+      departPortal.root.rotation.y = Math.PI / 4;
+      this.dynamicGroup.add(departPortal.root);
+    }
+    for (let i = 0; i < 20; i++) {
+      const a = (i / 20) * Math.PI * 2;
+      this.spawnParticle(
+        this.heroX + Math.cos(a) * 0.35,
+        0.7,
+        this.heroZ + Math.sin(a) * 0.35,
+        Math.cos(a) * 2.4,
+        2.2 + Math.random() * 1.4,
+        Math.sin(a) * 2.4,
+        i % 2 === 0 ? 0x56e4ff : 0xd9fbff,
+        1.1,
+        0.65,
+        -0.4
+      );
+    }
+
+    this.audio.playPortal();
+    this.emitFloatingText(
+      this.heroX,
+      2.1,
+      this.heroZ,
+      spent > 0 ? `回城鎮 -${spent}G` : '回城鎮',
+      'info'
+    );
+    this.keysPressed.clear();
+    this.emitHud();
+
+    this.beginTransition(() => {
+      this.buildTown();
+    });
+  }
+
+  public returnToDungeon(): void {
+    if (this.isDead || !this.inTown || !this.savedDungeon || this.transitionState !== 'none') {
+      return;
+    }
+    if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
+    this.audio.playPortal();
+    this.keysPressed.clear();
+
+    for (let i = 0; i < 20; i++) {
+      const a = (i / 20) * Math.PI * 2;
+      this.spawnParticle(
+        this.heroX + Math.cos(a) * 0.35,
+        0.7,
+        this.heroZ + Math.sin(a) * 0.35,
+        Math.cos(a) * 2.2,
+        2.2 + Math.random() * 1.2,
+        Math.sin(a) * 2.2,
+        i % 2 === 0 ? 0x56e4ff : 0xffffff,
+        1.05,
+        0.6,
+        -0.4
+      );
+    }
+
+    const snap = this.savedDungeon;
+    this.savedDungeon = null;
+    this.beginTransition(() => {
+      this.buildLevel(snap.depth, { savedSnapshot: snap });
+    });
+  }
+
+  public requestAngelBlessing(): boolean {
+    if (this.isDead || !this.inTown || !this.isHeroNearAngel() || this.angelBuff) {
+      return false;
+    }
+    if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
+
+    const buff = rollAngelBlessing(this.depth);
+    this.angelBuff = buff;
+    this.recomputeRelicStats(true);
+    this.audio.playAngelBlessing();
+
+    const tone: FloatingLabelData['tone'] =
+      buff.rarity === 'orange'
+        ? 'relicOrange'
+        : buff.rarity === 'yellow'
+        ? 'relicYellow'
+        : 'relicBlue';
+    this.emitFloatingText(this.heroX, 2.25, this.heroZ, `獲得祝福：${buff.name}`, tone);
+
+    const ax = this.angelPos?.x ?? this.heroX;
+    const az = this.angelPos?.z ?? this.heroZ;
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      this.spawnParticle(
+        ax + Math.cos(a) * 0.5,
+        1.1,
+        az + Math.sin(a) * 0.5,
+        Math.cos(a) * 2.1,
+        2.0 + Math.random() * 1.8,
+        Math.sin(a) * 2.1,
+        i % 2 === 0 ? 0xfff0a8 : 0xffffff,
+        1.15,
+        0.85,
+        -0.5
+      );
+    }
+
+    this.emitHud();
+    return true;
   }
 
   public restartRun(): void {
@@ -2064,6 +2878,10 @@ export class EmbervaultEngine {
     this.audio.playDescend();
     this.beginTransition(() => {
       this.isDead = false;
+      this.inTown = false;
+      this.savedDungeon = null;
+      this.angelBuff = null;
+      this.portalSafePos = null;
       this.maxHp = 60;
       this.hp = 60;
       this.hpUpgrades = 0;
@@ -2119,7 +2937,7 @@ export class EmbervaultEngine {
 
   private recomputeRelicStats(adjustHp = true): void {
     const prevEffMax = this.maxHp + this.relicStats.maxHp;
-    this.relicStats = computeRelicSummary(this.equippedRelics);
+    this.relicStats = computeRelicSummary(this.equippedRelics, this.angelBuff?.stats);
     const nextEffMax = this.maxHp + this.relicStats.maxHp;
 
     if (adjustHp && !this.isDead) {
@@ -2257,6 +3075,16 @@ export class EmbervaultEngine {
     if (!this.dungeon?.shopPos) return false;
     const sw = gridToWorld(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
     return Math.hypot(this.heroX - sw.x, this.heroZ - sw.z) < 2.55;
+  }
+
+  private isHeroNearPortal(): boolean {
+    if (!this.inTown || !this.townPortalPos) return false;
+    return Math.hypot(this.heroX - this.townPortalPos.x, this.heroZ - this.townPortalPos.z) < 2.25;
+  }
+
+  private isHeroNearAngel(): boolean {
+    if (!this.inTown || !this.angelPos) return false;
+    return Math.hypot(this.heroX - this.angelPos.x, this.heroZ - this.angelPos.z) < 2.75;
   }
 
   public purchaseUpgrade(kind: 'hp' | 'atk' | 'armor' | 'crit'): boolean {
@@ -3045,8 +3873,16 @@ export class EmbervaultEngine {
           ? 2.02
           : isGuardianEnemy(enemy.kind)
           ? 2.05
+          : isSwarmEnemy(enemy.kind)
+          ? 0.88
           : 1.72;
-        const starScale = enemy.isBoss ? 1.5 : enemy.isElite ? 1.12 : 0.94;
+        const starScale = enemy.isBoss
+          ? 1.5
+          : enemy.isElite
+          ? 1.12
+          : isSwarmEnemy(enemy.kind)
+          ? 0.76
+          : 0.94;
         stars.scale.setScalar(starScale);
         enemy.rig.root.add(stars);
         enemy.rig.stunStars = stars;
@@ -3251,12 +4087,14 @@ export class EmbervaultEngine {
         enemy.kind === 'cavern_beetle' ||
         enemy.kind === 'cavern_golem' ||
         enemy.kind === 'cavern_spitter' ||
-        enemy.kind === 'cavern_warden';
+        enemy.kind === 'cavern_warden' ||
+        enemy.kind === 'cavern_mite';
       const isAlienMetal =
         enemy.kind === 'alien_trooper' ||
         enemy.kind === 'alien_gunner' ||
-        enemy.kind === 'alien_mech';
-      const debrisCount = isGuardianEnemy(enemy.kind) ? 9 : 5;
+        enemy.kind === 'alien_mech' ||
+        enemy.kind === 'alien_nanobot';
+      const debrisCount = isSwarmEnemy(enemy.kind) ? 3 : isGuardianEnemy(enemy.kind) ? 9 : 5;
       const debrisGeo = isCavernStone
         ? new THREE.OctahedronGeometry(0.14, 0)
         : new THREE.BoxGeometry(0.28, 0.07, 0.08);
@@ -3403,13 +4241,15 @@ export class EmbervaultEngine {
       this.emitFloatingText(enemy.x, 1.9, enemy.z, msg, 'info');
     }
 
+    const isSwarm = isSwarmEnemy(enemy.kind);
     const specialDropMult = enemy.isSpecialElite ? 1.2 : 1;
     const extraCoins =
       (this.hasSet4pc('syndicate') ? 1 : 0) +
       (this.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0) +
       (enemy.isElite && this.hasUnique('starforged_treasure_sense') && Math.random() < 0.25 ? 2 : 0);
     const rawCoinDrops =
-      ((isGuardianEnemy(enemy.kind) ? 3 : enemy.isElite ? 3 : 1) + extraCoins) * specialDropMult;
+      ((isGuardianEnemy(enemy.kind) ? 3 : enemy.isElite ? 3 : isSwarm ? 0.65 : 1) + extraCoins) *
+      specialDropMult;
     const coinDrops =
       Math.floor(rawCoinDrops) + (Math.random() < rawCoinDrops - Math.floor(rawCoinDrops) ? 1 : 0);
     for (let i = 0; i < coinDrops; i++) {
@@ -3420,17 +4260,23 @@ export class EmbervaultEngine {
       );
     }
     const dropMult = 1 + this.relicStats.dropRatePct / 100;
-    const basePotionChance = isGuardianEnemy(enemy.kind) ? 0.5 : enemy.isElite ? 0.36 : 0.12;
+    const basePotionChance = isGuardianEnemy(enemy.kind)
+      ? 0.5
+      : enemy.isElite
+      ? 0.36
+      : isSwarm
+      ? 0.06
+      : 0.12;
     if (Math.random() < Math.min(0.95, basePotionChance * dropMult * specialDropMult)) {
       this.spawnLoot(enemy.x, enemy.z, 'potion');
     }
 
-    // Relic drop rolls (Elites guaranteed >= 1, Special Named Elites scale drop rate x1.2)
+    // Relic drop rolls (Elites guaranteed >= 1, Special Named Elites scale drop rate x1.2, Swarms x0.5 per critter)
     this.spawnRelicDrops(
       enemy.x,
       enemy.z,
       enemy.isElite ? 'elite' : 'mob',
-      specialDropMult
+      specialDropMult * (isSwarm && !enemy.isElite ? 0.5 : 1)
     );
 
     this.emitHud();
@@ -3565,6 +4411,8 @@ export class EmbervaultEngine {
         return '地城史萊姆';
       case 'wisp':
         return '餘燼幽火';
+      case 'dungeon_rat':
+        return '地穴魔鼠';
       case 'archer':
         return '暗影弓箭手';
       case 'mage':
@@ -3577,6 +4425,8 @@ export class EmbervaultEngine {
         return '岩晶魔像';
       case 'cavern_bat':
         return '洞穴蝠魔';
+      case 'cavern_mite':
+        return '晶牙幼蛛';
       case 'cavern_spitter':
         return '晶刺蜥蜴';
       case 'cavern_shaman':
@@ -3589,6 +4439,8 @@ export class EmbervaultEngine {
         return '噬肉觸手怪';
       case 'flesh_parasite':
         return '深紫寄生蟲';
+      case 'flesh_leech':
+        return '噬血幼蛭';
       case 'flesh_spiner':
         return '骨刺射手';
       case 'flesh_eye':
@@ -3601,6 +4453,8 @@ export class EmbervaultEngine {
         return '警戒偵查球';
       case 'alien_saucer':
         return '幽浮偵察碟';
+      case 'alien_nanobot':
+        return '奈米突襲蟲';
       case 'alien_gunner':
         return '外星電漿射手';
       case 'alien_psion':
@@ -3657,12 +4511,13 @@ export class EmbervaultEngine {
   ): void {
     if (this.isDead || this.heroInvuln > 0 || this.transitionState !== 'none') return;
 
+    const isSwarmHit = Boolean(attacker && isSwarmEnemy(attacker.kind));
     const effMaxHp = this.getEffectiveMaxHp();
 
     // Relic Block Chance: completely negate incoming damage
     if (this.relicStats.blockPct > 0 && Math.random() * 100 < this.relicStats.blockPct) {
       const hasPan = this.hasUnique('frying_pan_bonk');
-      this.heroInvuln = 0.38;
+      this.heroInvuln = isSwarmHit ? 0.14 : 0.38;
       this.audio.playBlock(hasPan);
       this.emitFloatingText(
         this.heroX,
@@ -3726,11 +4581,21 @@ export class EmbervaultEngine {
     const dist = Math.hypot(dx, dz) || 1;
 
     this.hp = Math.max(0, this.hp - actualDamage);
-    this.heroInvuln = 0.72;
-    this.heroHitFlash = 0.18;
+    // Swarm critters use a brief invuln window so their 2/sec rapid chip bites (-1, -1, -2, -2) land cleanly
+    this.heroInvuln = isSwarmHit ? 0.14 : 0.72;
+    this.heroHitFlash = isSwarmHit ? 0.1 : 0.18;
     this.audio.playPlayerHurt();
-    this.addScreenShake(0.24, 0.18);
-    this.emitFloatingText(this.heroX, 1.8, this.heroZ, `-${actualDamage}`, 'playerHit');
+    this.addScreenShake(isSwarmHit ? 0.08 : 0.24, isSwarmHit ? 0.08 : 0.18);
+    const labelJitterX = isSwarmHit ? (Math.random() - 0.5) * 0.55 : 0;
+    const labelJitterZ = isSwarmHit ? (Math.random() - 0.5) * 0.55 : 0;
+    const labelY = isSwarmHit ? 1.6 + Math.random() * 0.35 : 1.8;
+    this.emitFloatingText(
+      this.heroX + labelJitterX,
+      labelY,
+      this.heroZ + labelJitterZ,
+      `-${actualDamage}`,
+      'playerHit'
+    );
 
     // Relic Thorns: reflect fixed damage to melee attacker
     if (attacker && !attacker.dead && this.relicStats.thorns > 0) {
@@ -3810,8 +4675,9 @@ export class EmbervaultEngine {
       }
     }
 
-    this.heroVx += (dx / dist) * 5.2;
-    this.heroVz += (dz / dist) * 5.2;
+    const kbForce = isSwarmHit ? 1.15 : 5.2;
+    this.heroVx += (dx / dist) * kbForce;
+    this.heroVz += (dz / dist) * kbForce;
 
     // Auto-heal trigger in autonomous mode if low HP
     const healThreshold = Math.max(20, Math.floor(effMaxHp * 0.45));
@@ -3927,7 +4793,7 @@ export class EmbervaultEngine {
       hasKey: this.hasKey,
       doorUnlocked: this.doorUnlocked,
       depth: this.depth,
-      biomeName: this.dungeon.biome.name,
+      biomeName: this.inTown ? '庇護小鎮' : this.dungeon.biome.name,
       gold: this.gold,
       kills: this.kills,
       atkBonusPct: this.atkUpgrades * 10,
@@ -3943,6 +4809,11 @@ export class EmbervaultEngine {
       hasAltarOnFloor: Boolean(this.dungeon.altarPos),
       nearShop: this.isHeroNearShop(),
       hasShopOnFloor: Boolean(this.dungeon.shopPos),
+      inTown: this.inTown,
+      nearPortal: this.isHeroNearPortal(),
+      nearAngel: this.isHeroNearAngel(),
+      townReturnCost: this.getTownReturnCost(),
+      angelBuff: this.angelBuff ? { ...this.angelBuff } : null,
       controlMode: this.controlMode,
       soundOn: this.audio.isEnabled(),
       dashReady: this.dashCooldown <= 0,
@@ -5220,7 +6091,10 @@ export class EmbervaultEngine {
     let moveX = 0;
     let moveZ = 0;
 
-    if (this.controlMode === 'manual') {
+    if (this.controlMode === 'manual' || this.inTown) {
+      if (this.inTown) {
+        this.aiStatus = '庇護小鎮休整中';
+      }
       // Camera looks along (-1, -1) in XZ, so screen-up = (-1,-1) and screen-right = (1,-1)
       let ix = 0;
       let iy = 0;
@@ -5387,15 +6261,17 @@ export class EmbervaultEngine {
     const heroG = worldToGrid(this.heroX, this.heroZ);
     this.markExplored(heroG.gx, heroG.gz);
 
-    // 4. Key Pickup, Locked Gate Unlock, Stairwell Descent
-    this.updateObjectives(dt);
+    // 4. Key Pickup, Locked Gate Unlock, Stairwell Descent (dungeon only)
+    if (!this.inTown) {
+      this.updateObjectives(dt);
 
-    // 5. Update Enemies & Projectiles
-    this.updateEnemies(dt);
-    this.updateProjectiles(dt);
+      // 5. Update Enemies & Projectiles
+      this.updateEnemies(dt);
+      this.updateProjectiles(dt);
 
-    // 6. Update Loot Drops
-    this.updateLoot(dt);
+      // 6. Update Loot Drops
+      this.updateLoot(dt);
+    }
 
     // 7. Update Animated Light Props, Rune Wells, Spike Traps & Wall Occlusion Fade
     this.updateEnvironment(dt);
@@ -5526,7 +6402,7 @@ export class EmbervaultEngine {
         this.audio.playDescend();
         this.beginTransition(() => {
           this.hp = Math.min(this.getEffectiveMaxHp(), this.hp + 20);
-          this.buildLevel(this.depth + 1);
+          this.buildLevel(this.depth + 1, { tickBuffFloor: true });
         });
       }
     }
@@ -6407,28 +7283,36 @@ export class EmbervaultEngine {
         continue;
       }
 
+      const isSwarm = isSwarmEnemy(e.kind);
+      const aggroRange = isSwarm ? 10.5 : 9.5;
+      const stopDist = isSwarm ? 0.62 : 0.9;
+      const sepRadius = isSwarm ? 0.62 : 1.1;
+
       let moveX = 0;
       let moveZ = 0;
 
-      // Only aggro within 9.5 units
-      if (dist < 9.5 && dist > 0.9) {
+      // Aggro and pursue hero (swarm critters lock on and rush at 3x speed)
+      if (dist < aggroRange && dist > stopDist) {
         const dirX = dx / dist;
         const dirZ = dz / dist;
         moveX = dirX * e.speed;
         moveZ = dirZ * e.speed;
         e.facing = Math.atan2(dirX, dirZ);
 
-        // Soft separation between enemies so they don't stack identically
+        // Soft separation between enemies so packs fan around the hero instead of stacking identically
         for (const other of this.enemies) {
           if (other === e || other.dead) continue;
           const ox = e.x - other.x;
           const oz = e.z - other.z;
           const od = Math.hypot(ox, oz);
-          if (od > 0.01 && od < 1.1) {
-            moveX += (ox / od) * 1.8;
-            moveZ += (oz / od) * 1.8;
+          if (od > 0.01 && od < sepRadius) {
+            const sepPush = isSwarm ? 2.4 : 1.8;
+            moveX += (ox / od) * sepPush;
+            moveZ += (oz / od) * sepPush;
           }
         }
+      } else if (isSwarm && dist <= stopDist) {
+        e.facing = Math.atan2(dx / (dist || 1), dz / (dist || 1));
       }
 
       const nextPos = this.moveWithSlide(
@@ -6436,7 +7320,7 @@ export class EmbervaultEngine {
         e.z,
         (moveX + e.vx) * dt,
         (moveZ + e.vz) * dt,
-        0.38
+        isSwarm ? 0.25 : 0.38
       );
       e.x = nextPos.x;
       e.z = nextPos.z;
@@ -6445,9 +7329,10 @@ export class EmbervaultEngine {
 
       // Enemy Attack on Hero
       const isGuard = isGuardianEnemy(e.kind);
-      if (dist < (isGuard ? 1.45 : e.isElite ? 1.25 : 1.12) && e.attackCooldown <= 0) {
-        e.attackCooldown = isGuard ? 1.15 : 1.05;
-        const baseMelee = isGuard ? 9 : 5;
+      const attackReach = isGuard ? 1.45 : e.isElite ? 1.25 : isSwarm ? 1.05 : 1.12;
+      if (dist < attackReach && e.attackCooldown <= 0) {
+        e.attackCooldown = isSwarm ? 0.5 : isGuard ? 1.15 : 1.05; // Swarm bites 2 times per second!
+        const baseMelee = isGuard ? 9 : isSwarm ? 1.25 + Math.random() * 0.65 : 5;
         this.damageHero(
           baseMelee * this.getDepthDamageScale() * e.damageMult,
           e.x,
@@ -6466,9 +7351,44 @@ export class EmbervaultEngine {
       const isBouncy = e.kind === 'slime' || e.kind === 'flesh_cell';
       const isWingedFlyer = e.kind === 'cavern_bat' || e.kind === 'flesh_parasite';
       const isHoverTech = e.kind === 'wisp' || e.kind === 'alien_probe' || e.kind === 'alien_saucer';
-      e.hopPhase += dt * (isBouncy ? 5.8 : isWingedFlyer ? 14.0 : isHoverTech ? 6.5 : 8.5);
+      e.hopPhase +=
+        dt * (isSwarm ? 24.0 : isBouncy ? 5.8 : isWingedFlyer ? 14.0 : isHoverTech ? 6.5 : 8.5);
 
-      if (isBouncy) {
+      if (isSwarm) {
+        const chasing = dist < aggroRange;
+        const scurry = chasing ? Math.sin(e.hopPhase) : Math.sin(e.hopPhase * 0.25) * 0.15;
+        if (e.kind === 'flesh_leech') {
+          e.rig.body.scale.set(1 + scurry * 0.08, 1 - scurry * 0.06, 1 + scurry * 0.14);
+          e.rig.body.position.y = Math.max(0, scurry) * 0.08;
+          if (e.rig.coreMesh) {
+            const p = 1 + Math.sin(this.elapsed * 9 + e.id) * 0.15;
+            e.rig.coreMesh.scale.setScalar(p);
+          }
+          if (e.rig.weaponArm) {
+            e.rig.weaponArm.position.z = e.attackCooldown > 0.34 ? 0.38 : 0.28;
+          }
+        } else if (e.kind === 'alien_nanobot') {
+          e.rig.body.position.y = 0.04 + Math.sin(e.hopPhase * 0.6) * 0.07;
+          if (e.rig.coreMesh) e.rig.coreMesh.rotation.z += dt * 16;
+          if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = scurry * 0.55;
+          if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -scurry * 0.55;
+          const snap = e.attackCooldown > 0.34 ? 0.42 : scurry * 0.18;
+          if (e.rig.leftArm) e.rig.leftArm.rotation.y = snap;
+          if (e.rig.weaponArm) e.rig.weaponArm.rotation.y = -snap;
+        } else {
+          // dungeon_rat & cavern_mite rapid scurrying gait + fast bite lunge
+          e.rig.body.position.y = Math.abs(scurry) * 0.09;
+          if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = scurry * 0.72;
+          if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -scurry * 0.72;
+          if (e.kind === 'cavern_mite') {
+            const snap = e.attackCooldown > 0.34 ? 0.45 : scurry * 0.16;
+            if (e.rig.leftArm) e.rig.leftArm.rotation.y = snap;
+            if (e.rig.weaponArm) e.rig.weaponArm.rotation.y = -snap;
+          } else if (e.rig.weaponArm) {
+            e.rig.weaponArm.position.z = e.attackCooldown > 0.34 ? 0.32 : 0.2;
+          }
+        }
+      } else if (isBouncy) {
         const bounce = Math.max(0, Math.sin(e.hopPhase));
         e.rig.body.position.y = bounce * 0.42;
         const stretch = 1 + bounce * 0.18;
@@ -6511,6 +7431,12 @@ export class EmbervaultEngine {
         } else if (e.kind === 'flesh_cell') {
           m.emissive.setHex(0xa6266e);
           m.emissiveIntensity = 0.28;
+        } else if (e.kind === 'flesh_leech') {
+          m.emissive.setHex(0x8a1242);
+          m.emissiveIntensity = 0.2;
+        } else if (e.kind === 'cavern_mite') {
+          m.emissive.setHex(0x4b1d8c);
+          m.emissiveIntensity = 0.16;
         } else {
           m.emissive.setHex(0x000000);
           m.emissiveIntensity = 0;
@@ -6690,11 +7616,12 @@ export class EmbervaultEngine {
     // Animate props and collect active light candidates sorted by proximity to hero
     const activeLights: Array<{ prop: AnimatedLightProp; dist: number; intensity: number }> = [];
 
+    const maxLightDist = this.inTown ? 30 : 22;
     for (const lp of this.lightProps) {
       const dist = Math.hypot(lp.x - this.heroX, lp.z - this.heroZ);
       if (lp.kind === 'key' && this.hasKey) continue;
       if (lp.kind === 'gate' && this.doorUnlocked) continue;
-      if (dist > 22) continue;
+      if (dist > maxLightDist) continue;
 
       let intensity = lp.baseIntensity;
 
@@ -6828,9 +7755,9 @@ export class EmbervaultEngine {
         intensity = lp.baseIntensity + Math.sin(this.elapsed * 3.5 + lp.phase) * 3.5;
       }
 
-      // Slightly prioritize altars, potion shops, arcane rune circles, and key pedestals so their glow always wins a light slot
+      // Slightly prioritize altars, potion shops, portals, angel, arcane rune circles, and key pedestals
       const priorityBias =
-        lp.kind === 'altar' || lp.kind === 'shop'
+        lp.kind === 'altar' || lp.kind === 'shop' || lp.kind === 'angel' || lp.kind === 'portal'
           ? -4.5
           : lp.kind === 'rune' || lp.kind === 'key' || lp.kind === 'stairs'
           ? -3.5
@@ -6852,6 +7779,64 @@ export class EmbervaultEngine {
         pl.position.set(item.prop.x, item.prop.y, item.prop.z);
       } else {
         pl.intensity = 0;
+      }
+    }
+
+    // Animate Sanctuary Town White-Robed Angel
+    if (this.angelRig) {
+      this.angelRig.body.position.y = Math.sin(this.elapsed * 2.1) * 0.08;
+      const wingFlutter = Math.sin(this.elapsed * 2.6) * 0.16;
+      this.angelRig.leftWing.rotation.y = -0.24 + wingFlutter;
+      this.angelRig.rightWing.rotation.y = 0.24 - wingFlutter;
+      this.angelRig.haloRing.position.y = 2.08 + Math.sin(this.elapsed * 3.0) * 0.05;
+      this.angelRig.lightOrb.rotation.y += dt * 1.9;
+      this.angelRig.lightOrb.rotation.x += dt * 1.1;
+      this.angelRig.auraPool.rotation.z += dt * 0.55;
+      const hs = 2.15 + Math.sin(this.elapsed * 2.4) * 0.18;
+      this.angelRig.haloSprite.scale.set(hs, hs, 1);
+
+      if (this.angelPos && Math.random() < dt * 3.8) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 0.35 + Math.random() * 0.65;
+        this.spawnParticle(
+          this.angelPos.x + Math.cos(a) * r,
+          0.35,
+          this.angelPos.z + Math.sin(a) * r,
+          0,
+          1.0 + Math.random() * 0.85,
+          0,
+          Math.random() < 0.5 ? 0xfff0a8 : 0xffffff,
+          0.62,
+          1.15,
+          -0.12
+        );
+      }
+    }
+
+    // Animate Swirling Cyan Town Portal (in Town or left behind in Dungeon)
+    if (this.townPortalRig) {
+      this.townPortalRig.vortex.rotation.z += dt * 1.9;
+      this.townPortalRig.outerRing.rotation.z -= dt * 1.2;
+      this.townPortalRig.innerRing.rotation.z += dt * 2.5;
+      const pulse = 1 + Math.sin(this.elapsed * 3.6) * 0.05;
+      this.townPortalRig.halo.scale.set(2.3 * pulse, 2.6 * pulse, 1);
+      const px = this.townPortalRig.root.position.x;
+      const pz = this.townPortalRig.root.position.z;
+      if (Math.random() < dt * 3.5) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 0.3 + Math.random() * 0.55;
+        this.spawnParticle(
+          px + Math.cos(a) * r,
+          0.3 + Math.random() * 1.4,
+          pz + Math.sin(a) * r,
+          (Math.random() - 0.5) * 0.3,
+          0.9 + Math.random() * 0.7,
+          (Math.random() - 0.5) * 0.3,
+          Math.random() < 0.5 ? 0x35a8db : 0x8be2ff,
+          0.52,
+          0.85,
+          -0.15
+        );
       }
     }
 

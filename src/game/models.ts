@@ -306,6 +306,292 @@ export function createEnemyModel(
     return m;
   };
 
+  // === FAST SMALL SWARM CRITTERS (One per Dungeon Theme: 2-4 packs, compact & agile) ===
+  if (kind === 'dungeon_rat') {
+    addContactShadow(root, shadowMap, 0.42);
+    const furMat = makeMat({ color: 0x453b35, roughness: 0.9, metalness: 0.05 });
+    const darkFurMat = makeMat({ color: 0x2b2421, roughness: 0.92, metalness: 0.05 });
+    const noseMat = makeMat({ color: 0xc97b84, roughness: 0.52, metalness: 0.05 });
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3b3b });
+    const fangMat = makeMat({ color: 0xe8e2d0, roughness: 0.42, metalness: 0.1 });
+
+    // Hunched oval rat torso
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.24, 0.48), furMat);
+    torso.position.set(0, 0.22, -0.02);
+    torso.castShadow = true;
+    body.add(torso);
+
+    // Jagged dorsal fur ridge
+    const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.34), darkFurMat);
+    ridge.position.set(0, 0.35, -0.04);
+    body.add(ridge);
+
+    // Pointed snout / head group (weaponArm lunges forward on fast bite)
+    const weaponArm = new THREE.Group();
+    weaponArm.position.set(0, 0.24, 0.2);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 0.22), furMat);
+    head.position.set(0, 0, 0.08);
+    head.castShadow = true;
+    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.22, 4), furMat);
+    snout.rotation.x = Math.PI / 2;
+    snout.rotation.z = Math.PI / 4;
+    snout.position.set(0, -0.02, 0.24);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.036, 6, 6), noseMat);
+    nose.position.set(0, -0.01, 0.35);
+    const earL = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.03, 7), noseMat);
+    earL.rotation.x = Math.PI / 2;
+    earL.position.set(-0.11, 0.12, 0.03);
+    const earR = earL.clone();
+    earR.position.x = 0.11;
+    const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.04), eyeMat);
+    eyeL.position.set(-0.08, 0.04, 0.19);
+    const eyeR = eyeL.clone();
+    eyeR.position.x = 0.08;
+    const fangL = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.08, 4), fangMat);
+    fangL.rotation.x = Math.PI;
+    fangL.position.set(-0.045, -0.09, 0.22);
+    const fangR = fangL.clone();
+    fangR.position.x = 0.045;
+    weaponArm.add(head, snout, nose, earL, earR, eyeL, eyeR, fangL, fangR);
+    body.add(weaponArm);
+
+    // Segmented curved tail trailing behind
+    const tail1 = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.044, 0.26, 6), noseMat);
+    tail1.rotation.x = Math.PI * 0.44;
+    tail1.position.set(0, 0.17, -0.36);
+    const tail2 = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.032, 0.24, 6), noseMat);
+    tail2.rotation.x = Math.PI * 0.58;
+    tail2.position.set(0, 0.22, -0.56);
+    body.add(tail1, tail2);
+
+    // Scurrying left/right paw groups
+    const leftLeg = new THREE.Group();
+    leftLeg.position.set(-0.14, 0.12, 0);
+    const pawFL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.1), darkFurMat);
+    pawFL.position.set(0, -0.05, 0.14);
+    const pawBL = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.15, 0.12), darkFurMat);
+    pawBL.position.set(0, -0.05, -0.15);
+    leftLeg.add(pawFL, pawBL);
+
+    const rightLeg = new THREE.Group();
+    rightLeg.position.set(0.14, 0.12, 0);
+    const pawFR = pawFL.clone();
+    const pawBR = pawBL.clone();
+    rightLeg.add(pawFR, pawBR);
+    body.add(leftLeg, rightLeg);
+
+    return { root, body, leftLeg, rightLeg, weaponArm, flashMaterials };
+  }
+
+  if (kind === 'cavern_mite') {
+    addContactShadow(root, shadowMap, 0.44);
+    const shellMat = makeMat({ color: 0x1e2c3a, roughness: 0.34, metalness: 0.45 });
+    const crystalMat = makeMat({
+      color: 0x9b5de5,
+      emissive: 0x5c24a8,
+      emissiveIntensity: 0.45,
+      roughness: 0.2,
+      metalness: 0.25,
+    });
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x52f2ff });
+
+    // Low armored cephalothorax
+    const thorax = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.18, 0.28), shellMat);
+    thorax.position.set(0, 0.2, 0.08);
+    thorax.castShadow = true;
+    body.add(thorax);
+
+    // Crystalline spiked abdomen
+    const abdomen = new THREE.Mesh(new THREE.OctahedronGeometry(0.21, 0), crystalMat);
+    abdomen.scale.set(0.95, 0.85, 1.25);
+    abdomen.position.set(0, 0.28, -0.18);
+    abdomen.castShadow = true;
+    body.add(abdomen);
+
+    const shardA = new THREE.Mesh(new THREE.ConeGeometry(0.065, 0.22, 4), crystalMat);
+    shardA.position.set(0, 0.45, -0.2);
+    shardA.rotation.x = -0.35;
+    const shardB = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.17, 4), crystalMat);
+    shardB.position.set(-0.12, 0.38, -0.14);
+    shardB.rotation.z = 0.45;
+    const shardC = shardB.clone();
+    shardC.position.x = 0.12;
+    shardC.rotation.z = -0.45;
+    body.add(shardA, shardB, shardC);
+
+    // 4 bright cyan arachnid eyes
+    for (const [ex, ey] of [
+      [-0.08, 0.24],
+      [-0.03, 0.26],
+      [0.03, 0.26],
+      [0.08, 0.24],
+    ]) {
+      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.036, 0.03), eyeMat);
+      eye.position.set(ex, ey, 0.23);
+      body.add(eye);
+    }
+
+    // Twin glowing snapping pincers
+    const buildPincer = (side: -1 | 1) => {
+      const g = new THREE.Group();
+      g.position.set(side * 0.12, 0.16, 0.22);
+      const blade = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.2, 4), eyeMat);
+      blade.rotation.x = Math.PI / 2;
+      blade.rotation.z = side * 0.32;
+      blade.position.set(-side * 0.02, 0, 0.1);
+      g.add(blade);
+      return g;
+    };
+    const leftArm = buildPincer(-1);
+    const weaponArm = buildPincer(1);
+    body.add(leftArm, weaponArm);
+
+    // 6 splayed articulated spider legs in alternating tripod groups
+    const leftLeg = new THREE.Group();
+    const rightLeg = new THREE.Group();
+    const legGeo = new THREE.BoxGeometry(0.28, 0.045, 0.045);
+    const legZOffsets = [0.16, 0.0, -0.16];
+    legZOffsets.forEach((lz, idx) => {
+      for (const side of [-1, 1] as const) {
+        const leg = new THREE.Mesh(legGeo, shellMat);
+        leg.position.set(side * 0.24, 0.14, lz);
+        leg.rotation.z = side * -0.42;
+        leg.rotation.y = side * (idx - 1) * 0.35;
+        const targetGroup = (idx + (side === 1 ? 1 : 0)) % 2 === 0 ? leftLeg : rightLeg;
+        targetGroup.add(leg);
+      }
+    });
+    body.add(leftLeg, rightLeg);
+
+    return { root, body, leftLeg, rightLeg, leftArm, weaponArm, flashMaterials };
+  }
+
+  if (kind === 'flesh_leech') {
+    addContactShadow(root, shadowMap, 0.42);
+    const skinMat = makeMat({ color: 0xb8245a, roughness: 0.24, metalness: 0.08 });
+    const darkSkinMat = makeMat({ color: 0x6e133b, roughness: 0.32, metalness: 0.08 });
+    const sacMat = makeMat({
+      color: 0xff6b9d,
+      emissive: 0x9c184c,
+      emissiveIntensity: 0.35,
+      roughness: 0.18,
+      metalness: 0.05,
+    });
+    const fangMat = makeMat({ color: 0xfff0d4, roughness: 0.35, metalness: 0.1 });
+
+    // Segmented tapered leech body
+    const seg1 = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), skinMat);
+    seg1.scale.set(1.05, 0.78, 1.35);
+    seg1.position.set(0, 0.16, 0.08);
+    seg1.castShadow = true;
+    const seg2 = new THREE.Mesh(new THREE.SphereGeometry(0.17, 8, 8), darkSkinMat);
+    seg2.scale.set(0.95, 0.72, 1.25);
+    seg2.position.set(0, 0.14, -0.16);
+    seg2.castShadow = true;
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.26, 6), darkSkinMat);
+    tail.rotation.x = -Math.PI / 2;
+    tail.position.set(0, 0.12, -0.38);
+    body.add(seg1, seg2, tail);
+
+    // Pulsing translucent dorsal blood sac
+    const coreMesh = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 8), sacMat);
+    coreMesh.position.set(0, 0.28, -0.02);
+    body.add(coreMesh);
+
+    // Toothed circular maw facing forward (weaponArm snaps forward)
+    const weaponArm = new THREE.Group();
+    weaponArm.position.set(0, 0.16, 0.28);
+    const mawRim = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.04, 6, 12), darkSkinMat);
+    weaponArm.add(mawRim);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.024, 0.085, 4), fangMat);
+      tooth.position.set(Math.cos(a) * 0.095, Math.sin(a) * 0.095, 0.045);
+      tooth.rotation.x = Math.PI / 2;
+      weaponArm.add(tooth);
+    }
+    body.add(weaponArm);
+
+    // Twin writhing barbs
+    const leftArm = new THREE.Group();
+    leftArm.position.set(-0.18, 0.18, 0.18);
+    const barbL = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.22, 5), sacMat);
+    barbL.rotation.z = 0.8;
+    barbL.rotation.x = 0.5;
+    leftArm.add(barbL);
+    const barbR = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.22, 5), sacMat);
+    barbR.position.set(0.18, 0.18, 0.18);
+    barbR.rotation.z = -0.8;
+    barbR.rotation.x = 0.5;
+    body.add(leftArm, barbR);
+
+    return { root, body, leftArm, weaponArm, coreMesh, flashMaterials };
+  }
+
+  if (kind === 'alien_nanobot') {
+    addContactShadow(root, shadowMap, 0.42);
+    const chromeMat = makeMat({ color: 0xd4e9f7, roughness: 0.18, metalness: 0.92 });
+    const hullMat = makeMat({ color: 0x264366, roughness: 0.28, metalness: 0.8 });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0x3ef2ff });
+    const accentMat = new THREE.MeshBasicMaterial({ color: 0xff4d94 });
+
+    // Compact faceted diamond micro-drone hull
+    const hull = new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), chromeMat);
+    hull.scale.set(1.15, 0.65, 1.35);
+    hull.position.set(0, 0.34, 0);
+    hull.castShadow = true;
+    body.add(hull);
+
+    // Dark titanium dorsal fin
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.09, 0.34), hullMat);
+    cap.position.set(0, 0.45, -0.02);
+    body.add(cap);
+
+    // Glowing electric-blue central optic lens
+    const lens = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 8), glowMat);
+    lens.position.set(0, 0.35, 0.28);
+    body.add(lens);
+
+    // Spinning micro-hover rotor ring (coreMesh)
+    const coreMesh = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.025, 6, 16), glowMat);
+    coreMesh.rotation.x = Math.PI / 2;
+    coreMesh.position.set(0, 0.26, 0);
+    body.add(coreMesh);
+
+    // Twin high-frequency plasma buzz-mandibles
+    const buildBlade = (side: -1 | 1) => {
+      const g = new THREE.Group();
+      g.position.set(side * 0.2, 0.3, 0.22);
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.06, 0.26), accentMat);
+      blade.position.set(0, 0, 0.12);
+      blade.rotation.y = -side * 0.24;
+      g.add(blade);
+      return g;
+    };
+    const leftArm = buildBlade(-1);
+    const weaponArm = buildBlade(1);
+    body.add(leftArm, weaponArm);
+
+    // 4 articulated skitter-legs underneath
+    const leftLeg = new THREE.Group();
+    const rightLeg = new THREE.Group();
+    const strutGeo = new THREE.BoxGeometry(0.04, 0.22, 0.04);
+    for (const [lx, lz, grp] of [
+      [-0.18, 0.12, leftLeg],
+      [-0.18, -0.14, rightLeg],
+      [0.18, 0.12, rightLeg],
+      [0.18, -0.14, leftLeg],
+    ] as Array<[number, number, THREE.Group]>) {
+      const strut = new THREE.Mesh(strutGeo, hullMat);
+      strut.position.set(lx, 0.14, lz);
+      strut.rotation.z = lx < 0 ? 0.35 : -0.35;
+      grp.add(strut);
+    }
+    body.add(leftLeg, rightLeg);
+
+    return { root, body, leftLeg, rightLeg, leftArm, weaponArm, coreMesh, flashMaterials };
+  }
+
   // === ALIEN SPACESHIP BOSSES (Depths 31-40) ===
   if (kind === 'boss_mothership_ai') {
     addContactShadow(root, shadowMap, 1.32);
@@ -3280,19 +3566,19 @@ export function createProjectileMesh(kind: ProjectileKind): THREE.Group {
 
 export function createEliteNameSprite(label: string, isSpecial = false): THREE.Sprite {
   const canvas = document.createElement('canvas');
-  canvas.width = 460;
-  canvas.height = 104;
+  canvas.width = 560;
+  canvas.height = 128;
   const ctx = canvas.getContext('2d');
   if (ctx) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const displayLabel = isSpecial ? `★ ${label}` : label;
-    // Measure text so plate hugs the Chinese name cleanly at 1.2x scale
-    ctx.font = '700 38px "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif';
-    const textWidth = Math.min(404, Math.ceil(ctx.measureText(displayLabel).width));
-    const padX = 28;
-    const boxW = Math.min(450, Math.max(180, textWidth + padX * 2));
-    const boxH = 66;
+    // Measure text so plate hugs the Chinese name cleanly at 1.5x larger scale
+    ctx.font = '700 46px "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif';
+    const textWidth = Math.min(492, Math.ceil(ctx.measureText(displayLabel).width));
+    const padX = 32;
+    const boxW = Math.min(548, Math.max(220, textWidth + padX * 2));
+    const boxH = 82;
     const bx = Math.round((canvas.width - boxW) / 2);
     const by = Math.round((canvas.height - boxH) / 2);
 
@@ -3302,22 +3588,22 @@ export function createEliteNameSprite(label: string, isSpecial = false): THREE.S
 
     // Crisp gilded border (amber-orange flare for special elites, classic gold for regular elites)
     ctx.strokeStyle = isSpecial ? 'rgba(255, 158, 64, 0.96)' : 'rgba(245, 198, 78, 0.92)';
-    ctx.lineWidth = 3.5;
-    ctx.strokeRect(bx + 1.75, by + 1.75, boxW - 3.5, boxH - 3.5);
+    ctx.lineWidth = 4;
+    ctx.strokeRect(bx + 2, by + 2, boxW - 4, boxH - 4);
 
     // Inner hairline accent
     ctx.strokeStyle = isSpecial ? 'rgba(255, 212, 130, 0.42)' : 'rgba(255, 232, 150, 0.28)';
-    ctx.lineWidth = 1.2;
-    ctx.strokeRect(bx + 6, by + 6, boxW - 12, boxH - 12);
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx + 7, by + 7, boxW - 14, boxH - 14);
 
     // Crisp text with strong drop shadow
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
-    ctx.shadowBlur = 5;
+    ctx.shadowBlur = 6;
     ctx.shadowOffsetY = 2;
     ctx.fillStyle = isSpecial ? '#ffd17a' : '#ffe58a';
-    ctx.fillText(displayLabel, canvas.width / 2, canvas.height / 2 + 1, 404);
+    ctx.fillText(displayLabel, canvas.width / 2, canvas.height / 2 + 1, 492);
   }
 
   const tex = new THREE.CanvasTexture(canvas);
@@ -3331,9 +3617,9 @@ export function createEliteNameSprite(label: string, isSpecial = false): THREE.S
     depthWrite: false,
   });
   const sprite = new THREE.Sprite(mat);
-  // 1.2x larger than previous (2.35, 0.55) -> scaled cleanly to canvas aspect ratio (460x104)
-  sprite.scale.set(2.92, 0.66, 1);
-  sprite.position.y = 2.66;
+  // 1.5x larger than previous (2.92, 0.66) -> (4.38, 0.99)
+  sprite.scale.set(4.38, 0.99, 1);
+  sprite.position.y = 2.86;
   sprite.renderOrder = 14;
   return sprite;
 }
@@ -3620,3 +3906,984 @@ export function createHeroSetAura(): {
   group.add(outerRing, innerRing);
   return { group, outerRing, innerRing, outerMat, innerMat };
 }
+
+// ============================================================
+// SANCTUARY TOWN 3D MODELS (Portal, Well, Houses, White Angel)
+// ============================================================
+
+export interface TownPortalRig {
+  root: THREE.Group;
+  vortex: THREE.Mesh;
+  outerRing: THREE.Mesh;
+  innerRing: THREE.Mesh;
+  halo: THREE.Sprite;
+}
+
+export function createTownPortal(glowMap: THREE.Texture): TownPortalRig {
+  const root = new THREE.Group();
+
+  const stoneMat = new THREE.MeshStandardMaterial({
+    color: 0x3b4454,
+    roughness: 0.78,
+    metalness: 0.18,
+  });
+  const runeTrimMat = new THREE.MeshStandardMaterial({
+    color: 0x62d4ff,
+    emissive: 0x26a8ff,
+    emissiveIntensity: 0.95,
+    roughness: 0.2,
+    metalness: 0.5,
+  });
+
+  // Circular carved stone base
+  const plinth = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.12, 0.18, 16), stoneMat);
+  plinth.position.y = 0.09;
+  plinth.receiveShadow = true;
+  root.add(plinth);
+
+  // Subtle floor arcane ring
+  const floorRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.75, 1.18, 28),
+    new THREE.MeshBasicMaterial({
+      color: 0x45d6ff,
+      transparent: true,
+      opacity: 0.72,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    })
+  );
+  (floorRing.material as THREE.MeshBasicMaterial).opacity = 0.28;
+  floorRing.rotation.x = -Math.PI / 2;
+  floorRing.position.y = 0.19;
+  root.add(floorRing);
+
+  // Dual curved archway pillars
+  const pillarGeo = new THREE.BoxGeometry(0.24, 2.0, 0.26);
+  const leftPillar = new THREE.Mesh(pillarGeo, stoneMat);
+  leftPillar.position.set(-0.78, 1.1, 0);
+  leftPillar.rotation.z = -0.1;
+  leftPillar.castShadow = true;
+  const rightPillar = new THREE.Mesh(pillarGeo, stoneMat);
+  rightPillar.position.set(0.78, 1.1, 0);
+  rightPillar.rotation.z = 0.1;
+  rightPillar.castShadow = true;
+
+  const archTop = new THREE.Mesh(new THREE.TorusGeometry(0.68, 0.13, 8, 16, Math.PI), stoneMat);
+  archTop.position.set(0, 1.92, 0);
+  archTop.castShadow = true;
+
+  const keystone = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), runeTrimMat);
+  keystone.position.set(0, 2.66, 0);
+  root.add(leftPillar, rightPillar, archTop, keystone);
+
+  // Swirling cyan-blue elliptical portal energy field (halved center brightness — rich arcane cyan without white blowout)
+  const vortex = new THREE.Mesh(
+    new THREE.CircleGeometry(0.74, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0x1d88bd,
+      transparent: true,
+      opacity: 0.32,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  vortex.position.set(0, 1.24, 0);
+  vortex.scale.set(0.84, 1.32, 1);
+  root.add(vortex);
+
+  const outerRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.66, 0.78, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0x269ad4,
+      transparent: true,
+      opacity: 0.44,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  outerRing.position.set(0, 1.24, 0.02);
+  outerRing.scale.set(0.86, 1.34, 1);
+  root.add(outerRing);
+
+  const innerRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.36, 0.48, 18),
+    new THREE.MeshBasicMaterial({
+      color: 0x5ccdf2,
+      transparent: true,
+      opacity: 0.38,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  innerRing.position.set(0, 1.24, 0.04);
+  innerRing.scale.set(0.82, 1.26, 1);
+  root.add(innerRing);
+
+  const halo = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowMap,
+      color: 0x35a8db,
+      transparent: true,
+      opacity: 0.24,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  halo.scale.set(2.3, 2.6, 1);
+  halo.position.set(0, 1.28, 0);
+  root.add(halo);
+
+  return { root, vortex, outerRing, innerRing, halo };
+}
+
+export function createCentralWell(): THREE.Group {
+  const root = new THREE.Group();
+
+  const stoneMat = new THREE.MeshStandardMaterial({
+    color: 0x6f7480,
+    roughness: 0.88,
+    metalness: 0.08,
+  });
+  const rimMat = new THREE.MeshStandardMaterial({
+    color: 0x8b909c,
+    roughness: 0.76,
+    metalness: 0.1,
+  });
+  const woodMat = new THREE.MeshStandardMaterial({
+    color: 0x694225,
+    roughness: 0.85,
+    metalness: 0.05,
+  });
+  const shingleMat = new THREE.MeshStandardMaterial({
+    color: 0x7c3b2a,
+    roughness: 0.78,
+    metalness: 0.08,
+  });
+  const waterMat = new THREE.MeshStandardMaterial({
+    color: 0x2ca9d4,
+    emissive: 0x104c69,
+    emissiveIntensity: 0.55,
+    roughness: 0.14,
+    metalness: 0.35,
+  });
+
+  // Base cobblestone apron
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.18, 1.26, 0.12, 16), rimMat);
+  base.position.y = 0.06;
+  base.receiveShadow = true;
+  root.add(base);
+
+  // Masonry well wall + top stone collar
+  const wall = new THREE.Mesh(new THREE.CylinderGeometry(0.86, 0.92, 0.76, 14), stoneMat);
+  wall.position.y = 0.48;
+  wall.castShadow = true;
+  wall.receiveShadow = true;
+  root.add(wall);
+
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.82, 0.12, 8, 16), rimMat);
+  collar.rotation.x = Math.PI / 2;
+  collar.position.y = 0.88;
+  collar.castShadow = true;
+  root.add(collar);
+
+  // Shimmering water surface inside
+  const water = new THREE.Mesh(new THREE.CircleGeometry(0.73, 16), waterMat);
+  water.rotation.x = -Math.PI / 2;
+  water.position.y = 0.74;
+  root.add(water);
+
+  // Two vertical wooden roof posts + crossbar crank + bucket
+  const postGeo = new THREE.BoxGeometry(0.14, 1.48, 0.14);
+  const postL = new THREE.Mesh(postGeo, woodMat);
+  postL.position.set(-0.76, 1.56, 0);
+  postL.castShadow = true;
+  const postR = new THREE.Mesh(postGeo, woodMat);
+  postR.position.set(0.76, 1.56, 0);
+  postR.castShadow = true;
+  root.add(postL, postR);
+
+  const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 1.66, 8), woodMat);
+  axle.rotation.z = Math.PI / 2;
+  axle.position.set(0, 1.68, 0);
+  root.add(axle);
+
+  const rope = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.56, 6),
+    new THREE.MeshStandardMaterial({ color: 0xc2a26b, roughness: 0.95 })
+  );
+  rope.position.set(0, 1.38, 0);
+  const bucket = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.24, 10), woodMat);
+  bucket.position.set(0, 1.06, 0);
+  bucket.castShadow = true;
+  root.add(rope, bucket);
+
+  // Pitched shingle roof canopy
+  const roofSlopeGeo = new THREE.BoxGeometry(2.05, 0.1, 1.12);
+  const roofF = new THREE.Mesh(roofSlopeGeo, shingleMat);
+  roofF.position.set(0, 2.48, 0.42);
+  roofF.rotation.x = 0.52;
+  roofF.castShadow = true;
+  const roofB = new THREE.Mesh(roofSlopeGeo, shingleMat);
+  roofB.position.set(0, 2.48, -0.42);
+  roofB.rotation.x = -0.52;
+  roofB.castShadow = true;
+  const ridge = new THREE.Mesh(new THREE.BoxGeometry(2.12, 0.12, 0.16), woodMat);
+  ridge.position.set(0, 2.74, 0);
+  root.add(roofF, roofB, ridge);
+
+  return root;
+}
+
+export function createTownHouse(
+  variant: 'tavern' | 'cottage',
+  glowMap: THREE.Texture
+): THREE.Group {
+  const root = new THREE.Group();
+  const isTavern = variant === 'tavern';
+
+  const winGlowMat = new THREE.MeshBasicMaterial({ color: 0xffc864 });
+  const brassMat = new THREE.MeshStandardMaterial({
+    color: 0xd6a646,
+    roughness: 0.3,
+    metalness: 0.82,
+  });
+
+  const addWindow = (
+    parent: THREE.Group,
+    wx: number,
+    wy: number,
+    wz: number,
+    rotY: number,
+    frameMat: THREE.Material,
+    w = 0.78,
+    h = 0.84
+  ) => {
+    const wg = new THREE.Group();
+    wg.position.set(wx, wy, wz);
+    wg.rotation.y = rotY;
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.12), frameMat);
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.16, h - 0.16), winGlowMat);
+    pane.position.z = 0.064;
+    const mullionV = new THREE.Mesh(new THREE.BoxGeometry(0.055, h - 0.12, 0.04), frameMat);
+    mullionV.position.z = 0.068;
+    const mullionH = new THREE.Mesh(new THREE.BoxGeometry(w - 0.12, 0.055, 0.04), frameMat);
+    mullionH.position.z = 0.068;
+    wg.add(frame, pane, mullionV, mullionH);
+    parent.add(wg);
+  };
+
+  if (isTavern) {
+    // =========================================================================
+    // GRAND TIMBER & BRICK TAVERN (Long Rectangular Hall ~7.4 × 4.4 — NO White Walls!)
+    // =========================================================================
+    const stoneBaseMat = new THREE.MeshStandardMaterial({
+      color: 0x454349,
+      roughness: 0.92,
+      metalness: 0.06,
+    });
+    const brickLowerMat = new THREE.MeshStandardMaterial({
+      color: 0x6b3a2c,
+      roughness: 0.88,
+      metalness: 0.04,
+    });
+    const woodUpperMat = new THREE.MeshStandardMaterial({
+      color: 0x5c3c24,
+      roughness: 0.84,
+      metalness: 0.05,
+    });
+    const darkTimberMat = new THREE.MeshStandardMaterial({
+      color: 0x321e11,
+      roughness: 0.86,
+      metalness: 0.06,
+    });
+    const roofMat = new THREE.MeshStandardMaterial({
+      color: 0x6b261d,
+      roughness: 0.76,
+      metalness: 0.1,
+    });
+    const doorWoodMat = new THREE.MeshStandardMaterial({
+      color: 0x3b2112,
+      roughness: 0.85,
+    });
+
+    const W = 7.4;
+    const D = 4.2;
+    const H1 = 1.65;
+    const H2 = 1.55;
+    const totalWallH = 0.45 + H1 + H2;
+
+    // Heavy stone foundation plinth
+    const found = new THREE.Mesh(new THREE.BoxGeometry(W + 0.24, 0.45, D + 0.24), stoneBaseMat);
+    found.position.y = 0.225;
+    found.castShadow = true;
+    found.receiveShadow = true;
+    root.add(found);
+
+    // First story: warm weathered red-brown brick masonry
+    const lowerBody = new THREE.Mesh(new THREE.BoxGeometry(W, H1, D), brickLowerMat);
+    lowerBody.position.y = 0.45 + H1 / 2;
+    lowerBody.castShadow = true;
+    lowerBody.receiveShadow = true;
+    root.add(lowerBody);
+
+    // Second story: overhanging dark oak timber hall
+    const upperW = W + 0.28;
+    const upperD = D + 0.24;
+    const upperBody = new THREE.Mesh(new THREE.BoxGeometry(upperW, H2, upperD), woodUpperMat);
+    upperBody.position.y = 0.45 + H1 + H2 / 2;
+    upperBody.castShadow = true;
+    upperBody.receiveShadow = true;
+    root.add(upperBody);
+
+    // Heavy structural dark-oak beams & pillars
+    const beltBeam = new THREE.Mesh(
+      new THREE.BoxGeometry(upperW + 0.12, 0.18, upperD + 0.12),
+      darkTimberMat
+    );
+    beltBeam.position.y = 0.45 + H1;
+    root.add(beltBeam);
+
+    const eaveBeam = new THREE.Mesh(
+      new THREE.BoxGeometry(upperW + 0.14, 0.16, upperD + 0.14),
+      darkTimberMat
+    );
+    eaveBeam.position.y = totalWallH;
+    root.add(eaveBeam);
+
+    for (const bx of [-W / 2, -W / 4, 0, W / 4, W / 2]) {
+      for (const bz of [-D / 2, D / 2]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, H1 + H2 + 0.1, 0.18), darkTimberMat);
+        post.position.set(bx, 0.45 + (H1 + H2) / 2, bz * 1.03);
+        root.add(post);
+      }
+    }
+
+    // True pitched rectangular gable roof (2 wide sloped planes + solid triangular gable ends + ridge beam)
+    const roofRise = 1.65;
+    const roofRun = upperD / 2 + 0.45;
+    const slopeLen = Math.hypot(roofRise, roofRun);
+    const slopeAngle = Math.atan2(roofRise, roofRun);
+    const roofPlaneGeo = new THREE.BoxGeometry(upperW + 0.6, 0.16, slopeLen);
+
+    const roofF = new THREE.Mesh(roofPlaneGeo, roofMat);
+    roofF.position.set(0, totalWallH + roofRise * 0.5 - 0.04, roofRun * 0.5 - 0.05);
+    roofF.rotation.x = slopeAngle;
+    roofF.castShadow = true;
+    roofF.receiveShadow = true;
+
+    const roofB = new THREE.Mesh(roofPlaneGeo, roofMat);
+    roofB.position.set(0, totalWallH + roofRise * 0.5 - 0.04, -(roofRun * 0.5 - 0.05));
+    roofB.rotation.x = -slopeAngle;
+    roofB.castShadow = true;
+    roofB.receiveShadow = true;
+
+    const ridge = new THREE.Mesh(
+      new THREE.BoxGeometry(upperW + 0.72, 0.2, 0.24),
+      darkTimberMat
+    );
+    ridge.position.set(0, totalWallH + roofRise + 0.02, 0);
+    ridge.castShadow = true;
+    root.add(roofF, roofB, ridge);
+
+    // Gable end triangles on left & right sides (extruded triangle shape)
+    const gableShape = new THREE.Shape();
+    gableShape.moveTo(-upperD / 2, 0);
+    gableShape.lineTo(upperD / 2, 0);
+    gableShape.lineTo(0, roofRise);
+    gableShape.closePath();
+    const gableGeo = new THREE.ExtrudeGeometry(gableShape, { depth: 0.22, bevelEnabled: false });
+    const gableL = new THREE.Mesh(gableGeo, woodUpperMat);
+    gableL.rotation.y = Math.PI / 2;
+    gableL.position.set(-upperW / 2, totalWallH, 0);
+    const gableR = new THREE.Mesh(gableGeo, woodUpperMat);
+    gableR.rotation.y = Math.PI / 2;
+    gableR.position.set(upperW / 2 - 0.22, totalWallH, 0);
+    root.add(gableL, gableR);
+
+    // Front dormer attic gable window breaking the long roofline
+    const dormerBox = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.0, 1.25), woodUpperMat);
+    dormerBox.position.set(0, totalWallH + 0.55, upperD * 0.34);
+    dormerBox.castShadow = true;
+    const dormerRoofL = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.12, 1.48), roofMat);
+    dormerRoofL.position.set(-0.42, totalWallH + 1.18, upperD * 0.36);
+    dormerRoofL.rotation.z = 0.55;
+    const dormerRoofR = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.12, 1.48), roofMat);
+    dormerRoofR.position.set(0.42, totalWallH + 1.18, upperD * 0.36);
+    dormerRoofR.rotation.z = -0.55;
+    root.add(dormerBox, dormerRoofL, dormerRoofR);
+    addWindow(root, 0, totalWallH + 0.55, upperD * 0.34 + 0.62, 0, darkTimberMat, 0.68, 0.62);
+
+    // Tall massive stone hearth chimney on the left end
+    const hearthBase = new THREE.Mesh(new THREE.BoxGeometry(1.05, totalWallH + 0.2, 1.55), stoneBaseMat);
+    hearthBase.position.set(-W / 2 - 0.28, (totalWallH + 0.2) / 2, -0.35);
+    hearthBase.castShadow = true;
+    const chimneyShaft = new THREE.Mesh(new THREE.BoxGeometry(0.76, 2.3, 0.82), stoneBaseMat);
+    chimneyShaft.position.set(-W / 2 - 0.16, totalWallH + 1.15, -0.35);
+    chimneyShaft.castShadow = true;
+    const chimneyCap = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.16, 1.02), stoneBaseMat);
+    chimneyCap.position.set(-W / 2 - 0.16, totalWallH + 2.34, -0.35);
+    root.add(hearthBase, chimneyShaft, chimneyCap);
+
+    // Covered timber porch canopy & double tavern doors (+Z front face)
+    const porchRoof = new THREE.Mesh(new THREE.BoxGeometry(2.65, 0.14, 1.35), roofMat);
+    porchRoof.position.set(0, 2.26, D / 2 + 0.62);
+    porchRoof.rotation.x = 0.24;
+    porchRoof.castShadow = true;
+    const porchPostL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.1, 0.16), darkTimberMat);
+    porchPostL.position.set(-1.12, 1.08, D / 2 + 1.1);
+    porchPostL.castShadow = true;
+    const porchPostR = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.1, 0.16), darkTimberMat);
+    porchPostR.position.set(1.12, 1.08, D / 2 + 1.1);
+    porchPostR.castShadow = true;
+    const porchStep = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.22, 1.25), stoneBaseMat);
+    porchStep.position.set(0, 0.11, D / 2 + 0.58);
+    porchStep.receiveShadow = true;
+    root.add(porchRoof, porchPostL, porchPostR, porchStep);
+
+    const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(1.62, 1.72, 0.16), darkTimberMat);
+    doorFrame.position.set(0, 1.22, D / 2 + 0.02);
+    const doorLeafL = new THREE.Mesh(new THREE.BoxGeometry(0.68, 1.56, 0.12), doorWoodMat);
+    doorLeafL.position.set(-0.36, 1.18, D / 2 + 0.06);
+    const doorLeafR = new THREE.Mesh(new THREE.BoxGeometry(0.68, 1.56, 0.12), doorWoodMat);
+    doorLeafR.position.set(0.36, 1.18, D / 2 + 0.06);
+    const knobL = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), brassMat);
+    knobL.position.set(-0.1, 1.12, D / 2 + 0.14);
+    const knobR = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), brassMat);
+    knobR.position.set(0.1, 1.12, D / 2 + 0.14);
+    root.add(doorFrame, doorLeafL, doorLeafR, knobL, knobR);
+
+    // Glowing tavern windows across both stories
+    addWindow(root, -2.25, 1.32, D / 2 + 0.02, 0, darkTimberMat, 0.92, 0.86);
+    addWindow(root, 2.25, 1.32, D / 2 + 0.02, 0, darkTimberMat, 0.92, 0.86);
+    addWindow(root, -2.35, 2.86, upperD / 2 + 0.02, 0, darkTimberMat, 0.84, 0.78);
+    addWindow(root, 0, 2.86, upperD / 2 + 0.02, 0, darkTimberMat, 0.94, 0.78);
+    addWindow(root, 2.35, 2.86, upperD / 2 + 0.02, 0, darkTimberMat, 0.84, 0.78);
+    addWindow(root, W / 2 + 0.02, 1.32, 0, Math.PI / 2, darkTimberMat, 0.9, 0.86);
+    addWindow(root, upperW / 2 + 0.02, 2.86, 0, Math.PI / 2, darkTimberMat, 0.86, 0.78);
+
+    // Dual warm porch lanterns
+    for (const lx of [-1.12, 1.12]) {
+      const lampOrb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.12, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffdf8c })
+      );
+      lampOrb.position.set(lx, 1.88, D / 2 + 1.14);
+      const lampHalo = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: glowMap,
+          color: 0xff9e3b,
+          transparent: true,
+          opacity: 0.44,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        })
+      );
+      lampHalo.scale.set(1.25, 1.25, 1);
+      lampHalo.position.copy(lampOrb.position);
+      root.add(lampOrb, lampHalo);
+    }
+
+    // Large projecting wrought-iron Tavern Signboard with golden foaming ale mug
+    const signArm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 1.15), darkTimberMat);
+    signArm.position.set(-1.35, 2.7, D / 2 + 0.65);
+    const signBoard = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.76, 0.86), darkTimberMat);
+    signBoard.position.set(-1.35, 2.24, D / 2 + 0.85);
+    const mugBody = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.36, 10), brassMat);
+    mugBody.rotation.z = Math.PI / 2;
+    mugBody.position.set(-1.35, 2.2, D / 2 + 0.85);
+    const mugFoam = new THREE.Mesh(
+      new THREE.SphereGeometry(0.17, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xfff0cc })
+    );
+    mugFoam.position.set(-1.35, 2.4, D / 2 + 0.85);
+    root.add(signArm, signBoard, mugBody, mugFoam);
+
+    // Stacked oak ale barrels & tavern bench outside
+    const barrelMat = new THREE.MeshStandardMaterial({ color: 0x6b3f1e, roughness: 0.85 });
+    const hoopMat = new THREE.MeshStandardMaterial({ color: 0x262930, metalness: 0.7, roughness: 0.42 });
+    const addBarrel = (bx: number, by: number, bz: number) => {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.25, 0.66, 10), barrelMat);
+      b.position.set(bx, by + 0.33, bz);
+      b.castShadow = true;
+      const h1 = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.026, 6, 12), hoopMat);
+      h1.rotation.x = Math.PI / 2;
+      h1.position.set(bx, by + 0.2, bz);
+      const h2 = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.026, 6, 12), hoopMat);
+      h2.rotation.x = Math.PI / 2;
+      h2.position.set(bx, by + 0.48, bz);
+      root.add(b, h1, h2);
+    };
+    addBarrel(2.45, 0, D / 2 + 0.52);
+    addBarrel(3.04, 0, D / 2 + 0.48);
+    addBarrel(2.74, 0.66, D / 2 + 0.5);
+
+    const benchSeat = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.1, 0.42), woodUpperMat);
+    benchSeat.position.set(-2.3, 0.44, D / 2 + 0.58);
+    benchSeat.castShadow = true;
+    const benchLegL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.36), darkTimberMat);
+    benchLegL.position.set(-2.9, 0.21, D / 2 + 0.58);
+    const benchLegR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.36), darkTimberMat);
+    benchLegR.position.set(-1.7, 0.21, D / 2 + 0.58);
+    root.add(benchSeat, benchLegL, benchLegR);
+
+    return root;
+  }
+
+  // =========================================================================
+  // STONE WATCH-TURRET GUILDHOUSE / COTTAGE (Asymmetrical Rectangular + Round Stone Tower)
+  // =========================================================================
+  const ashlarMat = new THREE.MeshStandardMaterial({
+    color: 0x626772,
+    roughness: 0.9,
+    metalness: 0.08,
+  });
+  const warmStoneMat = new THREE.MeshStandardMaterial({
+    color: 0x8f887b,
+    roughness: 0.86,
+    metalness: 0.05,
+  });
+  const slateTrimMat = new THREE.MeshStandardMaterial({
+    color: 0x3b424d,
+    roughness: 0.78,
+    metalness: 0.14,
+  });
+  const slateRoofMat = new THREE.MeshStandardMaterial({
+    color: 0x263f59,
+    roughness: 0.72,
+    metalness: 0.18,
+  });
+  const oakDoorMat = new THREE.MeshStandardMaterial({
+    color: 0x4a2e1a,
+    roughness: 0.84,
+  });
+  const copperMat = new THREE.MeshStandardMaterial({
+    color: 0x4fa68e,
+    roughness: 0.38,
+    metalness: 0.65,
+  });
+
+  // Main horizontal rectangular stone hall (shifted right so round turret forms an asymmetrical silhouette!)
+  const W = 5.4;
+  const D = 3.8;
+  const H = 2.95;
+  const hallOffsetX = 0.75;
+
+  const hallFound = new THREE.Mesh(new THREE.BoxGeometry(W + 0.24, 0.45, D + 0.24), ashlarMat);
+  hallFound.position.set(hallOffsetX, 0.225, 0);
+  hallFound.castShadow = true;
+  hallFound.receiveShadow = true;
+  root.add(hallFound);
+
+  const lowerStone = new THREE.Mesh(new THREE.BoxGeometry(W, 1.35, D), ashlarMat);
+  lowerStone.position.set(hallOffsetX, 0.45 + 0.675, 0);
+  lowerStone.castShadow = true;
+  lowerStone.receiveShadow = true;
+  root.add(lowerStone);
+
+  const upperStone = new THREE.Mesh(new THREE.BoxGeometry(W - 0.08, H - 1.35, D - 0.08), warmStoneMat);
+  upperStone.position.set(hallOffsetX, 0.45 + 1.35 + (H - 1.35) / 2, 0);
+  upperStone.castShadow = true;
+  upperStone.receiveShadow = true;
+  root.add(upperStone);
+
+  // Horizontal masonry cornice belt
+  const cornice = new THREE.Mesh(new THREE.BoxGeometry(W + 0.16, 0.16, D + 0.16), slateTrimMat);
+  cornice.position.set(hallOffsetX, 0.45 + 1.35, 0);
+  root.add(cornice);
+
+  // Pitched blue-slate gabled roof over the rectangular hall
+  const wallTopY = 0.45 + H;
+  const roofRise = 1.55;
+  const roofRun = D / 2 + 0.36;
+  const slopeLen = Math.hypot(roofRise, roofRun);
+  const slopeAngle = Math.atan2(roofRise, roofRun);
+  const hallRoofGeo = new THREE.BoxGeometry(W + 0.56, 0.15, slopeLen);
+
+  const roofF = new THREE.Mesh(hallRoofGeo, slateRoofMat);
+  roofF.position.set(hallOffsetX, wallTopY + roofRise * 0.5 - 0.04, roofRun * 0.5 - 0.04);
+  roofF.rotation.x = slopeAngle;
+  roofF.castShadow = true;
+  roofF.receiveShadow = true;
+
+  const roofB = new THREE.Mesh(hallRoofGeo, slateRoofMat);
+  roofB.position.set(hallOffsetX, wallTopY + roofRise * 0.5 - 0.04, -(roofRun * 0.5 - 0.04));
+  roofB.rotation.x = -slopeAngle;
+  roofB.castShadow = true;
+  roofB.receiveShadow = true;
+
+  const ridge = new THREE.Mesh(new THREE.BoxGeometry(W + 0.68, 0.18, 0.2), slateTrimMat);
+  ridge.position.set(hallOffsetX, wallTopY + roofRise + 0.02, 0);
+  root.add(roofF, roofB, ridge);
+
+  const gableShape = new THREE.Shape();
+  gableShape.moveTo(-(D - 0.08) / 2, 0);
+  gableShape.lineTo((D - 0.08) / 2, 0);
+  gableShape.lineTo(0, roofRise);
+  gableShape.closePath();
+  const gableGeo = new THREE.ExtrudeGeometry(gableShape, { depth: 0.2, bevelEnabled: false });
+  const gableR = new THREE.Mesh(gableGeo, warmStoneMat);
+  gableR.rotation.y = Math.PI / 2;
+  gableR.position.set(hallOffsetX + (W - 0.08) / 2 - 0.2, wallTopY, 0);
+  const gableL = new THREE.Mesh(gableGeo, warmStoneMat);
+  gableL.rotation.y = Math.PI / 2;
+  gableL.position.set(hallOffsetX - (W - 0.08) / 2, wallTopY, 0);
+  root.add(gableR, gableL);
+
+  // Tall octagonal stone watch-turret attached on the left-front corner!
+  const turretX = -2.35;
+  const turretZ = 0.25;
+  const turretBase = new THREE.Mesh(new THREE.CylinderGeometry(1.26, 1.36, 0.5, 8), ashlarMat);
+  turretBase.position.set(turretX, 0.25, turretZ);
+  turretBase.castShadow = true;
+  const turretLower = new THREE.Mesh(new THREE.CylinderGeometry(1.16, 1.22, 2.35, 8), ashlarMat);
+  turretLower.position.set(turretX, 0.5 + 1.175, turretZ);
+  turretLower.castShadow = true;
+  turretLower.receiveShadow = true;
+  const turretUpper = new THREE.Mesh(new THREE.CylinderGeometry(1.22, 1.18, 1.75, 8), warmStoneMat);
+  turretUpper.position.set(turretX, 2.85 + 0.875, turretZ);
+  turretUpper.castShadow = true;
+  const turretRing = new THREE.Mesh(new THREE.CylinderGeometry(1.32, 1.32, 0.16, 8), slateTrimMat);
+  turretRing.position.set(turretX, 2.85, turretZ);
+  const turretSpire = new THREE.Mesh(new THREE.ConeGeometry(1.48, 2.15, 8), slateRoofMat);
+  turretSpire.position.set(turretX, 4.6 + 1.075, turretZ);
+  turretSpire.castShadow = true;
+  const finial = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.65, 6), copperMat);
+  finial.position.set(turretX, 6.85, turretZ);
+  root.add(turretBase, turretLower, turretUpper, turretRing, turretSpire, finial);
+
+  // Turret glowing lancet windows
+  addWindow(root, turretX, 3.72, turretZ + 1.16, 0, slateTrimMat, 0.44, 0.88);
+  addWindow(root, turretX + 0.84, 3.72, turretZ + 0.84, Math.PI / 4, slateTrimMat, 0.42, 0.84);
+  addWindow(root, turretX - 0.84, 3.72, turretZ + 0.84, -Math.PI / 4, slateTrimMat, 0.42, 0.84);
+
+  // Stone portico entrance on the main hall front
+  const porticoRoof = new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.16, 1.05), slateRoofMat);
+  porticoRoof.position.set(hallOffsetX - 0.15, 2.18, D / 2 + 0.48);
+  porticoRoof.rotation.x = 0.2;
+  porticoRoof.castShadow = true;
+  const portColL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.0, 0.22), ashlarMat);
+  portColL.position.set(hallOffsetX - 0.86, 1.04, D / 2 + 0.82);
+  const portColR = new THREE.Mesh(new THREE.BoxGeometry(0.22, 2.0, 0.22), ashlarMat);
+  portColR.position.set(hallOffsetX + 0.56, 1.04, D / 2 + 0.82);
+  const step = new THREE.Mesh(new THREE.BoxGeometry(1.86, 0.2, 1.02), ashlarMat);
+  step.position.set(hallOffsetX - 0.15, 0.1, D / 2 + 0.5);
+  const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(1.12, 1.66, 0.16), slateTrimMat);
+  doorFrame.position.set(hallOffsetX - 0.15, 1.2, D / 2 + 0.02);
+  const doorLeaf = new THREE.Mesh(new THREE.BoxGeometry(0.92, 1.5, 0.12), oakDoorMat);
+  doorLeaf.position.set(hallOffsetX - 0.15, 1.16, D / 2 + 0.06);
+  const doorKnob = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), brassMat);
+  doorKnob.position.set(hallOffsetX + 0.14, 1.12, D / 2 + 0.14);
+  root.add(porticoRoof, portColL, portColR, step, doorFrame, doorLeaf, doorKnob);
+
+  // Warm leaded windows on hall front & right gable
+  addWindow(root, hallOffsetX + 1.55, 1.28, D / 2 + 0.02, 0, slateTrimMat, 0.92, 0.88);
+  addWindow(root, hallOffsetX - 0.15, 2.68, D / 2 - 0.02, 0, slateTrimMat, 0.82, 0.78);
+  addWindow(root, hallOffsetX + 1.55, 2.68, D / 2 - 0.02, 0, slateTrimMat, 0.86, 0.78);
+  addWindow(root, hallOffsetX + W / 2 + 0.02, 1.32, 0, Math.PI / 2, slateTrimMat, 0.9, 0.86);
+  addWindow(root, hallOffsetX + (W - 0.08) / 2 + 0.02, 2.68, 0, Math.PI / 2, slateTrimMat, 0.82, 0.78);
+
+  // Subtle porch lantern
+  const lampOrb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffdf8c })
+  );
+  lampOrb.position.set(hallOffsetX + 0.56, 1.84, D / 2 + 0.92);
+  const lampHalo = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowMap,
+      color: 0xffa642,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  lampHalo.scale.set(1.2, 1.2, 1);
+  lampHalo.position.copy(lampOrb.position);
+  root.add(lampOrb, lampHalo);
+
+  // Flower box & climbing ivy accents on the stone guildhouse
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0x4f321c, roughness: 0.88 });
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x265e36, roughness: 0.84 });
+  const flowerMat = new THREE.MeshStandardMaterial({ color: 0xd9648a, roughness: 0.7 });
+  const fbox = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.18, 0.26), boxMat);
+  fbox.position.set(hallOffsetX + 1.55, 0.76, D / 2 + 0.16);
+  const bush = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.18, 0.2), leafMat);
+  bush.position.set(hallOffsetX + 1.55, 0.9, D / 2 + 0.16);
+  const bloom1 = new THREE.Mesh(new THREE.SphereGeometry(0.065, 6, 6), flowerMat);
+  bloom1.position.set(hallOffsetX + 1.32, 1.0, D / 2 + 0.18);
+  const bloom2 = new THREE.Mesh(new THREE.SphereGeometry(0.065, 6, 6), flowerMat);
+  bloom2.position.set(hallOffsetX + 1.78, 1.01, D / 2 + 0.18);
+  root.add(fbox, bush, bloom1, bloom2);
+
+  // Climbing ivy patches along the stone turret base
+  const ivy1 = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.35, 0.14), leafMat);
+  ivy1.position.set(turretX + 0.65, 1.2, turretZ + 1.05);
+  ivy1.rotation.y = 0.55;
+  const ivy2 = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.95, 0.14), leafMat);
+  ivy2.position.set(turretX - 0.55, 0.95, turretZ + 1.1);
+  ivy2.rotation.y = -0.45;
+  root.add(ivy1, ivy2);
+
+  return root;
+}
+
+export interface AngelRig {
+  root: THREE.Group;
+  body: THREE.Group;
+  leftWing: THREE.Group;
+  rightWing: THREE.Group;
+  haloRing: THREE.Mesh;
+  lightOrb: THREE.Mesh;
+  auraPool: THREE.Mesh;
+  haloSprite: THREE.Sprite;
+}
+
+export function createAngelModel(
+  shadowMap: THREE.Texture,
+  glowMap: THREE.Texture
+): AngelRig {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+  addContactShadow(root, shadowMap, 0.72);
+
+  // Soft radiant golden-white sanctuary circle beneath her feet
+  const auraPool = new THREE.Mesh(
+    new THREE.RingGeometry(0.55, 1.05, 28),
+    new THREE.MeshBasicMaterial({
+      color: 0xffe49e,
+      transparent: true,
+      opacity: 0.34,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    })
+  );
+  auraPool.rotation.x = -Math.PI / 2;
+  auraPool.position.y = 0.036;
+  root.add(auraPool);
+
+  const whiteRobeMat = new THREE.MeshStandardMaterial({
+    color: 0xf7f8fc,
+    emissive: 0xfff5db,
+    emissiveIntensity: 0.18,
+    roughness: 0.42,
+    metalness: 0.06,
+  });
+  const ivoryWingMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: 0xffecc2,
+    emissiveIntensity: 0.28,
+    roughness: 0.34,
+    metalness: 0.08,
+  });
+  const goldMat = new THREE.MeshStandardMaterial({
+    color: 0xf5cf6b,
+    emissive: 0xc98f22,
+    emissiveIntensity: 0.32,
+    roughness: 0.22,
+    metalness: 0.85,
+  });
+  const skinMat = new THREE.MeshStandardMaterial({
+    color: 0xffe0c8,
+    roughness: 0.65,
+    metalness: 0.02,
+  });
+  const hairMat = new THREE.MeshStandardMaterial({
+    color: 0xf2c96b,
+    roughness: 0.48,
+    metalness: 0.18,
+  });
+
+  // Flowing pure-white layered gown skirt + golden hem trim
+  const skirt = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.48, 0.92, 12), whiteRobeMat);
+  skirt.position.y = 0.54;
+  skirt.castShadow = true;
+  body.add(skirt);
+
+  const hemTrim = new THREE.Mesh(new THREE.TorusGeometry(0.46, 0.032, 6, 16), goldMat);
+  hemTrim.rotation.x = Math.PI / 2;
+  hemTrim.position.y = 0.11;
+  body.add(hemTrim);
+
+  // Slender white bodice + golden waist sash + shoulder mantle
+  const bodice = new THREE.Mesh(new THREE.CylinderGeometry(0.21, 0.18, 0.46, 10), whiteRobeMat);
+  bodice.position.y = 1.18;
+  bodice.castShadow = true;
+  body.add(bodice);
+
+  const sash = new THREE.Mesh(new THREE.CylinderGeometry(0.205, 0.205, 0.09, 10), goldMat);
+  sash.position.y = 0.98;
+  body.add(sash);
+
+  const shawl = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.24, 0.16, 10), whiteRobeMat);
+  shawl.position.y = 1.38;
+  body.add(shawl);
+
+  // Graceful porcelain head + flowing golden hair
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 14, 12), skinMat);
+  head.position.y = 1.66;
+  head.castShadow = true;
+  body.add(head);
+
+  const hairCrown = new THREE.Mesh(new THREE.SphereGeometry(0.225, 12, 10), hairMat);
+  hairCrown.position.set(0, 1.71, -0.04);
+  const hairBack = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.62, 10), hairMat);
+  hairBack.position.set(0, 1.38, -0.14);
+  hairBack.rotation.x = 0.24;
+  const sideLockL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.34, 0.09), hairMat);
+  sideLockL.position.set(-0.18, 1.54, 0.06);
+  const sideLockR = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.34, 0.09), hairMat);
+  sideLockR.position.set(0.18, 1.54, 0.06);
+  body.add(hairCrown, hairBack, sideLockL, sideLockR);
+
+  // Gentle eyes
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x3b6ea5 });
+  const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 6), eyeMat);
+  eyeL.position.set(-0.068, 1.66, 0.185);
+  const eyeR = new THREE.Mesh(new THREE.SphereGeometry(0.025, 6, 6), eyeMat);
+  eyeR.position.set(0.068, 1.66, 0.185);
+  body.add(eyeL, eyeR);
+
+  // Graceful arms cradling a radiant golden blessing orb
+  const armGeo = new THREE.CylinderGeometry(0.055, 0.068, 0.42, 8);
+  const armL = new THREE.Mesh(armGeo, whiteRobeMat);
+  armL.position.set(-0.22, 1.24, 0.14);
+  armL.rotation.set(0.92, 0, -0.45);
+  const armR = new THREE.Mesh(armGeo, whiteRobeMat);
+  armR.position.set(0.22, 1.24, 0.14);
+  armR.rotation.set(0.92, 0, 0.45);
+  body.add(armL, armR);
+
+  const lightOrb = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.12, 1),
+    new THREE.MeshBasicMaterial({ color: 0xfff4bd })
+  );
+  lightOrb.position.set(0, 1.18, 0.34);
+  body.add(lightOrb);
+
+  // Multi-tiered feathered Angel Wings (Left & Right)
+  const buildWing = (side: -1 | 1): THREE.Group => {
+    const wg = new THREE.Group();
+    wg.position.set(side * 0.12, 1.38, -0.16);
+    const feathers = [
+      { w: 0.72, h: 0.16, y: 0.24, x: 0.38, rz: 0.32 },
+      { w: 0.84, h: 0.15, y: 0.08, x: 0.46, rz: 0.14 },
+      { w: 0.72, h: 0.14, y: -0.09, x: 0.38, rz: -0.06 },
+      { w: 0.54, h: 0.13, y: -0.24, x: 0.28, rz: -0.24 },
+    ];
+    for (const f of feathers) {
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(f.w, f.h, 0.045), ivoryWingMat);
+      blade.position.set(side * f.x, f.y, -0.05);
+      blade.rotation.z = side * f.rz;
+      blade.castShadow = true;
+      wg.add(blade);
+    }
+    return wg;
+  };
+  const leftWing = buildWing(-1);
+  const rightWing = buildWing(1);
+  body.add(leftWing, rightWing);
+
+  // Floating radiant Golden Halo above her head
+  const haloRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.24, 0.032, 8, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffe47a })
+  );
+  haloRing.rotation.x = Math.PI / 2;
+  haloRing.position.y = 2.08;
+  body.add(haloRing);
+
+  const haloSprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowMap,
+      color: 0xffe89e,
+      transparent: true,
+      opacity: 0.45,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  haloSprite.scale.set(2.2, 2.2, 1);
+  haloSprite.position.y = 1.55;
+  body.add(haloSprite);
+
+  // 2x enlarged angelic nameplate featuring her feminine angel name (Seraphina / 瑟拉菲娜)
+  const nameTag = createEliteNameSprite('瑟拉菲娜', false);
+  nameTag.scale.set(5.2, 1.16, 1);
+  nameTag.position.y = 2.78;
+  root.add(nameTag);
+
+  return { root, body, leftWing, rightWing, haloRing, lightOrb, auraPool, haloSprite };
+}
+
+export function createVillageTree(scale = 1): THREE.Group {
+  const root = new THREE.Group();
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x573a22, roughness: 0.92 });
+  const leafMatA = new THREE.MeshStandardMaterial({ color: 0x26593b, roughness: 0.82 });
+  const leafMatB = new THREE.MeshStandardMaterial({ color: 0x326e48, roughness: 0.78 });
+
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 0.9, 7), trunkMat);
+  trunk.position.y = 0.45;
+  trunk.castShadow = true;
+  root.add(trunk);
+
+  const tier1 = new THREE.Mesh(new THREE.ConeGeometry(0.92, 1.25, 7), leafMatA);
+  tier1.position.y = 1.35;
+  tier1.castShadow = true;
+  const tier2 = new THREE.Mesh(new THREE.ConeGeometry(0.72, 1.1, 7), leafMatB);
+  tier2.position.y = 2.08;
+  tier2.castShadow = true;
+  const tier3 = new THREE.Mesh(new THREE.ConeGeometry(0.46, 0.85, 7), leafMatA);
+  tier3.position.y = 2.68;
+  tier3.castShadow = true;
+  root.add(tier1, tier2, tier3);
+  root.scale.setScalar(scale);
+  return root;
+}
+
+export function createVillageLampPost(glowMap: THREE.Texture): THREE.Group {
+  const root = new THREE.Group();
+  const ironMat = new THREE.MeshStandardMaterial({
+    color: 0x272c36,
+    roughness: 0.45,
+    metalness: 0.78,
+  });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 0.24, 8), ironMat);
+  base.position.y = 0.12;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 2.2, 8), ironMat);
+  pole.position.y = 1.25;
+  pole.castShadow = true;
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.18, 6), ironMat);
+  cap.position.y = 2.52;
+  const bulb = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.14, 0),
+    new THREE.MeshBasicMaterial({ color: 0xffe49c })
+  );
+  bulb.position.y = 2.34;
+  const halo = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowMap,
+      color: 0xffb24c,
+      transparent: true,
+      opacity: 0.56,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  halo.scale.set(1.6, 1.6, 1);
+  halo.position.y = 2.34;
+  root.add(base, pole, cap, bulb, halo);
+  return root;
+}
+

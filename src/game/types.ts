@@ -77,6 +77,7 @@ export type EnemyKind =
   | 'skeleton'
   | 'slime'
   | 'wisp'
+  | 'dungeon_rat'
   | 'archer'
   | 'mage'
   | 'guardian'
@@ -87,6 +88,7 @@ export type EnemyKind =
   | 'cavern_beetle'
   | 'cavern_golem'
   | 'cavern_bat'
+  | 'cavern_mite'
   | 'cavern_spitter'
   | 'cavern_shaman'
   | 'cavern_warden'
@@ -96,6 +98,7 @@ export type EnemyKind =
   | 'flesh_cell'
   | 'flesh_tendril'
   | 'flesh_parasite'
+  | 'flesh_leech'
   | 'flesh_spiner'
   | 'flesh_eye'
   | 'flesh_brute'
@@ -105,6 +108,7 @@ export type EnemyKind =
   | 'alien_trooper'
   | 'alien_probe'
   | 'alien_saucer'
+  | 'alien_nanobot'
   | 'alien_gunner'
   | 'alien_psion'
   | 'alien_mech'
@@ -133,6 +137,7 @@ export interface BossHudInfo {
 
 import type {
   ActiveSetBonus,
+  AngelBuff,
   RelicItem,
   RelicRarity,
   RelicSummaryStats,
@@ -255,4 +260,9 @@ export interface HudState {
   relicStats: RelicSummaryStats;
   activeSets: ActiveSetBonus[];
   discoveredRelicIds: string[];
+  inTown: boolean;
+  nearPortal: boolean;
+  nearAngel: boolean;
+  townReturnCost: number;
+  angelBuff: AngelBuff | null;
 }

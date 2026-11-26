@@ -77,6 +77,14 @@ export interface RelicItem {
   flavor?: string;
 }
 
+export interface AngelBuff {
+  name: string;
+  rarity: 'blue' | 'yellow' | 'orange';
+  stats: RelicStat[];
+  floorsLeft: number;
+  flavor: string;
+}
+
 export interface ActiveSetBonus {
   setId: RelicSetId;
   setName: string;
@@ -1126,7 +1134,59 @@ export function rollRelicDrops(
   return results;
 }
 
-export function computeRelicSummary(equipped: RelicItem[]): RelicSummaryStats {
+export function rollAngelBlessing(depth: number): AngelBuff {
+  const level = Math.max(1, depth);
+  const r = Math.random();
+  let rarity: 'blue' | 'yellow' | 'orange' = 'blue';
+  if (r < 0.04) {
+    rarity = 'orange';
+  } else if (r < 0.2) {
+    rarity = 'yellow';
+  }
+
+  const statCount = rarity === 'orange' ? 3 : rarity === 'yellow' ? 2 : 1;
+  // Normal & quirky/useless stats only — NO unique special effects
+  const keys = pickRandomStatKeys(statCount, true);
+  const stats: RelicStat[] = keys.map((k) => ({
+    key: k,
+    value: rollStatValue(k, level, rarity),
+  }));
+
+  const namePool: Record<'blue' | 'yellow' | 'orange', string[]> = {
+    blue: ['微光輕羽祝福', '清風聖詠', '晨露祝禱', '天使隨手賜福', '純白小奇蹟'],
+    yellow: ['聖光羽翼祝福', '黃金恩典禱言', '輝煌守護聖印', '天穹加護'],
+    orange: ['熾天使神聖賜福', '晨星極光聖詠', '天界奇蹟光輝'],
+  };
+  const flavorPool: Record<'blue' | 'yellow' | 'orange', string[]> = {
+    blue: [
+      '「願這縷微光照亮你前方的地城之路。」',
+      '「雖然只是小小的祝禱，但心意很誠懇喔。」',
+    ],
+    yellow: [
+      '「聖光將化為護盾與利刃，伴你突破陰霾。」',
+      '「你身上散發著不凡的決心，請收下這份加護。」',
+    ],
+    orange: [
+      '「天界的輝光響應了你的祈願！願奇蹟與你同在。」',
+      '「這是連熾天使都讚嘆的眷顧，去征服深淵吧！」',
+    ],
+  };
+
+  const names = namePool[rarity];
+  const flavors = flavorPool[rarity];
+  return {
+    name: names[Math.floor(Math.random() * names.length)],
+    rarity,
+    stats,
+    floorsLeft: 3,
+    flavor: flavors[Math.floor(Math.random() * flavors.length)],
+  };
+}
+
+export function computeRelicSummary(
+  equipped: RelicItem[],
+  extraStats?: RelicStat[]
+): RelicSummaryStats {
   const summary: RelicSummaryStats = {
     damageReduction: 0,
     atkPct: 0,
@@ -1170,6 +1230,12 @@ export function computeRelicSummary(equipped: RelicItem[]): RelicSummaryStats {
         setPiecesEquipped.set(r.setId, pieceSet);
       }
       pieceSet.add(r.templateId);
+    }
+  }
+
+  if (extraStats) {
+    for (const s of extraStats) {
+      summary[s.key] += s.value;
     }
   }
 

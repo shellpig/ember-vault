@@ -365,6 +365,37 @@ export class DungeonAudio {
     this.playTone(659.25, 'sine', now + 0.27, 0.34, 0.18);
   }
 
+  public playPortal(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(240, now);
+    osc.frequency.exponentialRampToValueAtTime(720, now + 0.28);
+    osc.frequency.exponentialRampToValueAtTime(520, now + 0.45);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.01, now);
+    gain.gain.linearRampToValueAtTime(0.2, now + 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.5);
+
+    this.playTone(587.33, 'triangle', now + 0.06, 0.24, 0.13);
+    this.playTone(880, 'sine', now + 0.15, 0.32, 0.14);
+  }
+
+  public playAngelBlessing(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const notes = [523.25, 659.25, 783.99, 987.77, 1318.51];
+    notes.forEach((n, i) => {
+      this.playTone(n, 'sine', now + i * 0.07, 0.34, 0.15);
+      this.playTone(n * 2, 'triangle', now + i * 0.07, 0.18, 0.05);
+    });
+  }
+
   public playDescend(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

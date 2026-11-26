@@ -3,9 +3,12 @@ import {
   ChevronDown,
   ChevronUp,
   Coins,
+  DoorOpen,
+  Feather,
   FlaskConical,
   Gem,
   Heart,
+  Home,
   KeyRound,
   RotateCcw,
   Shield,
@@ -19,7 +22,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { EmbervaultEngine } from './game/engine';
-import { computeRelicSummary, getRarityCss } from './game/relics';
+import { computeRelicSummary, formatRelicStat, getRarityCss } from './game/relics';
 import {
   BannerEvent,
   FloatingLabelData,
@@ -99,6 +102,11 @@ const INITIAL_HUD: HudState = {
   hasAltarOnFloor: false,
   nearShop: false,
   hasShopOnFloor: false,
+  inTown: false,
+  nearPortal: false,
+  nearAngel: false,
+  townReturnCost: 10,
+  angelBuff: null,
   controlMode: 'auto',
   soundOn: false,
   dashReady: true,
@@ -507,6 +515,33 @@ export default function App() {
               </div>
             )}
           </div>
+
+          {hud.angelBuff && (() => {
+            const css = getRarityCss(hud.angelBuff.rarity);
+            return (
+              <div
+                className={`mt-2 pt-2 border-t border-[#3a3328] font-hud text-[11px]`}
+                title={hud.angelBuff.flavor}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className={`flex items-center gap-1 font-bold truncate ${css.text}`}>
+                    <Feather className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{hud.angelBuff.name}</span>
+                  </span>
+                  <span className="text-[10px] text-[#d9caa3] tabular-nums whitespace-nowrap shrink-0">
+                    剩 {hud.angelBuff.floorsLeft} 層
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-[#d6d9e6]">
+                  {hud.angelBuff.stats.map((st, idx) => (
+                    <span key={`${st.key}-${idx}`} className="whitespace-nowrap">
+                      {formatRelicStat(st)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -575,7 +610,7 @@ export default function App() {
         <div className="bg-[#0c0e14]/90 border border-[#8f7440]/75 px-3.5 py-2.5 min-w-[162px] shadow-[0_6px_20px_rgba(0,0,0,0.65)]">
           <div className="flex items-baseline justify-between gap-4 border-b border-[#3a3328] pb-1.5 mb-2">
             <span className="font-display text-xs font-bold tracking-[0.15em] text-[#efd89c]">
-              DEPTH {hud.depth}
+              {hud.inTown ? `TOWN · D${hud.depth}` : `DEPTH ${hud.depth}`}
             </span>
             <span className="font-hud text-[10px] text-[#8d93a6] truncate max-w-[115px]">
               {hud.biomeName}
@@ -795,6 +830,111 @@ export default function App() {
           </div>
         )}
 
+        {hud.inTown && hud.nearPortal && !hud.nearAltar && !hud.nearShop && (
+          <div className="mb-2.5 bg-[#0c0e14]/95 border border-[#49c8f0] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2.5">
+            <div className="flex items-center justify-between gap-3 border-b border-[#1f3b4a] pb-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <DoorOpen className="w-4 h-4 text-[#66e3ff] shrink-0" />
+                <span className="font-display text-xs font-bold tracking-[0.12em] text-[#ccf6ff] whitespace-nowrap">
+                  地下城傳送門 · DUNGEON PORTAL
+                </span>
+              </div>
+              <span className="font-hud text-[11px] font-bold text-[#7ceeff] whitespace-nowrap shrink-0 tabular-nums">
+                第 {hud.depth} 層
+              </span>
+            </div>
+
+            <p className="font-hud text-[11px] text-[#aeb8c7] leading-relaxed">
+              穿過傳送門返回地下城原地。本層怪物將會重新復活，但傳送門周圍保持安全。
+            </p>
+
+            <button
+              type="button"
+              onClick={() => engineRef.current?.returnToDungeon()}
+              className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-[#3e9cc2] bg-[#102430] hover:border-[#7eeaff] hover:bg-[#163344] transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2 text-xs font-hud font-bold text-[#b8f4ff] whitespace-nowrap">
+                <DoorOpen className="w-4 h-4 text-[#5ce1ff] shrink-0" />
+                <span>返回第 {hud.depth} 層地下城</span>
+              </div>
+              <span className="font-hud text-[11px] text-[#7ed7eb] whitespace-nowrap">
+                點擊傳送
+              </span>
+            </button>
+          </div>
+        )}
+
+        {hud.inTown && hud.nearAngel && !hud.nearAltar && !hud.nearShop && !hud.nearPortal && (
+          <div className="mb-2.5 bg-[#0c0e14]/95 border border-[#f0d98c] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(440px,94vw)] space-y-2.5">
+            <div className="flex items-center justify-between gap-3 border-b border-[#403723] pb-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Feather className="w-4 h-4 text-[#fff0a8] shrink-0" />
+                <span className="font-display text-xs font-bold tracking-[0.12em] text-[#fff3cc] whitespace-nowrap">
+                  聖光天使 瑟拉菲娜 · 庇護祝福
+                </span>
+              </div>
+              <span className="font-hud text-[10px] text-[#d9caa3] whitespace-nowrap shrink-0">
+                維持 3 層
+              </span>
+            </div>
+
+            {!hud.angelBuff ? (
+              <>
+                <p className="font-hud text-[11px] text-[#d4d2cc] leading-relaxed">
+                  「遠道而來的冒險者，我是瑟拉菲娜，願微光照耀你的前路。接受祝福後將獲得一件隨機普通屬性加護，效果維持 3 層——命運偶爾也有點調皮喔。」
+                </p>
+                <div className="font-hud text-[10px] text-[#9ea6b8]">
+                  祝福品質機率：80% 藍裝數值 · 16% 黃裝數值 · 4% 橘裝數值（僅普通屬性）
+                </div>
+                <button
+                  type="button"
+                  onClick={() => engineRef.current?.requestAngelBlessing()}
+                  className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-[#d6b85c] bg-[#262010] hover:border-[#fff0a8] hover:bg-[#362d14] transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 text-xs font-hud font-bold text-[#fff2b8] whitespace-nowrap">
+                    <Sparkles className="w-4 h-4 text-[#ffe066] shrink-0" />
+                    <span>向瑟拉菲娜祈福（領取 3 層祝福）</span>
+                  </div>
+                  <span className="font-hud text-[11px] text-[#f0d98c] whitespace-nowrap">
+                    免費
+                  </span>
+                </button>
+              </>
+            ) : (
+              (() => {
+                const css = getRarityCss(hud.angelBuff.rarity);
+                return (
+                  <div className="space-y-2">
+                    <p className="font-hud text-[11px] text-[#c7c4bc] leading-relaxed">
+                      「你身上仍有未消散的天使祝福，請待現有祝福結束後再回來祈福。」
+                    </p>
+                    <div className={`px-3 py-2 border ${css.border} bg-[#141621] space-y-1`}>
+                      <div className="flex items-center justify-between gap-2 font-hud text-xs">
+                        <span className={`font-bold ${css.text}`}>{hud.angelBuff.name}</span>
+                        <span className="text-[11px] text-[#d9caa3] tabular-nums">
+                          剩餘 {hud.angelBuff.floorsLeft} 層
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-x-2.5 gap-y-0.5 font-hud text-[11px] text-[#e6e9f2]">
+                        {hud.angelBuff.stats.map((st, idx) => (
+                          <span key={`${st.key}-${idx}`}>{formatRelicStat(st)}</span>
+                        ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled
+                      className="w-full px-3 py-2 border border-[#3a362c] bg-[#15161f] font-hud text-xs text-[#7e8394] cursor-not-allowed"
+                    >
+                      已有祝福生效中（無法重複領取）
+                    </button>
+                  </div>
+                );
+              })()
+            )}
+          </div>
+        )}
+
         <button
           type="button"
           onClick={() => setDockCollapsed((v) => !v)}
@@ -924,6 +1064,38 @@ export default function App() {
               </span>
             </button>
 
+            {/* Return to Sanctuary Town [B] */}
+            <button
+              type="button"
+              onClick={() => engineRef.current?.returnToTown()}
+              disabled={hud.inTown}
+              title={
+                hud.inTown
+                  ? '目前位於庇護小鎮，走近傳送門即可返回地下城'
+                  : `快捷鍵 B · 消耗 ${hud.townReturnCost}G（不足扣至 0）瞬間傳送回城鎮並在原地留下傳送門`
+              }
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 border text-xs font-hud transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                hud.inTown
+                  ? 'border-[#3a6c80] bg-[#112029] text-[#8be6ff] cursor-default'
+                  : 'border-[#3e7d99] bg-[#121e28] text-[#bceeff] hover:border-[#6ce4ff] hover:bg-[#192c3b] cursor-pointer'
+              }`}
+            >
+              <Home className="w-3.5 h-3.5 text-[#5ce1ff]" />
+              {hud.inTown ? (
+                <span>城鎮中</span>
+              ) : (
+                <>
+                  <span className="px-1 py-0.5 bg-[#0c0e14]/80 border border-[#34647a]/80 text-[10px] leading-none text-[#8be6ff]">
+                    B
+                  </span>
+                  <span>回城鎮</span>
+                  <span className="text-[11px] font-bold text-[#ffd466]">
+                    {hud.townReturnCost}G
+                  </span>
+                </>
+              )}
+            </button>
+
             {/* Sound Toggle */}
             <button
               type="button"
@@ -953,6 +1125,8 @@ export default function App() {
               <span>Shift Dash</span>
               <span aria-hidden="true">·</span>
               <span>E Heal</span>
+              <span aria-hidden="true">·</span>
+              <span>B 回城</span>
             </div>
           </div>
         )}
