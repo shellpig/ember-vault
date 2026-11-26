@@ -34,7 +34,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
-/** Body of PUT /api/characters/:id (the stash is never sent in P1, so the server keeps its stored value). */
+/** Body of PUT /api/characters/:id. Always includes the full stash (the server only keeps its stored one when the field is absent). */
 export function buildSaveBody(state: CharacterLoadout, baseVersion: number) {
   return {
     base_version: baseVersion,
@@ -44,6 +44,7 @@ export function buildSaveBody(state: CharacterLoadout, baseVersion: number) {
     upgrades: state.upgrades,
     equipped: state.equipped,
     bag: state.bag,
+    stash: state.stash,
   };
 }
 
@@ -55,6 +56,7 @@ export function saveToLoadout(save: CharacterSave): CharacterLoadout {
     upgrades: save.upgrades,
     equipped: save.equipped,
     bag: save.bag,
+    stash: save.stash,
   };
 }
 
