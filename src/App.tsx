@@ -35,7 +35,9 @@ import {
 import { RelicCompendiumModal, RelicEquipmentModal } from './components/RelicModals';
 import { StashModal } from './components/StashModal';
 import { CharacterSelectScreen, LobbyScreen, LoginScreen } from './components/AccountScreens';
-import { RoomLobbyScreen, type RoomEntry } from './components/RoomScreens';
+import { RoomLobbyScreen, type RoomEntry, type RoomGameStart } from './components/RoomScreens';
+import type { RoomClient } from './net/roomClient';
+import type { ServerMessage } from '../shared/room';
 import { ApiError, api, saveToLoadout } from './api';
 import { SaveManager, SaveStatus } from './saveManager';
 import type { CharacterSave, MeResponse } from '../shared/character';
@@ -214,6 +216,13 @@ export default function App() {
   const [roomEntry, setRoomEntry] = useState<RoomEntry | null>(null);
   const [lobbyNotice, setLobbyNotice] = useState<string | null>(null);
   const saveMgrRef = useRef<SaveManager | null>(null);
+  /** The room connection while a room game is running (the engine talks through it). */
+  const mpClientRef = useRef<RoomClient | null>(null);
+  const mpEndingRef = useRef(false);
+  const activeSaveRef = useRef<CharacterSave | null>(null);
+  activeSaveRef.current = activeSave;
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef(0);
   const screenRef = useRef<Screen>('boot');
   screenRef.current = screen;
 
@@ -485,6 +494,12 @@ export default function App() {
 
   /** Back to attract mode behind the menus. */
   const resetToAttract = useCallback(() => {
+    // A room game ends with the screen: drop the engine's room state and the connection first
+    if (mpClientRef.current) {
+      engineRef.current?.mpEnd();
+      mpClientRef.current.close();
+      mpClientRef.current = null;
+    }
     saveMgrRef.current = null;
     setSaveStatus('idle');
     engineRef.current?.restartRun('warrior');
@@ -514,6 +529,110 @@ export default function App() {
     setActiveSave(null);
     setScreen('characters');
   }, [resetToAttract]);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  /**
+   * The room game is over for this client (the host left / the room closed / the connection dropped): save the own
+   * character first (never waiting long), then back to the lobby with a notice.
+   */
+  const endRoomGame = useCallback(
+    async (notice: string) => {
+      if (mpEndingRef.current || !mpClientRef.current) return;
+      mpEndingRef.current = true;
+      const mgr = saveMgrRef.current;
+      if (mgr) await Promise.race([mgr.flush(), new Promise<void>((r) => window.setTimeout(r, 4000))]);
+      const id = activeSaveRef.current?.id;
+      resetToAttract();
+      let fresh: CharacterSave | null = null;
+      if (id) {
+        try {
+          fresh = await api.getCharacter(id);
+        } catch {
+          fresh = null;
+        }
+      }
+      if (fresh) {
+        setActiveSave(fresh);
+        setLobbyNotice(notice);
+        setScreen('lobby');
+      } else {
+        setActiveSave(null);
+        setScreen('characters');
+      }
+      mpEndingRef.current = false;
+    },
+    [resetToAttract]
+  );
+  const endRoomGameRef = useRef(endRoomGame);
+  endRoomGameRef.current = endRoomGame;
+
+  /** The host pressed start: the room connection now carries the game (P5-B). */
+  const handleRoomGameStart = useCallback(
+    (info: RoomGameStart) => {
+      const save = activeSaveRef.current;
+      const engine = engineRef.current;
+      if (!save || !engine) {
+        info.client.close();
+        return;
+      }
+      mpClientRef.current = info.client;
+      mpEndingRef.current = false;
+      saveMgrRef.current = new SaveManager(
+        save.id,
+        save.save_version,
+        () => engineRef.current?.exportCharacterState() ?? null,
+        setSaveStatus
+      );
+      setSaveStatus('idle');
+      info.client.setHandlers({
+        onLatency: () => undefined,
+        onClose: ({ wasRequested }) => {
+          if (!wasRequested) void endRoomGameRef.current('與房間的連線已中斷');
+        },
+        onMessage: (msg: ServerMessage) => {
+          switch (msg.type) {
+            case 'relay':
+              engineRef.current?.mpOnRelay(msg.from, msg.kind, msg.payload);
+              break;
+            case 'memberJoined':
+              engineRef.current?.mpOnMemberJoined(msg.member);
+              break;
+            case 'memberLeft':
+              engineRef.current?.mpOnMemberLeft(msg.playerId);
+              break;
+            case 'roomClosed':
+              void endRoomGameRef.current(msg.reason === 'host_left' ? '房主已離開，房間已關閉' : '房間已因閒置而關閉');
+              break;
+            case 'replaced':
+              void endRoomGameRef.current('你已在另一個分頁加入這個房間，這個連線已中斷');
+              break;
+            default:
+              break;
+          }
+        },
+      });
+      engine.mpStart(
+        {
+          role: info.isHost ? 'host' : 'guest',
+          selfId: info.selfId,
+          hostId: info.hostId,
+          members: info.members,
+          send: (kind, payload, to) => info.client.sendRelay(kind, payload, to),
+          onNotice: showToast,
+        },
+        save.class_id as HeroClassId,
+        saveToLoadout(save)
+      );
+      setRoomEntry(null);
+      setScreen('playing');
+    },
+    [showToast]
+  );
 
   const logout = useCallback(async () => {
     try {
@@ -1663,7 +1782,18 @@ export default function App() {
             setLobbyNotice(notice ?? null);
             setScreen('lobby');
           }}
+          onGameStart={handleRoomGameStart}
         />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          data-testid="toast"
+          className="absolute top-20 left-1/2 -translate-x-1/2 z-[70] px-4 py-2 border border-[#b89448]/85 bg-[#0b0d13]/92 font-hud text-sm text-[#f3e1b4] pointer-events-none"
+        >
+          {toast}
+        </div>
       )}
 
       {/* Save conflict: another session updated this character */}
