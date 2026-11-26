@@ -5568,7 +5568,11 @@ export class EmbervaultEngine {
         p.z = nz;
         p.traveled += speed * sdt;
 
-        for (const e of this.enemies) {
+        // A teammate's client has no real monsters, only the host's interpolated puppets: collide with those so
+        // the spike visibly bursts on impact. explodeIceSpike only damages `this.enemies` (empty on a guest), so
+        // this is visual only; the host still decides the actual hit and damage.
+        const hitTargets = this.mpGuestDungeon() && this.mp ? this.mp.guest.enemyList : this.enemies;
+        for (const e of hitTargets) {
           if (e.dead) continue;
           if (Math.hypot(e.x - p.x, e.z - p.z) <= FROST_MAGE.projectileHitRadius + this.getEnemyHitRadius(e)) {
             this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
