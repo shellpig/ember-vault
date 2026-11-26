@@ -732,6 +732,10 @@ export class EmbervaultEngine {
   private moveInputZ = 0;
   /** Mage auto-pilot is waiting for the shield to refill (set below 60%, cleared when full). */
   private aiMageRecharging = false;
+  /** Left mouse button held over the game canvas (hold-to-attack). */
+  private leftMouseHeld = false;
+  private pointerClientX = 0;
+  private pointerClientY = 0;
   /** True when the last hit was fully absorbed by the shield (blue hit flash instead of red). */
   private heroHitShieldOnly = false;
   private autoUpgradeCooldown = 0;
@@ -2638,6 +2642,9 @@ export class EmbervaultEngine {
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
     this.renderer?.domElement.addEventListener('pointerdown', this.handlePointerDown);
+    this.renderer?.domElement.addEventListener('pointermove', this.handlePointerMove);
+    window.addEventListener('pointerup', this.handlePointerUp);
+    window.addEventListener('blur', this.handleWindowBlur);
     this.renderer?.domElement.addEventListener('contextmenu', this.handleContextMenu);
     this.renderer?.domElement.addEventListener('wheel', this.handleWheel, { passive: true });
     this.renderer?.domElement.addEventListener('webglcontextlost', this.handleContextLost);
@@ -2742,21 +2749,48 @@ export class EmbervaultEngine {
     if (e.button === 2) {
       this.performPommelStrike();
     } else if (e.button === 0) {
-      if (this.isMage() && this.attackCooldown <= 0) {
-        // Frost Mage left-click fires toward the mouse cursor
-        const target = this.screenToGround(e.clientX, e.clientY);
-        if (target) {
-          const ax = target.x - this.heroX;
-          const az = target.z - this.heroZ;
-          if (Math.hypot(ax, az) > 0.05) {
-            this.heroFacing = Math.atan2(ax, az);
-            this.heroRig.body.rotation.y = this.heroFacing;
-          }
-        }
-      }
-      this.performAttack();
+      // Left mouse held = keep attacking toward the cursor (both classes); see updateHeldAttack
+      this.leftMouseHeld = true;
+      this.pointerClientX = e.clientX;
+      this.pointerClientY = e.clientY;
+      this.updateHeldAttack();
     }
   };
+
+  private handlePointerMove = (e: PointerEvent): void => {
+    this.pointerClientX = e.clientX;
+    this.pointerClientY = e.clientY;
+  };
+
+  private handlePointerUp = (e: PointerEvent): void => {
+    if (e.button === 0) this.leftMouseHeld = false;
+  };
+
+  private handleWindowBlur = (): void => {
+    this.leftMouseHeld = false;
+  };
+
+  /** Turns the hero toward the cursor. Returns false if the cursor can't be projected. */
+  private faceCursor(): boolean {
+    const target = this.screenToGround(this.pointerClientX, this.pointerClientY);
+    if (!target) return false;
+    const ax = target.x - this.heroX;
+    const az = target.z - this.heroZ;
+    if (Math.hypot(ax, az) < 0.05) return true;
+    this.heroFacing = Math.atan2(ax, az);
+    this.heroRig.body.rotation.y = this.heroFacing;
+    return true;
+  }
+
+  /** While the left mouse button is held in manual mode: face the cursor and attack whenever ready. */
+  private updateHeldAttack(): void {
+    if (!this.leftMouseHeld) return;
+    if (this.isDead || this.inTown || this.controlMode !== 'manual' || this.transitionState !== 'none') {
+      return;
+    }
+    this.faceCursor();
+    if (this.attackCooldown <= 0) this.performAttack();
+  }
 
   // Public UI Control Methods
   public triggerPommelStrike(): void {
@@ -7422,6 +7456,9 @@ export class EmbervaultEngine {
       this.walkCycle *= 0.85;
     }
 
+    // Hold-to-attack: aim at the cursor every frame (overrides walk facing) and fire when ready
+    this.updateHeldAttack();
+
     // 3. Animate Hero Composite Rig
     this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
     this.heroRig.body.rotation.y = this.heroFacing;
@@ -9362,9 +9399,12 @@ export class EmbervaultEngine {
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
+    window.removeEventListener('pointerup', this.handlePointerUp);
+    window.removeEventListener('blur', this.handleWindowBlur);
 
     if (this.renderer) {
       this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
+      this.renderer.domElement.removeEventListener('pointermove', this.handlePointerMove);
       this.renderer.domElement.removeEventListener('contextmenu', this.handleContextMenu);
       this.renderer.domElement.removeEventListener('wheel', this.handleWheel);
       this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
