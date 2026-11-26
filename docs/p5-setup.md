@@ -66,9 +66,16 @@ P5-C：城鎮裡互相看得到（位置由 Room DO 直接廣播）、全員回�
 
 P6 交易讓 Room Worker **多了 D1 binding**（`workers/room/wrangler.toml` 的 `[[d1_databases]]` `DB`，和 Pages 專案是同一個資料庫 `ember-vault-db`）。
 
-1. `npm run deploy:room`（沒有新的 D1 migration：`trades` 表 P1 就有；DO migration 也沒有新增）。Worker 部署時會自動把 `DB` 綁上去，不需要在 dashboard 設定。
-2. **再**（或同時）部署 Pages（合併 PR）。舊的 Pages 不會送 `characterId` 身分欄位，新的 DO 會拒絕沒有它的連線（400）；所以**兩邊要一起更新**，不要只更新其中一邊。
+1. 先合併／部署 Pages。舊的 Room Worker 會忽略不認得的訊息類型與多出來的身分欄位，所以「新 Pages + 舊 Worker」只是交易功能暫時沒反應，其他照常。
+2. **緊接著** `npm run deploy:room`（沒有新的 D1 migration：`trades` 表 P1 就有；DO migration 也沒有新增）。Worker 部署時會自動把 `DB` 綁上去，不需要在 dashboard 設定。**不要反過來先部署 Worker**：新的 DO 要求身分裡有 `characterId`，舊的 Pages 不會送，所有加入房間的請求都會 400。
 3. 驗證：兩個帳號開房、開始遊戲、都回城鎮 → 右上角隊伍面板出現「交易」→ 對方接受 → 各放一些遺物／金幣 → 雙方確認 → 兩邊背包／金幣即時更新；重新整理後（從雲端載入）內容仍相同。
+
+### P7 升級（已部署過 P6 的人）
+
+1. `npm run db:migrate:remote`（新的 D1 migration `0002_room_creates.sql`，建房限流用的 `room_creates` 表）。**要在新 Pages 上線之前跑**；表不存在時建房仍可用（限流查詢失敗只記 log 並放行），但限流不會生效。
+2. 部署 Pages（合併 PR）。新 Pages 會多轉送 `x-ev-resume` header；舊 Worker 忽略它，只是房主斷線寬限不可用（房主一斷線照舊立刻關房）、已開始的房間仍拒絕加入。
+3. **緊接著** `npm run deploy:room`。P7 沒有新增必填欄位，所以「新 Worker + 舊 Pages」也不會壞：只是沒有 `x-ev-resume`，房主斷線寬限期滿才關房；兩種順序都安全，但為了和 P6 同一個習慣，建議 migration → Pages → Worker。DO migration 沒有新增（`meta` 多了選用欄位 `hostToken`／`hostGoneUntil`，舊房間不受影響）。
+4. 驗證：三個帳號開房、開始遊戲，第四個帳號用房號加入 → 直接進入遊戲並出生在城鎮（或沒有門時在本層入口）；關掉一位隊友的網路再恢復 → 顯示「重新連線中…」並以新加入者身分回到城鎮；房主短暫斷網（<15 秒）→ 隊友看到「房主重新連線中…」，恢復後繼續；房主重新整理頁面 → 房間關閉；同一帳號 10 分鐘內第 6 次建房 → 大廳顯示建房太頻繁。
 
 ### 之後 Room Worker 有改動時
 

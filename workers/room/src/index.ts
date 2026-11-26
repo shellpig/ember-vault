@@ -4,6 +4,7 @@ import {
   CLOSE_REPLACED,
   CLOSE_ROOM_CLOSED,
   CLOSE_TOO_BIG,
+  HOST_GRACE_MS,
   IDENTITY_HEADER,
   BIG_MEMBER_RELAY_KINDS,
   HOST_MAX_MESSAGE_BYTES,
@@ -12,6 +13,8 @@ import {
   MAX_CHAT_LENGTH,
   MAX_MESSAGE_BYTES,
   RATE_LIMITS,
+  RESUME_HEADER,
+  RESUME_TOKEN_PATTERN,
   ROOM_IDLE_TTL_MS,
   ROOM_MAX_PLAYERS,
   type ClientMessage,
@@ -61,8 +64,12 @@ interface Env {
 interface RoomMeta {
   hostAccountId: string;
   createdAt: number;
-  /** Set by the host's `startGame`; from then on new members are refused (409 game_started). */
+  /** Set by the host's `startGame`. P7: a started room still accepts joiners (mid-game join), up to the member limit. */
   started?: boolean;
+  /** P7: the host page's random resume token (from its first join). Only the same token may resume after a drop. */
+  hostToken?: string;
+  /** P7: the host's socket dropped; the room waits until this time (epoch ms) for the same page to come back. */
+  hostGoneUntil?: number;
 }
 
 /** Stored with serializeAttachment so it survives hibernation. */
@@ -120,6 +127,12 @@ function jsonResponse(status: number, body: Record<string, unknown>): Response {
 
 function errorResponse(status: number, error: RoomErrorCode): Response {
   return jsonResponse(status, { error });
+}
+
+/** P7: the resume token the Pages Function forwarded (browser supplied; never an identity, only an extra check for the host). */
+function parseResumeToken(request: Request): string | null {
+  const raw = request.headers.get(RESUME_HEADER);
+  return raw && RESUME_TOKEN_PATTERN.test(raw) ? raw : null;
 }
 
 function parseIdentity(request: Request): VerifiedIdentity | null {
@@ -211,9 +224,18 @@ export class Room extends DurableObject<Env> {
     const live = this.liveSockets();
     const isHost = identity.accountId === meta.hostAccountId;
     const existing = live.find((s) => s.att.accountId === identity.accountId);
-    // A guest can only join a room whose host is present (the room ends when the host leaves).
+    const resume = parseResumeToken(request);
+    // P7 host grace: only the same host page (same account AND same resume token) takes the room back. A reload (no token),
+    // a wrong token or an expired window ends the room as it always did.
+    const inGrace = isHost && meta.hostGoneUntil !== undefined;
+    if (inGrace && (Date.now() > (meta.hostGoneUntil as number) || !resume || resume !== meta.hostToken)) {
+      await this.closeRoom('host_left');
+      return errorResponse(404, 'room_not_found');
+    }
+    // A guest can only join a room whose host is present (the room ends when the host leaves; during the grace window
+    // members wait for the host and retry).
     if (!isHost && !live.some((s) => s.att.isHost)) return errorResponse(404, 'room_not_found');
-    if (!existing && meta.started) return errorResponse(409, 'game_started');
+    // P7: a started room accepts joiners too (mid-game join / reconnect); only the member limit applies.
     if (!existing && live.length >= ROOM_MAX_PLAYERS) return errorResponse(409, 'room_full');
 
     // A plain GET (no Upgrade) is a dry run the browser uses to learn the exact error before opening the socket.
@@ -250,7 +272,16 @@ export class Room extends DurableObject<Env> {
     };
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(att);
-    if (isHost) await this.ctx.storage.deleteAlarm();
+    let resumed = false;
+    if (isHost) {
+      await this.ctx.storage.deleteAlarm();
+      resumed = meta.started === true && resume !== null && resume === meta.hostToken && (inGrace || existing !== undefined);
+      if (inGrace || (resume && meta.hostToken !== resume)) {
+        if (resume) meta.hostToken = resume;
+        delete meta.hostGoneUntil;
+        await this.ctx.storage.put('meta', meta);
+      }
+    }
 
     const members = this.liveSockets().map((s) => this.publicMember(s.att));
     this.send(server, {
@@ -260,8 +291,11 @@ export class Room extends DurableObject<Env> {
       isHost,
       members,
       started: meta.started === true,
+      ...(resumed ? { resumed: true } : {}),
     });
-    this.broadcast({ type: 'memberJoined', member: this.publicMember(att) }, server);
+    if (inGrace) this.broadcast({ type: 'hostState', state: 'ok' }, server);
+    // A resuming host is not a new member (its member entry never left the others' lists)
+    if (!resumed) this.broadcast({ type: 'memberJoined', member: this.publicMember(att) }, server);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -663,7 +697,16 @@ export class Room extends DurableObject<Env> {
     this.latencies.delete(att.playerId);
     this.cancelTradesOf(att.playerId, 'partner_left');
     if (att.isHost) {
-      await this.closeRoom('host_left');
+      const meta = await this.loadMeta();
+      if (meta?.started && meta.hostToken) {
+        // P7: a running game gets a short grace window; the same host page may come back and keep its authority
+        meta.hostGoneUntil = Date.now() + HOST_GRACE_MS;
+        await this.ctx.storage.put('meta', meta);
+        await this.ctx.storage.setAlarm(meta.hostGoneUntil);
+        this.broadcast({ type: 'hostState', state: 'reconnecting', graceMs: HOST_GRACE_MS }, ws);
+      } else {
+        await this.closeRoom('host_left');
+      }
       return;
     }
     this.broadcast({ type: 'memberLeft', playerId: att.playerId }, ws);
@@ -688,8 +731,16 @@ export class Room extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    const meta = await this.loadMeta();
+    if (!meta) return;
+    // P7: the host did not come back inside the grace window
+    if (meta.hostGoneUntil !== undefined) {
+      if (this.liveSockets().some((s) => s.att.isHost)) return;
+      if (Date.now() >= meta.hostGoneUntil) await this.closeRoom('host_left');
+      else await this.ctx.storage.setAlarm(meta.hostGoneUntil);
+      return;
+    }
     // Idle clean-up: nobody ever connected (or everybody dropped without a close event).
-    if (!(await this.loadMeta())) return;
     if (this.liveSockets().length === 0) await this.closeRoom('idle');
   }
 }
