@@ -35,11 +35,12 @@ import {
 import { RelicCompendiumModal, RelicEquipmentModal } from './components/RelicModals';
 import { StashModal } from './components/StashModal';
 import { CharacterSelectScreen, LobbyScreen, LoginScreen } from './components/AccountScreens';
+import { RoomLobbyScreen, type RoomEntry } from './components/RoomScreens';
 import { ApiError, api, saveToLoadout } from './api';
 import { SaveManager, SaveStatus } from './saveManager';
 import type { CharacterSave, MeResponse } from '../shared/character';
 
-type Screen = 'boot' | 'login' | 'characters' | 'lobby' | 'playing';
+type Screen = 'boot' | 'login' | 'characters' | 'lobby' | 'room' | 'playing';
 
 function HeartIcon({
   state,
@@ -210,6 +211,8 @@ export default function App() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [activeSave, setActiveSave] = useState<CharacterSave | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [roomEntry, setRoomEntry] = useState<RoomEntry | null>(null);
+  const [lobbyNotice, setLobbyNotice] = useState<string | null>(null);
   const saveMgrRef = useRef<SaveManager | null>(null);
   const screenRef = useRef<Screen>('boot');
   screenRef.current = screen;
@@ -1628,10 +1631,37 @@ export default function App() {
       {screen === 'lobby' && activeSave && (
         <LobbyScreen
           save={activeSave}
-          onStart={startGame}
+          notice={lobbyNotice}
+          onStart={() => {
+            setLobbyNotice(null);
+            startGame();
+          }}
+          onCreateRoom={() => {
+            setLobbyNotice(null);
+            setRoomEntry({ kind: 'create' });
+            setScreen('room');
+          }}
+          onJoinRoom={(code) => {
+            setLobbyNotice(null);
+            setRoomEntry({ kind: 'join', code });
+            setScreen('room');
+          }}
           onBack={() => {
             setActiveSave(null);
             setScreen('characters');
+          }}
+        />
+      )}
+
+      {screen === 'room' && activeSave && roomEntry && (
+        <RoomLobbyScreen
+          key={roomEntry.kind === 'join' ? roomEntry.code : 'create'}
+          save={activeSave}
+          entry={roomEntry}
+          onExit={(notice) => {
+            setRoomEntry(null);
+            setLobbyNotice(notice ?? null);
+            setScreen('lobby');
           }}
         />
       )}

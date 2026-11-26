@@ -3,6 +3,8 @@ import { Heart, LogOut, Plus, Shield, Trash2 } from 'lucide-react';
 import { ApiError, api } from '../api';
 import { HERO_CLASSES, SELECTABLE_CLASS_IDS, HeroClassId } from '../game/classes';
 import { ClassEmblem } from './ClassEmblem';
+import { isRoomCode, normalizeRoomCode, roomErrorText } from '../net/roomClient';
+import { ROOM_CODE_LENGTH } from '../../shared/room';
 import {
   MAX_CHARACTERS_PER_ACCOUNT,
   MAX_NAME_LENGTH,
@@ -12,13 +14,13 @@ import {
 } from '../../shared/character';
 
 
-const PANEL = 'bg-[#0b0d13]/95 border border-[#b89448]/70 shadow-[0_24px_64px_rgba(0,0,0,0.9)]';
-const BTN =
+export const PANEL = 'bg-[#0b0d13]/95 border border-[#b89448]/70 shadow-[0_24px_64px_rgba(0,0,0,0.9)]';
+export const BTN =
   'px-4 py-2 border font-hud text-sm transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed';
-const BTN_PRIMARY = `${BTN} border-[#d6b25e] bg-[#2a2110] text-[#ffe7a8] hover:bg-[#3a2d15] hover:border-[#f0cf7b]`;
-const BTN_PLAIN = `${BTN} border-[#3a3428] bg-[#151822] text-[#b9b4a4] hover:text-[#ece6d8] hover:border-[#b89448]`;
+export const BTN_PRIMARY = `${BTN} border-[#d6b25e] bg-[#2a2110] text-[#ffe7a8] hover:bg-[#3a2d15] hover:border-[#f0cf7b]`;
+export const BTN_PLAIN = `${BTN} border-[#3a3428] bg-[#151822] text-[#b9b4a4] hover:text-[#ece6d8] hover:border-[#b89448]`;
 
-function Shell({ title, subtitle, children, wide }: { title: string; subtitle: string; children: React.ReactNode; wide?: boolean }) {
+export function Shell({ title, subtitle, children, wide }: { title: string; subtitle: string; children: React.ReactNode; wide?: boolean }) {
   return (
     <div
       role="dialog"
@@ -130,11 +132,17 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: (me: MeResponse) => vo
     };
   }, [onLoggedIn, clientId]);
 
+  // Dev only: ?devuser=dev2 preselects the fake account (dev1..dev8), handy for multi-player testing in several windows.
+  const [devUser, setDevUser] = useState(() => {
+    const q = new URLSearchParams(window.location.search).get('devuser');
+    return q && /^dev[1-8]$/.test(q) ? q : 'dev1';
+  });
+
   const devLogin = async () => {
     setBusy(true);
     setError(null);
     try {
-      onLoggedIn(await api.devLogin());
+      onLoggedIn(await api.devLogin(devUser));
     } catch (err) {
       setError(err instanceof ApiError && err.status === 404 ? '開發登入未啟用（需 DEV_AUTH=1 與 API 伺服器）' : errorText(err));
       setBusy(false);
@@ -155,9 +163,24 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: (me: MeResponse) => vo
           <p className="font-hud text-xs text-[#aeb3c2] text-center">載入中…</p>
         )}
         {import.meta.env.DEV && (
-          <button type="button" onClick={devLogin} disabled={busy} className={BTN_PLAIN}>
-            開發登入
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              aria-label="開發帳號"
+              value={devUser}
+              onChange={(e) => setDevUser(e.target.value)}
+              disabled={busy}
+              className="px-2 py-2 bg-[#10131c] border border-[#3a3428] text-[#b9b4a4] font-hud text-sm"
+            >
+              {Array.from({ length: 8 }, (_, i) => `dev${i + 1}`).map((u) => (
+                <option key={u} value={u}>
+                  {u}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={devLogin} disabled={busy} className={BTN_PLAIN}>
+              開發登入
+            </button>
+          </div>
         )}
         {error && (
           <p role="alert" className="font-hud text-xs text-[#ff8a98] text-center">
@@ -438,14 +461,34 @@ export function CharacterSelectScreen({
 
 export function LobbyScreen({
   save,
+  notice,
   onStart,
   onBack,
+  onCreateRoom,
+  onJoinRoom,
 }: {
   save: CharacterSave;
+  /** Message carried over from the room screen (host left, connection failed, ...). */
+  notice?: string | null;
   onStart: () => void;
   onBack: () => void;
+  onCreateRoom: () => void;
+  onJoinRoom: (code: string) => void;
 }) {
   const cls = HERO_CLASSES[save.class_id as HeroClassId];
+  const [code, setCode] = useState('');
+  const [codeError, setCodeError] = useState<string | null>(null);
+
+  const join = () => {
+    const normalized = normalizeRoomCode(code);
+    if (!isRoomCode(normalized)) {
+      setCodeError(roomErrorText('invalid_code'));
+      return;
+    }
+    setCodeError(null);
+    onJoinRoom(normalized);
+  };
+
   return (
     <Shell title="大廳" subtitle="LOBBY">
       <div className={`${PANEL} px-6 py-6 flex flex-col items-center gap-4`}>
@@ -459,15 +502,48 @@ export function LobbyScreen({
         <div className="font-hud text-xs text-[#6a6f80] cursor-not-allowed select-none" aria-disabled="true">
           難度：即將推出
         </div>
-        <p className="font-hud text-[11px] text-[#8d93a6]">將從第 {save.max_depth} 層開始</p>
-        <div className="flex gap-3">
-          <button type="button" className={BTN_PLAIN} onClick={onBack}>
-            返回
+        {notice && (
+          <p role="alert" data-testid="lobby-notice" className="font-hud text-xs text-[#ff8a98] text-center">
+            {notice}
+          </p>
+        )}
+        <div className="w-full flex flex-col gap-3">
+          <button type="button" data-testid="start-solo" className={`${BTN_PRIMARY} w-full`} onClick={onStart}>
+            單人開始
+            <span className="block font-hud text-[11px] text-[#b9a77a]">從第 {save.max_depth} 層開始 · 不連線</span>
           </button>
-          <button type="button" className={BTN_PRIMARY} onClick={onStart}>
-            開始
+          <button type="button" data-testid="create-room" className={`${BTN_PLAIN} w-full`} onClick={onCreateRoom}>
+            建立房間
           </button>
+          <div className="flex gap-2">
+            <input
+              data-testid="join-code"
+              value={code}
+              onChange={(e) => {
+                setCode(e.target.value.toUpperCase());
+                setCodeError(null);
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && join()}
+              maxLength={ROOM_CODE_LENGTH}
+              placeholder="輸入房號"
+              aria-label="房號"
+              autoComplete="off"
+              spellCheck={false}
+              className="select-text flex-1 min-w-0 px-3 py-2 bg-[#10131c] border border-[#3a3428] text-[#f3e1b4] text-sm tracking-[0.3em] text-center uppercase outline-none focus:border-[#d6b25e]"
+            />
+            <button type="button" data-testid="join-room" className={BTN_PLAIN} onClick={join}>
+              加入
+            </button>
+          </div>
+          {codeError && (
+            <p role="alert" className="font-hud text-xs text-[#ff8a98] text-center">
+              {codeError}
+            </p>
+          )}
         </div>
+        <button type="button" className={BTN_PLAIN} onClick={onBack}>
+          返回
+        </button>
       </div>
     </Shell>
   );

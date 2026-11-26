@@ -35,7 +35,7 @@ export default defineConfig(() => {
     },
     server: {
       // `npm run dev:full` runs the Pages Functions API on :8788; forward /api there when browsing :3000.
-      proxy: {'/api': 'http://localhost:8788'},
+      proxy: {'/api': {target: 'http://localhost:8788', ws: true}},
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
