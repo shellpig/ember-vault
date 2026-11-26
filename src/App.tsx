@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Shield,
   Skull,
+  Snowflake,
   Sparkles,
   Sword,
   Volume2,
@@ -22,6 +23,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { EmbervaultEngine } from './game/engine';
+import { HERO_CLASSES, SELECTABLE_CLASS_IDS, HeroClassId, UpgradeAccent } from './game/classes';
 import { computeRelicSummary, formatRelicStat, getRarityCss } from './game/relics';
 import {
   BannerEvent,
@@ -132,6 +134,202 @@ const INITIAL_HUD: HudState = {
   upgradeOptions: [],
 };
 
+const UPGRADE_ACCENT_STYLES: Record<
+  UpgradeAccent,
+  { btn: string; text: string; icon: string; Icon: typeof Heart }
+> = {
+  hp: {
+    btn: 'border-[#6e4047] bg-[#1b1216] hover:border-[#e8566c] hover:bg-[#26161d] disabled:hover:border-[#6e4047] disabled:hover:bg-[#1b1216]',
+    text: 'text-[#ff8a98]',
+    icon: 'text-[#e63950]',
+    Icon: Heart,
+  },
+  atk: {
+    btn: 'border-[#755a2e] bg-[#1c1710] hover:border-[#e6b953] hover:bg-[#292114] disabled:hover:border-[#755a2e] disabled:hover:bg-[#1c1710]',
+    text: 'text-[#ffd773]',
+    icon: 'text-[#f2b84b]',
+    Icon: Sword,
+  },
+  armor: {
+    btn: 'border-[#395e7a] bg-[#101821] hover:border-[#6cc4ff] hover:bg-[#152230] disabled:hover:border-[#395e7a] disabled:hover:bg-[#101821]',
+    text: 'text-[#8fd4ff]',
+    icon: 'text-[#5ebcf5]',
+    Icon: Shield,
+  },
+  crit: {
+    btn: 'border-[#326b46] bg-[#101c15] hover:border-[#5ce88b] hover:bg-[#16291d] disabled:hover:border-[#326b46] disabled:hover:bg-[#101c15]',
+    text: 'text-[#8cffb4]',
+    icon: 'text-[#5ce88b]',
+    Icon: Zap,
+  },
+  shield: {
+    btn: 'border-[#3f7a96] bg-[#0f1b24] hover:border-[#9be3ff] hover:bg-[#14283a] disabled:hover:border-[#3f7a96] disabled:hover:bg-[#0f1b24]',
+    text: 'text-[#b6ecff]',
+    icon: 'text-[#8fd8ff]',
+    Icon: Snowflake,
+  },
+};
+
+function ClassEmblem({ id, color, accent }: { id: HeroClassId; color: string; accent: string }) {
+  if (id === 'warrior') {
+    return (
+      <svg viewBox="0 0 64 64" className="w-16 h-16" aria-hidden="true" fill="none">
+        {/* Greatsword */}
+        <path d="M32 4 L36 10 L36 38 L28 38 L28 10 Z" fill={color} fillOpacity="0.25" stroke={color} strokeWidth="2" strokeLinejoin="round" />
+        <path d="M32 10 V36" stroke={color} strokeWidth="1.5" />
+        <path d="M20 38 H44" stroke={color} strokeWidth="3" strokeLinecap="round" />
+        <path d="M32 38 V50" stroke={color} strokeWidth="3" strokeLinecap="round" />
+        <circle cx="32" cy="53" r="2.5" fill={color} />
+        {/* Lantern */}
+        <path d="M46 40 V44" stroke={accent} strokeWidth="1.5" />
+        <path d="M43 44 H49 L50 52 H42 Z" fill={accent} fillOpacity="0.35" stroke={accent} strokeWidth="1.5" strokeLinejoin="round" />
+        <circle cx="46" cy="48" r="1.6" fill="#ffe7a8" />
+        <path d="M42 52 H50 V54 H42 Z" fill={accent} />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 64 64" className="w-16 h-16" aria-hidden="true" fill="none">
+      <g stroke={color} strokeWidth="2.5" strokeLinecap="round">
+        <path d="M32 6 V58" />
+        <path d="M9.5 19 L54.5 45" />
+        <path d="M9.5 45 L54.5 19" />
+      </g>
+      <g stroke={color} strokeWidth="2" strokeLinecap="round">
+        <path d="M26 10 L32 16 L38 10" />
+        <path d="M26 54 L32 48 L38 54" />
+        <path d="M12 28 L21 27 L19 18" />
+        <path d="M52 36 L43 37 L45 46" />
+        <path d="M12 36 L21 37 L19 46" />
+        <path d="M52 28 L43 27 L45 18" />
+      </g>
+      <circle cx="32" cy="32" r="4" fill={accent} stroke={color} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ClassSelectOverlay({
+  onPick,
+  onClose,
+  currentClass,
+  canClose,
+}: {
+  onPick: (id: HeroClassId) => void;
+  onClose: () => void;
+  currentClass: HeroClassId;
+  canClose: boolean;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="class-select-title"
+      className="absolute inset-0 z-[45] flex items-center justify-center bg-[#06070a]/72 backdrop-blur-[3px] p-4 overflow-y-auto pointer-events-auto"
+    >
+      <div className="w-[min(920px,96vw)] my-auto">
+        <div className="text-center mb-6">
+          <div className="font-display text-xs tracking-[0.3em] text-[#9b8a64] mb-1">
+            CHOOSE YOUR HERO
+          </div>
+          <h1
+            id="class-select-title"
+            className="font-display text-2xl md:text-3xl font-bold tracking-[0.16em] text-[#f3e1b4]"
+          >
+            選擇職業
+          </h1>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {SELECTABLE_CLASS_IDS.map((id) => {
+            const c = HERO_CLASSES[id];
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => onPick(id)}
+                style={{ ['--cls' as string]: c.accentCss, ['--cls2' as string]: c.secondaryCss }}
+                className="group relative flex flex-col items-center text-left gap-3 px-5 py-5 bg-[#0b0d13]/95 border border-[color:var(--cls)]/55 hover:border-[color:var(--cls)] hover:shadow-[0_0_26px_-4px_var(--cls)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--cls)] transition-all cursor-pointer"
+              >
+                <div className="p-3 border border-[color:var(--cls)]/40 bg-[#10131c]">
+                  <ClassEmblem id={id} color={c.accentCss} accent={c.secondaryCss === '#1b5a5e' ? '#f0c96a' : c.secondaryCss} />
+                </div>
+                <div className="text-center">
+                  <div className="font-display text-xl font-bold tracking-[0.12em] text-[color:var(--cls)]">
+                    {c.name}
+                  </div>
+                  <div className="font-display text-[11px] tracking-[0.22em] text-[#8d93a6] uppercase">
+                    {c.title}
+                  </div>
+                </div>
+                <p className="font-hud text-[12px] leading-relaxed text-[#cfc9ba] self-stretch">
+                  {c.description}
+                </p>
+                <div className="flex items-center justify-center gap-4 font-hud text-xs tabular-nums">
+                  <span className="flex items-center gap-1 text-[#ff8a98]">
+                    <Heart className="w-3.5 h-3.5 text-[#e63950]" />
+                    HP {c.baseHp}
+                  </span>
+                  <span className={`flex items-center gap-1 ${c.baseShield > 0 ? 'text-[#b6ecff]' : 'text-[#5d6272]'}`}>
+                    <Shield className="w-3.5 h-3.5" />
+                    護盾 {c.baseShield}
+                  </span>
+                </div>
+                <ul className="self-stretch space-y-1 font-hud text-[11px] text-[#aeb3c2]">
+                  {c.highlights.map((h) => (
+                    <li key={h} className="flex gap-1.5">
+                      <span aria-hidden="true" className="text-[color:var(--cls)]">◆</span>
+                      <span>{h}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="font-hud text-[11px] text-[#8d93a6] border-t border-[#29241b] pt-2 self-stretch text-center">
+                  技能：<span className="text-[color:var(--cls)] font-semibold">{c.skillName}</span>
+                  <span className="mx-1.5" aria-hidden="true">·</span>
+                  位移：<span className="text-[#d8d4c8]">{c.mobilityName}</span>
+                </div>
+                {id === currentClass && (
+                  <span className="absolute top-2 right-2 px-1.5 py-0.5 font-hud text-[10px] border border-[#5c4c2f] text-[#c7b68d]">
+                    上一局
+                  </span>
+                )}
+              </button>
+            );
+          })}
+
+          {/* Locked third slot */}
+          <div
+            aria-disabled="true"
+            className="relative flex flex-col items-center justify-center gap-3 px-5 py-5 bg-[#0b0d13]/80 border border-dashed border-[#3a3428] opacity-60 cursor-not-allowed select-none min-h-[200px]"
+          >
+            <div className="p-3 border border-[#2c2f3b] bg-[#10131c]">
+              <svg viewBox="0 0 64 64" className="w-16 h-16" aria-hidden="true" fill="none">
+                <rect x="16" y="28" width="32" height="26" fill="#1a1c24" stroke="#5c6173" strokeWidth="2.5" />
+                <path d="M22 28 V20 A10 10 0 0 1 42 20 V28" stroke="#5c6173" strokeWidth="2.5" />
+                <circle cx="32" cy="40" r="3" fill="#5c6173" />
+                <path d="M32 42 V48" stroke="#5c6173" strokeWidth="2.5" />
+              </svg>
+            </div>
+            <div className="font-display text-xl font-bold tracking-[0.12em] text-[#6a6f80]">？？？</div>
+            <div className="font-hud text-xs text-[#6a6f80] tracking-widest">即將推出</div>
+          </div>
+        </div>
+
+        {canClose && (
+          <div className="mt-5 text-center">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-1.5 border border-[#3a3428] bg-[#151822] font-hud text-xs text-[#a3a8b8] hover:text-[#ece6d8] hover:border-[#b89448] transition-colors cursor-pointer"
+            >
+              返回
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function formatDuration(totalSec: number): string {
   const mins = Math.floor(totalSec / 60);
   const secs = totalSec % 60;
@@ -150,6 +348,7 @@ export default function App() {
   const [relicModalOpen, setRelicModalOpen] = useState(false);
   const [codexModalOpen, setCodexModalOpen] = useState(false);
   const [webglError, setWebglError] = useState<string | null>(null);
+  const [classSelectOpen, setClassSelectOpen] = useState(true);
 
   const drawMinimap = useCallback((snap: MinimapSnapshot) => {
     const canvas = minimapCanvasRef.current;
@@ -382,6 +581,10 @@ export default function App() {
         return 'text-[#ff9442] text-sm font-bold tracking-wide';
       case 'relicGreen':
         return 'text-[#52f295] text-sm font-bold tracking-wide';
+      case 'shieldHit':
+        return 'text-[#8fd8ff] text-sm font-bold tracking-wide';
+      case 'frost':
+        return 'text-[#d9f6ff] text-xs font-extrabold tracking-wider [text-shadow:0_0_6px_rgba(120,220,255,0.9)]';
       case 'stun':
         return 'text-[#ffe45e] text-xs font-extrabold tracking-wide';
       default:
@@ -466,6 +669,31 @@ export default function App() {
               />
             </div>
           </div>
+
+          {hud.maxShield > 0 && (
+            <div
+              className="flex items-center gap-2 mb-2.5 -mt-1"
+              aria-label={`Shield ${hud.shield} of ${hud.maxShield}`}
+            >
+              <Shield className="w-[18px] h-4 shrink-0 text-[#8fd8ff]" />
+              <div className="relative flex-1 h-2.5 bg-[#10171e] border border-[#3f7a96] overflow-hidden">
+                <div
+                  className={`h-full bg-gradient-to-r from-[#3f9cc8] via-[#8fd8ff] to-[#d9f6ff] transition-all duration-150 ${
+                    hud.shieldRegenerating ? 'animate-pulse' : ''
+                  }`}
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (hud.shield / Math.max(1, hud.maxShield)) * 100))}%`,
+                  }}
+                />
+                {hud.shieldRegenerating && (
+                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-pulse" />
+                )}
+              </div>
+              <span className="font-hud text-[11px] font-semibold text-[#b6ecff] tabular-nums whitespace-nowrap">
+                {Math.ceil(hud.shield)} / {hud.maxShield}
+              </span>
+            </div>
+          )}
 
           <div className="flex items-center gap-2.5 text-xs font-hud">
             <button
@@ -667,65 +895,27 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-              <button
-                type="button"
-                onClick={() => engineRef.current?.purchaseUpgrade('hp')}
-                disabled={hud.baseMaxHp >= hud.maxHpCap || hud.gold < hud.upgradeCost}
-                className="flex flex-col items-start gap-0.5 px-2.5 py-2 border border-[#6e4047] bg-[#1b1216] text-left hover:border-[#e8566c] hover:bg-[#26161d] disabled:opacity-45 disabled:hover:border-[#6e4047] disabled:hover:bg-[#1b1216] transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-hud font-bold text-[#ff8a98] whitespace-nowrap">
-                  <Heart className="w-3.5 h-3.5 text-[#e63950] shrink-0" />
-                  <span>{hud.baseMaxHp >= hud.maxHpCap ? 'HP MAXED' : '+10 Max HP'}</span>
-                </div>
-                <span className="font-hud text-[10px] text-[#a5a8b6] whitespace-nowrap tabular-nums">
-                  {hud.baseMaxHp} / {hud.maxHpCap} HP
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => engineRef.current?.purchaseUpgrade('atk')}
-                disabled={hud.gold < hud.upgradeCost}
-                className="flex flex-col items-start gap-0.5 px-2.5 py-2 border border-[#755a2e] bg-[#1c1710] text-left hover:border-[#e6b953] hover:bg-[#292114] disabled:opacity-45 disabled:hover:border-[#755a2e] disabled:hover:bg-[#1c1710] transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-hud font-bold text-[#ffd773] whitespace-nowrap">
-                  <Sword className="w-3.5 h-3.5 text-[#f2b84b] shrink-0" />
-                  <span>+10% Attack</span>
-                </div>
-                <span className="font-hud text-[10px] text-[#a5a8b6] whitespace-nowrap">
-                  +{hud.atkBonusPct}% → +{hud.atkBonusPct + 10}% DMG
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => engineRef.current?.purchaseUpgrade('armor')}
-                disabled={hud.armorBonusPct >= hud.armorMaxPct || hud.gold < hud.upgradeCost}
-                className="flex flex-col items-start gap-0.5 px-2.5 py-2 border border-[#395e7a] bg-[#101821] text-left hover:border-[#6cc4ff] hover:bg-[#152230] disabled:opacity-45 disabled:hover:border-[#395e7a] disabled:hover:bg-[#101821] transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-hud font-bold text-[#8fd4ff] whitespace-nowrap">
-                  <Shield className="w-3.5 h-3.5 text-[#5ebcf5] shrink-0" />
-                  <span>{hud.armorBonusPct >= hud.armorMaxPct ? 'DEF MAXED' : '+10% Armor'}</span>
-                </div>
-                <span className="font-hud text-[10px] text-[#a5a8b6] whitespace-nowrap">
-                  {hud.armorBonusPct}% / {hud.armorMaxPct}% DEF
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => engineRef.current?.purchaseUpgrade('crit')}
-                disabled={hud.critBonusPct >= hud.critMaxPct || hud.gold < hud.upgradeCost}
-                className="flex flex-col items-start gap-0.5 px-2.5 py-2 border border-[#326b46] bg-[#101c15] text-left hover:border-[#5ce88b] hover:bg-[#16291d] disabled:opacity-45 disabled:hover:border-[#326b46] disabled:hover:bg-[#101c15] transition-colors cursor-pointer"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-hud font-bold text-[#8cffb4] whitespace-nowrap">
-                  <Zap className="w-3.5 h-3.5 text-[#5ce88b] shrink-0" />
-                  <span>{hud.critBonusPct >= hud.critMaxPct ? 'CRIT MAXED' : '+2% Crit'}</span>
-                </div>
-                <span className="font-hud text-[10px] text-[#a5a8b6] whitespace-nowrap">
-                  +{hud.critBonusPct}% / +{hud.critMaxPct}% CRIT
-                </span>
-              </button>
+              {hud.upgradeOptions.map((opt) => {
+                const st = UPGRADE_ACCENT_STYLES[opt.accent];
+                const Icon = st.Icon;
+                return (
+                  <button
+                    key={opt.kind}
+                    type="button"
+                    onClick={() => engineRef.current?.purchaseUpgrade(opt.kind)}
+                    disabled={opt.maxed || hud.gold < hud.upgradeCost}
+                    className={`flex flex-col items-start gap-0.5 px-2.5 py-2 border text-left disabled:opacity-45 transition-colors cursor-pointer ${st.btn}`}
+                  >
+                    <div className={`flex items-center gap-1.5 text-xs font-hud font-bold whitespace-nowrap ${st.text}`}>
+                      <Icon className={`w-3.5 h-3.5 shrink-0 ${st.icon}`} />
+                      <span>{opt.maxed ? opt.maxedLabel : opt.label}</span>
+                    </div>
+                    <span className="font-hud text-[10px] text-[#a5a8b6] whitespace-nowrap tabular-nums">
+                      {opt.progress}
+                    </span>
+                  </button>
+                );
+              })}
 
               <button
                 type="button"
@@ -1008,8 +1198,9 @@ export default function App() {
               </button>
             </div>
 
-            {/* Pommel Strike Stun Skill (Right-Click, 8s CD) */}
+            {/* Class Skill (Right-Click) */}
             {(() => {
+              const isMage = hud.heroClass === 'frost_mage';
               const cd = hud.pommelCooldown;
               const maxCd = Math.max(0.1, hud.pommelMaxCooldown);
               const isReady = cd <= 0.02;
@@ -1020,32 +1211,50 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => engineRef.current?.triggerPommelStrike()}
-                  title="滑鼠右鍵施放 · 劍柄敲擊 360° 衝擊波：50% 傷害並中斷攻擊/施法（小怪暈 2.5s / 菁英 1.5s / BOSS 0.8s · CD 8s）"
+                  title={
+                    isMage
+                      ? `滑鼠右鍵施放 · ${hud.skillName}：全螢幕冰爆，凍結並擊退敵人（CD ${Math.round(maxCd)}s）`
+                      : `滑鼠右鍵施放 · 劍柄敲擊 360° 衝擊波：50% 傷害並中斷攻擊/施法（小怪暈 2.5s / 菁英 1.5s / BOSS 0.8s · CD ${Math.round(maxCd)}s）`
+                  }
                   className={`relative overflow-hidden flex items-center gap-1.5 px-2.5 py-1.5 border text-xs font-hud transition-colors cursor-pointer whitespace-nowrap shrink-0 tabular-nums ${
                     isReady
-                      ? 'border-[#e6be63] bg-[#241c0f] text-[#fff0bf] hover:border-[#ffe28a] hover:bg-[#302412] shadow-[0_0_12px_rgba(230,190,99,0.28)]'
+                      ? isMage
+                        ? 'border-[#8fd8ff] bg-[#0f1e2a] text-[#e3f7ff] hover:border-[#c4eeff] hover:bg-[#15293a] shadow-[0_0_12px_rgba(143,216,255,0.32)]'
+                        : 'border-[#e6be63] bg-[#241c0f] text-[#fff0bf] hover:border-[#ffe28a] hover:bg-[#302412] shadow-[0_0_12px_rgba(230,190,99,0.28)]'
                       : 'border-[#3d382e] bg-[#13151d] text-[#8d92a2]'
                   }`}
                 >
                   {!isReady && (
                     <span
                       aria-hidden="true"
-                      className="pointer-events-none absolute inset-y-0 left-0 bg-[#8f7440]/28 transition-[width] duration-75"
+                      className={`pointer-events-none absolute inset-y-0 left-0 transition-[width] duration-75 ${isMage ? 'bg-[#5aa9d0]/28' : 'bg-[#8f7440]/28'}`}
                       style={{ width: `${progressPct}%` }}
                     />
                   )}
-                  <Sparkles
-                    className={`relative z-10 w-3.5 h-3.5 ${
-                      isReady ? 'text-[#ffe066]' : 'text-[#707585]'
-                    }`}
-                  />
+                  {isMage ? (
+                    <Snowflake
+                      className={`relative z-10 w-3.5 h-3.5 ${
+                        isReady ? 'text-[#9be3ff]' : 'text-[#707585]'
+                      }`}
+                    />
+                  ) : (
+                    <Sparkles
+                      className={`relative z-10 w-3.5 h-3.5 ${
+                        isReady ? 'text-[#ffe066]' : 'text-[#707585]'
+                      }`}
+                    />
+                  )}
                   <span className="relative z-10 px-1 py-0.5 bg-[#0c0e14]/80 border border-[#5c4c2f]/80 text-[10px] leading-none text-[#d9c28a]">
                     右鍵
                   </span>
-                  <span className="relative z-10 font-semibold">劍柄震擊</span>
+                  <span className="relative z-10 font-semibold">{hud.skillName}</span>
                   <span
                     className={`relative z-10 text-[11px] font-bold min-w-[2.4rem] text-right ${
-                      isReady ? 'text-[#ffe066]' : 'text-[#c9b78a]'
+                      isReady
+                        ? isMage
+                          ? 'text-[#9be3ff]'
+                          : 'text-[#ffe066]'
+                        : 'text-[#c9b78a]'
                     }`}
                   >
                     {isReady ? '就緒' : `${cd.toFixed(1)}s`}
@@ -1125,11 +1334,13 @@ export default function App() {
             <div className="hidden xl:flex items-center gap-2 pl-2 border-l border-[#3a3428] text-[11px] font-hud text-[#9096a8] whitespace-nowrap shrink-0">
               <span>WASD Move</span>
               <span aria-hidden="true">·</span>
-              <span>Click Slash</span>
+              <span>{hud.heroClass === 'frost_mage' ? 'Click 冰尖彈' : 'Click Slash'}</span>
               <span aria-hidden="true">·</span>
-              <span>Right-Click 震擊</span>
+              <span>Right-Click {hud.skillName}</span>
               <span aria-hidden="true">·</span>
-              <span>Shift Dash</span>
+              <span>Shift {hud.mobilityName}</span>
+              <span aria-hidden="true">·</span>
+              <span>Space 自動瞄準最近敵人</span>
               <span aria-hidden="true">·</span>
               <span>E Heal</span>
               <span aria-hidden="true">·</span>
@@ -1160,6 +1371,9 @@ export default function App() {
               >
                 冒險終結
               </h2>
+              <div className="mt-2 font-display text-sm tracking-[0.2em] text-[#d9c28a]">
+                {HERO_CLASSES[hud.runSummary.heroClass].name}
+              </div>
               <div className="mt-2 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 font-hud text-xs text-[#a5aab8] tabular-nums">
                 <span>第 {hud.runSummary.depth} 層</span>
                 <span aria-hidden="true">·</span>
@@ -1223,7 +1437,7 @@ export default function App() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-hud text-xs tabular-nums">
                 <div>
                   <div className="text-[#ff8a98] font-semibold">
-                    生命 +{hud.runSummary.hpUpgrades}
+                    {hud.runSummary.heroClass === 'frost_mage' ? 'HP/護盾' : '生命'} +{hud.runSummary.hpUpgrades}
                   </div>
                   <div className="text-[11px] text-[#8d93a6] mt-0.5">
                     上限 {hud.runSummary.maxHp} HP
@@ -1241,10 +1455,12 @@ export default function App() {
 
                 <div>
                   <div className="text-[#8fd4ff] font-semibold">
-                    護甲 +{hud.runSummary.armorUpgrades}
+                    {hud.runSummary.heroClass === 'frost_mage' ? '護盾加速' : '護甲'} +{hud.runSummary.armorUpgrades}
                   </div>
                   <div className="text-[11px] text-[#8d93a6] mt-0.5">
-                    減傷 +{hud.runSummary.armorBonusPct}%
+                    {hud.runSummary.heroClass === 'frost_mage'
+                      ? `回充加快 ${Math.round(hud.runSummary.armorUpgrades * 12)}%`
+                      : `減傷 +${hud.runSummary.armorBonusPct}%`}
                   </div>
                 </div>
 
@@ -1273,14 +1489,36 @@ export default function App() {
             {/* Player-Controlled Restart Button */}
             <button
               type="button"
-              onClick={() => engineRef.current?.restartRun()}
+              onClick={() => setClassSelectOpen(true)}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-[#d6b25e] bg-[#2a2110] text-sm font-display font-bold tracking-[0.16em] text-[#ffe7a8] hover:bg-[#3a2d15] hover:border-[#f0cf7b] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f0cf7b] transition-colors cursor-pointer whitespace-nowrap"
             >
               <RotateCcw className="w-4 h-4 shrink-0" />
               <span>重新開始冒險</span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                engineRef.current?.restartRun(hud.heroClass);
+              }}
+              className="mt-2 w-full px-4 py-2 border border-[#3a3428] bg-[#151822] font-hud text-xs text-[#b9b4a4] hover:text-[#ece6d8] hover:border-[#b89448] transition-colors cursor-pointer whitespace-nowrap"
+            >
+              以相同職業再來（{HERO_CLASSES[hud.heroClass].name}）
+            </button>
           </div>
         </div>
+      )}
+
+      {/* Class Select Overlay */}
+      {classSelectOpen && (
+        <ClassSelectOverlay
+          currentClass={hud.heroClass}
+          canClose={hud.isDead}
+          onClose={() => setClassSelectOpen(false)}
+          onPick={(id) => {
+            engineRef.current?.restartRun(id);
+            setClassSelectOpen(false);
+          }}
+        />
       )}
 
       {/* Relic Equipment & Bag Vault Modal */}
