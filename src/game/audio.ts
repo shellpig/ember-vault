@@ -92,8 +92,11 @@ export class DungeonAudio {
     this.noiseBuffer = buffer;
   }
 
+  /** Set by the engine while a bot teammate acts: its sounds are not played. */
+  public suppressed = false;
+
   private canPlay(): boolean {
-    return this.enabled && this.unlocked && this.ctx !== null && this.masterGain !== null;
+    return !this.suppressed && this.enabled && this.unlocked && this.ctx !== null && this.masterGain !== null;
   }
 
   public playFootstep(): void {

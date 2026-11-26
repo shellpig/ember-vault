@@ -258,6 +258,12 @@ export interface HudState {
   boss: BossHudInfo | null;
   isDead: boolean;
   runSummary: RunSummary | null;
+  /** 0-1 rescue progress on the (downed) local hero while a teammate is reviving them. */
+  beingRescued: number;
+  /** The local hero stands next to a downed teammate (hold F). `progress` is 0-1 while the revive runs. */
+  rescuePrompt: { name: string; progress: number } | null;
+  /** Heroes in the run (local player + bot teammates). */
+  partySize: number;
   equippedRelics: RelicItem[];
   relicBag: RelicItem[];
   relicBagCap: number;
