@@ -10,6 +10,7 @@ import {
   Heart,
   Home,
   KeyRound,
+  LogOut,
   RotateCcw,
   Shield,
   Skull,
@@ -23,7 +24,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { EmbervaultEngine } from './game/engine';
-import { HERO_CLASSES, SELECTABLE_CLASS_IDS, HeroClassId, UpgradeAccent } from './game/classes';
+import { HERO_CLASSES, HeroClassId, UpgradeAccent } from './game/classes';
 import { computeRelicSummary, formatRelicStat, getRarityCss } from './game/relics';
 import {
   BannerEvent,
@@ -32,6 +33,12 @@ import {
   MinimapSnapshot,
 } from './game/types';
 import { RelicCompendiumModal, RelicEquipmentModal } from './components/RelicModals';
+import { CharacterSelectScreen, LobbyScreen, LoginScreen } from './components/AccountScreens';
+import { ApiError, api, saveToLoadout } from './api';
+import { SaveManager, SaveStatus } from './saveManager';
+import type { CharacterSave, MeResponse } from '../shared/character';
+
+type Screen = 'boot' | 'login' | 'characters' | 'lobby' | 'playing';
 
 function HeartIcon({
   state,
@@ -170,167 +177,6 @@ const UPGRADE_ACCENT_STYLES: Record<
   },
 };
 
-function ClassEmblem({ id, color, accent }: { id: HeroClassId; color: string; accent: string }) {
-  if (id === 'warrior') {
-    return (
-      <svg viewBox="0 0 64 64" className="w-16 h-16" aria-hidden="true" fill="none">
-        {/* Greatsword */}
-        <path d="M32 4 L36 10 L36 38 L28 38 L28 10 Z" fill={color} fillOpacity="0.25" stroke={color} strokeWidth="2" strokeLinejoin="round" />
-        <path d="M32 10 V36" stroke={color} strokeWidth="1.5" />
-        <path d="M20 38 H44" stroke={color} strokeWidth="3" strokeLinecap="round" />
-        <path d="M32 38 V50" stroke={color} strokeWidth="3" strokeLinecap="round" />
-        <circle cx="32" cy="53" r="2.5" fill={color} />
-        {/* Lantern */}
-        <path d="M46 40 V44" stroke={accent} strokeWidth="1.5" />
-        <path d="M43 44 H49 L50 52 H42 Z" fill={accent} fillOpacity="0.35" stroke={accent} strokeWidth="1.5" strokeLinejoin="round" />
-        <circle cx="46" cy="48" r="1.6" fill="#ffe7a8" />
-        <path d="M42 52 H50 V54 H42 Z" fill={accent} />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 64 64" className="w-16 h-16" aria-hidden="true" fill="none">
-      <g stroke={color} strokeWidth="2.5" strokeLinecap="round">
-        <path d="M32 6 V58" />
-        <path d="M9.5 19 L54.5 45" />
-        <path d="M9.5 45 L54.5 19" />
-      </g>
-      <g stroke={color} strokeWidth="2" strokeLinecap="round">
-        <path d="M26 10 L32 16 L38 10" />
-        <path d="M26 54 L32 48 L38 54" />
-        <path d="M12 28 L21 27 L19 18" />
-        <path d="M52 36 L43 37 L45 46" />
-        <path d="M12 36 L21 37 L19 46" />
-        <path d="M52 28 L43 27 L45 18" />
-      </g>
-      <circle cx="32" cy="32" r="4" fill={accent} stroke={color} strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-function ClassSelectOverlay({
-  onPick,
-  onClose,
-  currentClass,
-  canClose,
-}: {
-  onPick: (id: HeroClassId) => void;
-  onClose: () => void;
-  currentClass: HeroClassId;
-  canClose: boolean;
-}) {
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="class-select-title"
-      className="absolute inset-0 z-[45] flex items-center justify-center bg-[#06070a]/72 backdrop-blur-[3px] p-4 overflow-y-auto pointer-events-auto"
-    >
-      <div className="w-[min(920px,96vw)] my-auto">
-        <div className="text-center mb-6">
-          <div className="font-display text-xs tracking-[0.3em] text-[#9b8a64] mb-1">
-            CHOOSE YOUR HERO
-          </div>
-          <h1
-            id="class-select-title"
-            className="font-display text-2xl md:text-3xl font-bold tracking-[0.16em] text-[#f3e1b4]"
-          >
-            選擇職業
-          </h1>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {SELECTABLE_CLASS_IDS.map((id) => {
-            const c = HERO_CLASSES[id];
-            return (
-              <button
-                key={id}
-                type="button"
-                onClick={() => onPick(id)}
-                style={{ ['--cls' as string]: c.accentCss, ['--cls2' as string]: c.secondaryCss }}
-                className="group relative flex flex-col items-center text-left gap-3 px-5 py-5 bg-[#0b0d13]/95 border border-[color:var(--cls)]/55 hover:border-[color:var(--cls)] hover:shadow-[0_0_26px_-4px_var(--cls)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--cls)] transition-all cursor-pointer"
-              >
-                <div className="p-3 border border-[color:var(--cls)]/40 bg-[#10131c]">
-                  <ClassEmblem id={id} color={c.accentCss} accent={c.secondaryCss === '#1b5a5e' ? '#f0c96a' : c.secondaryCss} />
-                </div>
-                <div className="text-center">
-                  <div className="font-display text-xl font-bold tracking-[0.12em] text-[color:var(--cls)]">
-                    {c.name}
-                  </div>
-                  <div className="font-display text-[11px] tracking-[0.22em] text-[#8d93a6] uppercase">
-                    {c.title}
-                  </div>
-                </div>
-                {/* Reserve 3 lines so the HP row and everything below line up across cards */}
-                <p className="font-hud text-[12px] leading-relaxed text-[#cfc9ba] self-stretch min-h-[4.875em]">
-                  {c.description}
-                </p>
-                <div className="flex items-center justify-center gap-4 font-hud text-xs tabular-nums">
-                  <span className="flex items-center gap-1 text-[#ff8a98]">
-                    <Heart className="w-3.5 h-3.5 text-[#e63950]" />
-                    HP {c.baseHp}
-                  </span>
-                  <span className={`flex items-center gap-1 ${c.baseShield > 0 ? 'text-[#b6ecff]' : 'text-[#5d6272]'}`}>
-                    <Shield className="w-3.5 h-3.5" />
-                    護盾 {c.baseShield}
-                  </span>
-                </div>
-                <ul className="self-stretch space-y-1 font-hud text-[11px] text-[#aeb3c2]">
-                  {c.highlights.map((h) => (
-                    <li key={h} className="flex gap-1.5">
-                      <span aria-hidden="true" className="text-[color:var(--cls)]">◆</span>
-                      <span>{h}</span>
-                    </li>
-                  ))}
-                </ul>
-                <div className="font-hud text-[11px] text-[#8d93a6] border-t border-[#29241b] pt-2 self-stretch text-center">
-                  技能：<span className="text-[color:var(--cls)] font-semibold">{c.skillName}</span>
-                  <span className="mx-1.5" aria-hidden="true">·</span>
-                  位移：<span className="text-[#d8d4c8]">{c.mobilityName}</span>
-                </div>
-                {id === currentClass && (
-                  <span className="absolute top-2 right-2 px-1.5 py-0.5 font-hud text-[10px] border border-[#5c4c2f] text-[#c7b68d]">
-                    上一局
-                  </span>
-                )}
-              </button>
-            );
-          })}
-
-          {/* Locked third slot */}
-          <div
-            aria-disabled="true"
-            className="relative flex flex-col items-center justify-center gap-3 px-5 py-5 bg-[#0b0d13]/80 border border-dashed border-[#3a3428] opacity-60 cursor-not-allowed select-none min-h-[200px]"
-          >
-            <div className="p-3 border border-[#2c2f3b] bg-[#10131c]">
-              <svg viewBox="0 0 64 64" className="w-16 h-16" aria-hidden="true" fill="none">
-                <rect x="16" y="28" width="32" height="26" fill="#1a1c24" stroke="#5c6173" strokeWidth="2.5" />
-                <path d="M22 28 V20 A10 10 0 0 1 42 20 V28" stroke="#5c6173" strokeWidth="2.5" />
-                <circle cx="32" cy="40" r="3" fill="#5c6173" />
-                <path d="M32 42 V48" stroke="#5c6173" strokeWidth="2.5" />
-              </svg>
-            </div>
-            <div className="font-display text-xl font-bold tracking-[0.12em] text-[#6a6f80]">？？？</div>
-            <div className="font-hud text-xs text-[#6a6f80] tracking-widest">即將推出</div>
-          </div>
-        </div>
-
-        {canClose && (
-          <div className="mt-5 text-center">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-1.5 border border-[#3a3428] bg-[#151822] font-hud text-xs text-[#a3a8b8] hover:text-[#ece6d8] hover:border-[#b89448] transition-colors cursor-pointer"
-            >
-              返回
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function formatDuration(totalSec: number): string {
   const mins = Math.floor(totalSec / 60);
   const secs = totalSec % 60;
@@ -349,7 +195,13 @@ export default function App() {
   const [relicModalOpen, setRelicModalOpen] = useState(false);
   const [codexModalOpen, setCodexModalOpen] = useState(false);
   const [webglError, setWebglError] = useState<string | null>(null);
-  const [classSelectOpen, setClassSelectOpen] = useState(true);
+  const [screen, setScreen] = useState<Screen>('boot');
+  const [me, setMe] = useState<MeResponse | null>(null);
+  const [activeSave, setActiveSave] = useState<CharacterSave | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const saveMgrRef = useRef<SaveManager | null>(null);
+  const screenRef = useRef<Screen>('boot');
+  screenRef.current = screen;
 
   const drawMinimap = useCallback((snap: MinimapSnapshot) => {
     const canvas = minimapCanvasRef.current;
@@ -524,6 +376,7 @@ export default function App() {
       },
       onMinimapUpdate: (snap) => drawMinimap(snap),
       onWebGLError: (msg) => setWebglError(msg),
+      onSaveCheckpoint: () => saveMgrRef.current?.request(),
     });
 
     engineRef.current = engine;
@@ -552,6 +405,132 @@ export default function App() {
     window.addEventListener('keydown', onGlobalKeyDown);
     return () => window.removeEventListener('keydown', onGlobalKeyDown);
   }, []);
+
+  // --- Account / save flow -------------------------------------------------
+  // Restore an existing session on load.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .me()
+      .then((m) => {
+        if (cancelled) return;
+        setMe(m);
+        setScreen('characters');
+      })
+      .catch(() => !cancelled && setScreen('login'));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Menus sit on top of the attract-mode game: keep it from reacting to keys / clicks.
+  useEffect(() => {
+    engineRef.current?.setInputLocked(screen !== 'playing');
+  }, [screen]);
+
+  // The attract-mode hero may die behind the menus: just start another demo run.
+  useEffect(() => {
+    if (screen === 'playing' || !hud.isDead) return;
+    const t = window.setTimeout(() => engineRef.current?.restartRun('warrior'), 1500);
+    return () => window.clearTimeout(t);
+  }, [screen, hud.isDead]);
+
+  // Save on leaving the page. sendBeacon can only POST, hence POST /api/characters/:id/save.
+  useEffect(() => {
+    const onPageHide = () => {
+      if (screenRef.current === 'playing') saveMgrRef.current?.beacon();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted && screenRef.current === 'playing') void saveMgrRef.current?.resyncVersion();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, []);
+
+  const handleLoggedIn = useCallback((m: MeResponse) => {
+    setMe(m);
+    setScreen('characters');
+  }, []);
+
+  const handleUnauthorized = useCallback(() => {
+    saveMgrRef.current = null;
+    setMe(null);
+    setActiveSave(null);
+    setScreen('login');
+  }, []);
+
+  /** Back to attract mode behind the menus. */
+  const resetToAttract = useCallback(() => {
+    saveMgrRef.current = null;
+    setSaveStatus('idle');
+    engineRef.current?.restartRun('warrior');
+  }, []);
+
+  const startGame = useCallback(() => {
+    if (!activeSave) return;
+    const mgr = new SaveManager(
+      activeSave.id,
+      activeSave.save_version,
+      () => engineRef.current?.exportCharacterState() ?? null,
+      setSaveStatus
+    );
+    saveMgrRef.current = mgr;
+    setSaveStatus('idle');
+    engineRef.current?.restartRun(activeSave.class_id as HeroClassId, saveToLoadout(activeSave));
+    setScreen('playing');
+  }, [activeSave]);
+
+  /** Leave the running game for the character list (saves first, never blocks for long). */
+  const leaveGame = useCallback(async () => {
+    const mgr = saveMgrRef.current;
+    if (mgr) {
+      await Promise.race([mgr.flush(), new Promise<void>((r) => window.setTimeout(r, 4000))]);
+    }
+    resetToAttract();
+    setActiveSave(null);
+    setScreen('characters');
+  }, [resetToAttract]);
+
+  const logout = useCallback(async () => {
+    try {
+      await api.logout();
+    } catch {
+      // cookie may already be gone; continue
+    }
+    setMe(null);
+    setActiveSave(null);
+    setScreen('login');
+  }, []);
+
+  /** After a 409: drop local progress and continue from the cloud copy. */
+  const reloadFromCloud = useCallback(async () => {
+    const mgr = saveMgrRef.current;
+    if (!mgr) return;
+    try {
+      const fresh = await api.getCharacter(mgr.characterId);
+      const next = new SaveManager(
+        fresh.id,
+        fresh.save_version,
+        () => engineRef.current?.exportCharacterState() ?? null,
+        setSaveStatus
+      );
+      saveMgrRef.current = next;
+      setActiveSave(fresh);
+      setSaveStatus('idle');
+      engineRef.current?.restartRun(fresh.class_id as HeroClassId, saveToLoadout(fresh));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) handleUnauthorized();
+      else if (err instanceof ApiError && err.status === 404) {
+        resetToAttract();
+        setActiveSave(null);
+        setScreen('characters');
+      }
+    }
+  }, [handleUnauthorized, resetToAttract]);
 
   const hpPct = Math.max(0, Math.min(100, (hud.hp / Math.max(1, hud.maxHp)) * 100));
   const shopCommonTotal = hud.relicBag
@@ -1332,6 +1311,28 @@ export default function App() {
               <span>{hud.soundOn ? 'Sound: On' : 'Sound: Off'}</span>
             </button>
 
+            {/* Back to character list */}
+            <button
+              type="button"
+              onClick={() => void leaveGame()}
+              title="存檔並回到角色選單"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 border border-[#3a3428] bg-[#151822] text-xs font-hud text-[#9ea3b2] hover:text-[#ece6d8] hover:border-[#b89448] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>{activeSave?.name ?? '角色'}</span>
+              <span
+                className={
+                  saveStatus === 'error'
+                    ? 'text-[#ff8a98]'
+                    : saveStatus === 'saving'
+                    ? 'text-[#f7cb52]'
+                    : 'text-[#6a6f80]'
+                }
+              >
+                {saveStatus === 'error' ? '存檔失敗' : saveStatus === 'saving' ? '存檔中…' : saveStatus === 'saved' ? '已存檔' : ''}
+              </span>
+            </button>
+
             {/* Quiet Controls Hint */}
             <div className="hidden xl:flex items-center gap-2 pl-2 border-l border-[#3a3428] text-[11px] font-hud text-[#9096a8] whitespace-nowrap shrink-0">
               <span>WASD Move</span>
@@ -1354,7 +1355,7 @@ export default function App() {
       )}
 
       {/* Monochrome Death Screen & Run Summary Overlay */}
-      {hud.isDead && hud.runSummary && (
+      {screen === 'playing' && hud.isDead && hud.runSummary && (
         <div
           role="dialog"
           aria-modal="true"
@@ -1491,36 +1492,82 @@ export default function App() {
             {/* Player-Controlled Restart Button */}
             <button
               type="button"
-              onClick={() => setClassSelectOpen(true)}
+              onClick={() => engineRef.current && engineRef.current.restartRun(hud.heroClass, engineRef.current.exportCharacterState())}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-[#d6b25e] bg-[#2a2110] text-sm font-display font-bold tracking-[0.16em] text-[#ffe7a8] hover:bg-[#3a2d15] hover:border-[#f0cf7b] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f0cf7b] transition-colors cursor-pointer whitespace-nowrap"
             >
               <RotateCcw className="w-4 h-4 shrink-0" />
-              <span>重新開始冒險</span>
+              <span>再次出發</span>
             </button>
             <button
               type="button"
-              onClick={() => {
-                engineRef.current?.restartRun(hud.heroClass);
-              }}
+              onClick={() => void leaveGame()}
               className="mt-2 w-full px-4 py-2 border border-[#3a3428] bg-[#151822] font-hud text-xs text-[#b9b4a4] hover:text-[#ece6d8] hover:border-[#b89448] transition-colors cursor-pointer whitespace-nowrap"
             >
-              以相同職業再來（{HERO_CLASSES[hud.heroClass].name}）
+              回到角色選單（{activeSave?.name ?? HERO_CLASSES[hud.heroClass].name}）
             </button>
           </div>
         </div>
       )}
 
-      {/* Class Select Overlay */}
-      {classSelectOpen && (
-        <ClassSelectOverlay
-          currentClass={hud.heroClass}
-          canClose={hud.isDead}
-          onClose={() => setClassSelectOpen(false)}
-          onPick={(id) => {
-            engineRef.current?.restartRun(id);
-            setClassSelectOpen(false);
+      {/* Account screens (attract mode keeps running behind them) */}
+      {screen === 'login' && <LoginScreen onLoggedIn={handleLoggedIn} />}
+      {screen === 'characters' && me && (
+        <CharacterSelectScreen
+          me={me}
+          onPick={(save) => {
+            setActiveSave(save);
+            setScreen('lobby');
+          }}
+          onLogout={() => void logout()}
+          onUnauthorized={handleUnauthorized}
+        />
+      )}
+      {screen === 'lobby' && activeSave && (
+        <LobbyScreen
+          save={activeSave}
+          onStart={startGame}
+          onBack={() => {
+            setActiveSave(null);
+            setScreen('characters');
           }}
         />
+      )}
+
+      {/* Save conflict: another session updated this character */}
+      {screen === 'playing' && saveStatus === 'conflict' && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          className="absolute inset-0 z-[60] flex items-center justify-center bg-[#06070a]/80 p-4 pointer-events-auto"
+        >
+          <div className="w-[min(420px,94vw)] bg-[#0b0d13]/96 border border-[#b89448]/85 px-6 py-6 text-center">
+            <h2 className="font-display text-xl font-bold tracking-[0.12em] text-[#f3e1b4] mb-3">存檔版本衝突</h2>
+            <p className="font-hud text-xs text-[#cfc9ba] leading-relaxed mb-5">
+              此角色的雲端存檔已在其他地方更新（例如另一個分頁或裝置）。為避免覆蓋，
+              本次遊玩的進度不會上傳。請載入雲端存檔後繼續。
+            </p>
+            <div className="flex justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => void reloadFromCloud()}
+                className="px-4 py-2 border border-[#d6b25e] bg-[#2a2110] text-sm font-hud text-[#ffe7a8] hover:bg-[#3a2d15] cursor-pointer"
+              >
+                載入雲端存檔
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  resetToAttract();
+                  setActiveSave(null);
+                  setScreen('characters');
+                }}
+                className="px-4 py-2 border border-[#3a3428] bg-[#151822] text-sm font-hud text-[#b9b4a4] hover:text-[#ece6d8] cursor-pointer"
+              >
+                回到角色選單
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Relic Equipment & Bag Vault Modal */}

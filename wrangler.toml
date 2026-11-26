@@ -1,0 +1,17 @@
+name = "ember-vault"
+compatibility_date = "2025-09-01"
+pages_build_output_dir = "dist"
+
+# D1 binding used by Pages Functions (env.DB).
+# database_id from `wrangler d1 create ember-vault-db`. Not a secret (useless without a Cloudflare API token).
+# See docs/p1-setup.md.
+[[d1_databases]]
+binding = "DB"
+database_name = "ember-vault-db"
+database_id = "75d9a4a6-43b8-4364-b095-227a05ac20e5"
+migrations_dir = "migrations"
+
+# Public (non-secret) config. The Google OAuth client id is visible to every browser anyway.
+# Served to the frontend via GET /api/config and used as `aud` when verifying ID tokens.
+[vars]
+GOOGLE_CLIENT_ID = "560217897916-1mdabk4m44qvtrc6hluu64khvc4hoh35.apps.googleusercontent.com"

@@ -1016,7 +1016,9 @@ export function generateRelic(
 ): RelicItem {
   const level = Math.max(1, depth);
   const rarity = forcedRarity ?? rollRarity(source, depth);
-  const id = `relic_${idNum}`;
+  // Relics now persist across sessions (cloud saves), so ids must be unique beyond this session's counter:
+  // append a random suffix so a new drop can never collide with a relic loaded from a save.
+  const id = `relic_${idNum}_${Math.random().toString(36).slice(2, 8)}`;
 
   if (rarity === 'orange') {
     const tpl = UNIQUE_RELIC_CATALOG[Math.floor(Math.random() * UNIQUE_RELIC_CATALOG.length)];

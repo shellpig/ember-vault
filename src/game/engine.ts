@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DungeonAudio } from './audio';
+import type { CharacterUpgrades } from '../../shared/character';
 import {
   TILE_SIZE,
   findGridPath,
@@ -88,7 +89,23 @@ import {
   TileType,
 } from './types';
 
+/** Persistent per-character state the engine can load from / export to a cloud save. */
+export interface CharacterLoadout {
+  gold: number;
+  /** Highest depth ever reached; a loaded run starts on this floor. */
+  maxDepth: number;
+  potions: number;
+  upgrades: CharacterUpgrades;
+  equipped: RelicItem[];
+  bag: RelicItem[];
+}
+
+/** Why the engine asks the host to persist the character right now. */
+export type SaveCheckpointReason = 'town' | 'leaveTown' | 'floor' | 'death';
+
 interface EngineCallbacks {
+  /** Called at save points (town, leaving town, new floor, death) while a saved character is loaded. */
+  onSaveCheckpoint?: (reason: SaveCheckpointReason) => void;
   onHudChange: (hud: HudState) => void;
   onBanner: (banner: BannerEvent) => void;
   onFloatingLabel: (label: FloatingLabelData) => void;
@@ -725,6 +742,13 @@ export class EmbervaultEngine {
   /** Frost Mage ice spike cycle index: 0, 1, 2 (2 = empowered). Never resets on idle. */
   private mageShotIndex = 0;
   private queuedRestartClass: HeroClassId | null = null;
+  private queuedRestartLoadout: CharacterLoadout | null = null;
+  /** True while a cloud-saved character is loaded (enables save checkpoints). */
+  private persistRun = false;
+  /** Suppresses save checkpoints while a run is being (re)built from a save. */
+  private loadingRun = false;
+  /** Highest depth reached by the loaded character (persisted as max_depth). */
+  private maxDepthReached = 1;
   private heroProjectiles: HeroProjectileEntity[] = [];
   /** Last non-zero movement direction (used by Blink). */
   /** This frame's movement input (zero when idle). Blink uses it before falling back to facing. */
@@ -1138,6 +1162,8 @@ export class EmbervaultEngine {
     this.clearLevel();
     this.inTown = false;
     this.depth = depth;
+    if (depth > this.maxDepthReached) this.maxDepthReached = depth;
+    if (!options?.savedSnapshot) this.requestSave('floor');
 
     let buffExpired = false;
     if (options?.tickBuffFloor && this.angelBuff) {
@@ -2680,8 +2706,21 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
+  /** When true (menus / account screens), keyboard and pointer input no longer takes over the hero. */
+  private inputLocked = false;
+
+  public setInputLocked(locked: boolean): void {
+    this.inputLocked = locked;
+    if (locked) {
+      this.keysPressed.clear();
+      this.leftMouseHeld = false;
+    }
+  }
+
   private handleKeyDown = (e: KeyboardEvent): void => {
-    if (this.isDead) return;
+    if (this.isDead || this.inputLocked) return;
+    const tag = (e.target as HTMLElement | null)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
     const code = e.code;
 
     // Hidden shortcut: Ctrl+J jumps straight to the next floor entrance and grants (nextDepth * 100) gold
@@ -2744,7 +2783,7 @@ export class EmbervaultEngine {
   };
 
   private handlePointerDown = (e: PointerEvent): void => {
-    if (this.isDead || this.inTown) return;
+    if (this.isDead || this.inTown || this.inputLocked) return;
     this.activateManualMode();
     if (e.button === 2) {
       this.performPommelStrike();
@@ -2927,6 +2966,7 @@ export class EmbervaultEngine {
 
     this.beginTransition(() => {
       this.buildTown();
+      this.requestSave('town');
     });
   }
 
@@ -2956,6 +2996,7 @@ export class EmbervaultEngine {
 
     const snap = this.savedDungeon;
     this.savedDungeon = null;
+    this.requestSave('leaveTown');
     this.beginTransition(() => {
       this.buildLevel(snap.depth, { savedSnapshot: snap });
     });
@@ -3053,14 +3094,21 @@ export class EmbervaultEngine {
     this.pommelMaxCooldown = def.skillCooldown;
   }
 
-  public restartRun(classId?: HeroClassId): void {
+  /**
+   * Restarts the run. Without `loadout` this is the attract-mode / legacy restart (fresh hero, depth 1,
+   * auto-pilot, nothing persisted). With `loadout` the hero is rebuilt from a character save: upgrades,
+   * relics, gold, potions are restored, derived stats are recomputed and the run starts on `maxDepth`.
+   */
+  public restartRun(classId?: HeroClassId, loadout?: CharacterLoadout): void {
     const nextClass: HeroClassId = classId ?? this.heroClass;
     if (this.transitionState !== 'none') {
       // A fade is in progress (e.g. the initial fade-in): run the restart as soon as it ends.
       this.queuedRestartClass = nextClass;
+      this.queuedRestartLoadout = loadout ?? null;
       return;
     }
     this.queuedRestartClass = null;
+    this.queuedRestartLoadout = null;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
@@ -3069,6 +3117,8 @@ export class EmbervaultEngine {
       this.savedDungeon = null;
       this.angelBuff = null;
       this.portalSafePos = null;
+      this.loadingRun = true;
+      this.persistRun = Boolean(loadout);
       this.applyHeroClassStats(nextClass);
       this.applyHeroClassRig(nextClass);
       this.attackCooldown = 0;
@@ -3102,12 +3152,80 @@ export class EmbervaultEngine {
       this.bloodLeechAccum = 0;
       this.pommelCooldown = 0;
       this.pommelAnim = 0;
+      let startDepth = 1;
+      if (loadout) {
+        this.applyLoadout(loadout);
+        startDepth = Math.max(1, Math.floor(loadout.maxDepth));
+      } else {
+        this.controlMode = 'auto';
+      }
+      this.maxDepthReached = startDepth;
       this.recomputeRelicStats(false);
+      if (loadout) {
+        // Derived stats (max HP / shield incl. relic bonuses) are final now: start the run at full health.
+        this.hp = this.getEffectiveMaxHp();
+        this.shield = this.getEffectiveMaxShield();
+      }
       this.keysPressed.clear();
       this.heroRig.body.rotation.z = 0;
       this.heroRig.body.position.y = 0;
-      this.buildLevel(1);
+      this.buildLevel(startDepth);
+      this.loadingRun = false;
     });
+  }
+
+  /**
+   * Applies a saved loadout on top of the freshly reset class stats (called from restartRun).
+   * Upgrade levels are re-applied with the same formulas purchaseUpgrade uses.
+   */
+  private applyLoadout(l: CharacterLoadout): void {
+    const lvl = (n: number, max: number) => Math.max(0, Math.min(max, Math.floor(Number(n) || 0)));
+    const up = l.upgrades;
+    if (this.isMage()) {
+      this.hpShieldUpgrades = lvl(up.hpShield, FROST_MAGE.maxHpShieldUpgrades);
+      this.shieldSpeedUpgrades = lvl(up.shieldSpeed, FROST_MAGE.maxShieldSpeedUpgrades);
+      this.atkUpgrades = lvl(up.atk, FROST_MAGE.maxAtkUpgrades);
+      this.critUpgrades = lvl(up.crit, FROST_MAGE.maxCritUpgrades);
+      this.maxHp = HERO_CLASSES.frost_mage.baseHp + FROST_MAGE.hpPerUpgrade * this.hpShieldUpgrades;
+      this.baseMaxShield =
+        HERO_CLASSES.frost_mage.baseShield + FROST_MAGE.shieldPerUpgrade * this.hpShieldUpgrades;
+    } else {
+      this.hpUpgrades = lvl(up.hp, this.getUpgradeMax('hp'));
+      this.atkUpgrades = lvl(up.atk, 999);
+      this.armorUpgrades = lvl(up.armor, this.maxArmorUpgrades);
+      this.critUpgrades = lvl(up.crit, this.maxCritUpgrades);
+      this.maxHp = Math.min(this.maxHpCap, HERO_CLASSES.warrior.baseHp + 10 * this.hpUpgrades);
+    }
+    this.gold = Math.max(0, Math.floor(l.gold));
+    this.potions = Math.max(0, Math.floor(l.potions));
+    this.equippedRelics = l.equipped.slice(0, 4).map((r) => ({ ...r }));
+    this.relicBag = l.bag.slice(0, this.relicBagCap).map((r) => ({ ...r }));
+    for (const r of [...this.equippedRelics, ...this.relicBag]) {
+      this.discoveredRelicIds.add(r.templateId);
+    }
+  }
+
+  /** Snapshot of the persistent character state (gold, upgrades, relics, potions, max depth) for saving. */
+  public exportCharacterState(): CharacterLoadout {
+    return {
+      gold: this.gold,
+      maxDepth: Math.max(this.maxDepthReached, this.depth),
+      potions: this.potions,
+      upgrades: {
+        hp: this.hpUpgrades,
+        atk: this.atkUpgrades,
+        armor: this.armorUpgrades,
+        crit: this.critUpgrades,
+        hpShield: this.hpShieldUpgrades,
+        shieldSpeed: this.shieldSpeedUpgrades,
+      },
+      equipped: this.equippedRelics.map((r) => ({ ...r })),
+      bag: this.relicBag.map((r) => ({ ...r })),
+    };
+  }
+
+  private requestSave(reason: SaveCheckpointReason): void {
+    if (this.persistRun && !this.loadingRun) this.callbacks.onSaveCheckpoint?.(reason);
   }
 
   public adjustZoom(delta: number): void {
@@ -5787,6 +5905,7 @@ export class EmbervaultEngine {
 
     if (this.hp <= 0) {
       this.isDead = true;
+      this.requestSave('death');
       this.slainBy = sourceLabel;
       this.heroVx = 0;
       this.heroVz = 0;
@@ -7306,7 +7425,7 @@ export class EmbervaultEngine {
       if (this.fadeOpacity <= 0) {
         this.transitionState = 'none';
         if (this.queuedRestartClass) {
-          this.restartRun(this.queuedRestartClass);
+          this.restartRun(this.queuedRestartClass, this.queuedRestartLoadout ?? undefined);
         }
       }
     }
