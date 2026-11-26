@@ -6138,13 +6138,15 @@ export class EmbervaultEngine {
   }
 
   private tryAutoTravelDash(moveX: number, moveZ: number, distToGoal: number): void {
-    // The mage's Blink is a 5-unit teleport: keep it for combat escapes, never for travel
-    if (this.isMage()) return;
+    // Warrior dash travels ~2.15 units; the mage's Blink teleports 5 units, so every
+    // safety check below scales with the actual travel distance.
+    const mage = this.isMage();
+    const travel = mage ? FROST_MAGE.blinkDistance : 2.15;
     if (
       this.dashCooldown > 0 ||
       this.dashTimer > 0 ||
       this.aiForcePathTimer > 0 ||
-      distToGoal < 3.4
+      distToGoal < (mage ? travel + 1.5 : 3.4) // never blink past the key / altar / stairs
     ) {
       return;
     }
@@ -6166,11 +6168,11 @@ export class EmbervaultEngine {
       }
     }
 
-    // Ensure a completely clear straight corridor ahead (dash travels ~2.16 units)
-    const checkEndX = this.heroX + nx * 2.55;
-    const checkEndZ = this.heroZ + nz * 2.55;
-    const landX = this.heroX + nx * 2.15;
-    const landZ = this.heroZ + nz * 2.15;
+    // Ensure a completely clear straight corridor ahead for the whole travel distance
+    const checkEndX = this.heroX + nx * (travel + 0.4);
+    const checkEndZ = this.heroZ + nz * (travel + 0.4);
+    const landX = this.heroX + nx * travel;
+    const landZ = this.heroZ + nz * travel;
     if (
       !hasLineOfSight(this.dungeon, this.heroX, this.heroZ, checkEndX, checkEndZ, this.doorUnlocked, 0.44) ||
       !this.canMoveTo(landX, landZ, 0.42)
