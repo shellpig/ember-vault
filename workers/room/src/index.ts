@@ -303,6 +303,19 @@ export class Room extends DurableObject<Record<string, never>> {
         this.broadcast({ type: 'gameStarted' });
         return;
       }
+      case 'townPos': {
+        // P5-C: town positions go straight to everybody else (never through the host). `from` is stamped here.
+        if (!(await this.loadMeta())?.started) return;
+        const num = (v: unknown, lim: number): number | null =>
+          typeof v === 'number' && Number.isFinite(v) ? Math.max(-lim, Math.min(lim, Math.round(v))) : null;
+        const x = num(msg.x, 100000);
+        const z = num(msg.z, 100000);
+        const f = num(msg.f, 1000);
+        const a = msg.a === 1 || msg.a === 2 ? msg.a : 0;
+        if (x === null || z === null || f === null) return;
+        this.broadcast({ type: 'townPos', from: att.playerId, x, z, f, a }, ws);
+        return;
+      }
       case 'relay': {
         if (!(await this.loadMeta())?.started) return;
         // Members may only send small messages, except for the rare loadout hand-over

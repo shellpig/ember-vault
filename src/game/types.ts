@@ -226,6 +226,17 @@ export interface RunSummary {
   slainBy: string;
 }
 
+/** A hero entry of the party panel. */
+export interface PartyMemberInfo {
+  id: string;
+  name: string;
+  classId: string;
+  isSelf: boolean;
+  isHost: boolean;
+  /** 0 in the dungeon, 1 in town, 2 downed */
+  state: 0 | 1 | 2;
+}
+
 export interface HudState {
   hp: number;
   maxHp: number; // Effective max HP (baseMaxHp + relic HP bonus)
@@ -266,6 +277,10 @@ export interface HudState {
   rescuePrompt: { name: string; progress: number } | null;
   /** Heroes in the run (local player + bot teammates). */
   partySize: number;
+  /** Room games: every hero of the party and where they are (empty in single player). */
+  party: PartyMemberInfo[];
+  /** Room games: what the held (black) screen is waiting for ("正在進入第 N 層…"), null when nothing is held. */
+  mpWait: string | null;
   equippedRelics: RelicItem[];
   relicBag: RelicItem[];
   relicBagCap: number;
