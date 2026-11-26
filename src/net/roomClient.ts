@@ -17,6 +17,7 @@ export type RoomErrorKind =
   | 'forbidden'
   | 'not_found'
   | 'full'
+  | 'game_started'
   | 'network'
   | 'connect_failed';
 
@@ -40,6 +41,8 @@ export function roomErrorText(kind: RoomErrorKind): string {
       return '找不到房間，請確認房號是否正確';
     case 'full':
       return '房間已滿（最多 4 人）';
+    case 'game_started':
+      return '遊戲已開始，無法加入（中途加入尚未開放）';
     case 'network':
       return '無法連線到伺服器';
     default:
@@ -75,7 +78,12 @@ export class RoomClient {
   private lastRtt: number | undefined;
   private requestedClose = false;
 
-  constructor(private readonly handlers: RoomClientHandlers) {}
+  constructor(private handlers: RoomClientHandlers) {}
+
+  /** The lobby hands the open connection over to the game (P5-B): the new handlers receive everything from now on. */
+  setHandlers(handlers: RoomClientHandlers): void {
+    this.handlers = handlers;
+  }
 
   /** Dry-run over HTTP first (precise errors), then opens the WebSocket. Resolves once the socket is open. */
   async connect(rawCode: string, characterId: string): Promise<void> {
@@ -94,7 +102,15 @@ export class RoomClient {
       if (res.status === 401) throw new RoomConnectError('unauthorized');
       if (res.status === 403) throw new RoomConnectError('forbidden');
       if (res.status === 404) throw new RoomConnectError('not_found');
-      if (res.status === 409) throw new RoomConnectError('full');
+      if (res.status === 409) {
+        let code = '';
+        try {
+          code = String(((await res.json()) as { error?: unknown }).error ?? '');
+        } catch {
+          // no body: treat as full
+        }
+        throw new RoomConnectError(code === 'game_started' ? 'game_started' : 'full');
+      }
       throw new RoomConnectError('connect_failed');
     }
 
@@ -157,6 +173,16 @@ export class RoomClient {
 
   send(msg: ClientMessage): void {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+  }
+
+  /** Host only: lock the room and tell everybody the game begins. */
+  startGame(): void {
+    this.send({ type: 'startGame' });
+  }
+
+  /** Game traffic (P5-B). Host: `to` = one playerId or omitted for everybody else. Member: always goes to the host. */
+  sendRelay(kind: string, payload: unknown, to?: string): void {
+    this.send({ type: 'relay', kind, payload, to });
   }
 
   sendChat(text: string): void {
