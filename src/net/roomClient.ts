@@ -10,6 +10,7 @@ import {
   type ClientMessage,
   type ServerMessage,
 } from '../../shared/room';
+import type { TradeOfferItem } from '../../shared/trade';
 
 export type RoomErrorKind =
   | 'invalid_code'
@@ -188,6 +189,32 @@ export class RoomClient {
   /** P5-C: this hero's town position; the server fans it out to everybody else (never through the host). */
   sendTownPos(p: { x: number; z: number; f: number; a: 0 | 1 | 2 }): void {
     this.send({ type: 'townPos', x: p.x, z: p.z, f: p.f, a: p.a });
+  }
+
+  /** P6: tell the server whether this hero is in town (send on change only). */
+  sendTownState(inTown: boolean): void {
+    this.send({ type: 'townState', inTown });
+  }
+
+  /** P6 trade messages (see shared/room.ts). */
+  tradeRequest(to: string): void {
+    this.send({ type: 'tradeReq', to });
+  }
+
+  tradeAccept(tradeId: string): void {
+    this.send({ type: 'tradeAccept', tradeId });
+  }
+
+  tradeOffer(tradeId: string, offer: { gold: number; relics: TradeOfferItem[] }): void {
+    this.send({ type: 'tradeOffer', tradeId, gold: offer.gold, relics: offer.relics });
+  }
+
+  tradeConfirm(tradeId: string, rev: number): void {
+    this.send({ type: 'tradeConfirm', tradeId, rev });
+  }
+
+  tradeCancel(tradeId?: string): void {
+    this.send({ type: 'tradeCancel', tradeId });
   }
 
   sendChat(text: string): void {

@@ -27,6 +27,7 @@ export const onRequestGet: PagesFunction<Env, 'code'> = async ({ request, env, p
 
   const identity: VerifiedIdentity = {
     accountId: account.id,
+    characterId: row.id,
     name: row.name,
     classId: row.class_id,
     maxDepth: row.max_depth,

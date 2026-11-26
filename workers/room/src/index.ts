@@ -18,8 +18,24 @@ import {
   type RoomErrorCode,
   type RoomMember,
   type ServerMessage,
+  type TradeEndReason,
+  type TradeSideView,
   type VerifiedIdentity,
 } from '../../../shared/room';
+import {
+  EMPTY_TRADE_OFFER,
+  TRADE_REQUEST_TTL_MS,
+  parseTradeOffer,
+  type TradeErrorCode,
+  type TradeOffer,
+} from '../../../shared/trade';
+import type { RelicItem } from '../../../src/game/relics';
+import { executeTrade, resolveOfferFromDb } from './trade';
+
+/** Bindings of the Room Worker (workers/room/wrangler.toml). `DB` is the same D1 database the Pages project uses (P6 trades). */
+interface Env {
+  DB: D1Database;
+}
 
 /**
  * Room Durable Object (one instance per room code). Docs: docs/multiplayer-spec.md section 5.
@@ -36,6 +52,11 @@ import {
  * P5-B: `relay` messages (host -> everybody or one member, member -> host) carry the game traffic. They are only
  * accepted once the host has started the game. The sender id is stamped here. Sizes and rates depend on the role
  * (the host sends 15 Hz snapshots up to 32 KB, members send small inputs). Clients must send only on change.
+ *
+ * P6 trades: the DO arbitrates trades between two members who are both in town (as reported by their clients). Offers are
+ * kept in memory only (a hibernation eviction simply drops them; clients that talk about an unknown trade are told it
+ * `expired`). Execution reads both characters from D1 and writes both saves plus a `trades` row in one batch
+ * (workers/room/src/trade.ts). Nothing periodic is added: every trade message is user driven.
  */
 interface RoomMeta {
   hostAccountId: string;
@@ -47,6 +68,10 @@ interface RoomMeta {
 /** Stored with serializeAttachment so it survives hibernation. */
 interface Attachment extends RoomMember {
   accountId: string;
+  /** The character this connection plays (from the verified identity); P6 trades read / write its D1 row. */
+  characterId: string;
+  /** P6: client reported "my hero is in town". Survives hibernation with the attachment. */
+  inTown?: boolean;
   /** Set on a connection that is being replaced by a newer one from the same account. */
   replaced?: boolean;
 }
@@ -54,6 +79,36 @@ interface Attachment extends RoomMember {
 interface Bucket {
   tokens: number;
   last: number;
+}
+
+/** One player's half of a trade (in memory only). */
+interface TradeSide {
+  playerId: string;
+  characterId: string;
+  accountId: string;
+  name: string;
+  offer: TradeOffer;
+  /** The offered relics as read from D1 when the offer was made (shown to the partner, compared again at execution). */
+  items: RelicItem[];
+  confirmed: boolean;
+  /** Counts offer messages; an offer whose D1 read finishes after a newer one arrived is dropped. */
+  seq: number;
+}
+
+interface Trade {
+  id: string;
+  /** The player who asked. */
+  a: TradeSide;
+  /** The player who was asked. */
+  b: TradeSide;
+  state: 'pending' | 'open';
+  /** Bumped on every offer change; a confirmation only counts for the revision it was made on. */
+  rev: number;
+  createdAt: number;
+  /** Offer reads from D1 still in flight (confirmations wait for them to settle). */
+  inflight: number;
+  /** The D1 batch is running: the trade can no longer be changed or cancelled. */
+  executing: boolean;
 }
 
 function jsonResponse(status: number, body: Record<string, unknown>): Response {
@@ -74,11 +129,13 @@ function parseIdentity(request: Request): VerifiedIdentity | null {
     const v = JSON.parse(decodeURIComponent(raw)) as Partial<VerifiedIdentity>;
     if (
       typeof v.accountId === 'string' &&
+      typeof v.characterId === 'string' &&
+      v.characterId.length > 0 &&
       typeof v.name === 'string' &&
       typeof v.classId === 'string' &&
       typeof v.maxDepth === 'number'
     ) {
-      return { accountId: v.accountId, name: v.name, classId: v.classId, maxDepth: v.maxDepth };
+      return { accountId: v.accountId, characterId: v.characterId, name: v.name, classId: v.classId, maxDepth: v.maxDepth };
     }
   } catch {
     // fall through
@@ -86,12 +143,14 @@ function parseIdentity(request: Request): VerifiedIdentity | null {
   return null;
 }
 
-export class Room extends DurableObject<Record<string, never>> {
+export class Room extends DurableObject<Env> {
   private meta: RoomMeta | null | undefined; // undefined = not loaded yet
   private readonly buckets = new WeakMap<WebSocket, Bucket>();
   private readonly latencies = new Map<string, number>();
+  /** P6: active trades by id (at most one per player; never persisted). */
+  private readonly trades = new Map<string, Trade>();
 
-  constructor(ctx: DurableObjectState, env: Record<string, never>) {
+  constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Keep-alive: the client sends the text "ping" every ~30 s; the runtime answers "pong" without waking the DO.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(KEEPALIVE_PING, KEEPALIVE_PONG));
@@ -172,6 +231,7 @@ export class Room extends DurableObject<Record<string, never>> {
       playerId = existing.att.playerId;
       existing.ws.serializeAttachment({ ...existing.att, replaced: true } satisfies Attachment);
       this.send(existing.ws, { type: 'replaced' });
+      this.cancelTradesOf(playerId, 'partner_left');
       try {
         existing.ws.close(CLOSE_REPLACED, 'replaced');
       } catch {
@@ -182,6 +242,7 @@ export class Room extends DurableObject<Record<string, never>> {
     const att: Attachment = {
       playerId,
       accountId: identity.accountId,
+      characterId: identity.characterId,
       name: identity.name,
       classId: identity.classId,
       maxDepth: identity.maxDepth,
@@ -316,6 +377,27 @@ export class Room extends DurableObject<Record<string, never>> {
         this.broadcast({ type: 'townPos', from: att.playerId, x, z, f, a }, ws);
         return;
       }
+      case 'townState': {
+        if (!(await this.loadMeta())?.started) return;
+        const inTown = msg.inTown === true;
+        if (att.inTown === inTown) return;
+        ws.serializeAttachment({ ...att, inTown } satisfies Attachment);
+        if (!inTown) this.cancelTradesOf(att.playerId, 'left_town');
+        return;
+      }
+      case 'tradeReq':
+      case 'tradeAccept':
+      case 'tradeOffer':
+      case 'tradeConfirm':
+      case 'tradeCancel': {
+        if (message.length > MAX_MESSAGE_BYTES) {
+          ws.close(CLOSE_TOO_BIG, 'message_too_big');
+          return;
+        }
+        if (!(await this.loadMeta())?.started) return;
+        await this.onTradeMessage(ws, att, msg);
+        return;
+      }
       case 'relay': {
         if (!(await this.loadMeta())?.started) return;
         // Members may only send small messages, except for the rare loadout hand-over
@@ -356,6 +438,216 @@ export class Room extends DurableObject<Record<string, never>> {
     }
   }
 
+  // --- P6: trades -----------------------------------------------------------------------------------------
+
+  private socketOf(playerId: string): { ws: WebSocket; att: Attachment } | undefined {
+    return this.liveSockets().find((s) => s.att.playerId === playerId);
+  }
+
+  private tradeOf(playerId: string): Trade | undefined {
+    for (const t of this.trades.values()) if (t.a.playerId === playerId || t.b.playerId === playerId) return t;
+    return undefined;
+  }
+
+  private sendTo(playerId: string, msg: ServerMessage): void {
+    const s = this.socketOf(playerId);
+    if (s) this.send(s.ws, msg);
+  }
+
+  /** Ends a trade that did not execute. `by` (the one who caused it) is told 'self', the other side gets `reason`. */
+  private endTrade(trade: Trade, by: string | null, reason: TradeEndReason, code?: TradeErrorCode): void {
+    this.trades.delete(trade.id);
+    for (const side of [trade.a, trade.b]) {
+      this.sendTo(side.playerId, {
+        type: 'tradeEnd',
+        tradeId: trade.id,
+        reason: side.playerId === by ? 'self' : reason,
+        code,
+      });
+    }
+  }
+
+  /** The player left (disconnected, replaced, left town ...): their trade, if any, is over. A running execution is left alone. */
+  private cancelTradesOf(playerId: string, reason: TradeEndReason): void {
+    const t = this.tradeOf(playerId);
+    if (t && !t.executing) this.endTrade(t, playerId, reason);
+  }
+
+  private tradeView(side: TradeSide): TradeSideView {
+    return {
+      gold: side.offer.gold,
+      relics: side.offer.relics.map((o, i) => ({ id: o.id, from: o.from, item: side.items[i] })),
+      confirmed: side.confirmed,
+    };
+  }
+
+  private sendTradeUpdate(trade: Trade): void {
+    const a = this.tradeView(trade.a);
+    const b = this.tradeView(trade.b);
+    this.sendTo(trade.a.playerId, { type: 'tradeUpdate', tradeId: trade.id, rev: trade.rev, mine: a, theirs: b });
+    this.sendTo(trade.b.playerId, { type: 'tradeUpdate', tradeId: trade.id, rev: trade.rev, mine: b, theirs: a });
+  }
+
+  private refuseTrade(ws: WebSocket, tradeId: string, reason: TradeEndReason): void {
+    this.send(ws, { type: 'tradeEnd', tradeId, reason });
+  }
+
+  private async onTradeMessage(
+    ws: WebSocket,
+    att: Attachment,
+    msg: Extract<ClientMessage, { type: 'tradeReq' | 'tradeAccept' | 'tradeOffer' | 'tradeConfirm' | 'tradeCancel' }>
+  ): Promise<void> {
+    if (msg.type === 'tradeReq') {
+      this.onTradeReq(ws, att, msg.to);
+      return;
+    }
+    const trade = this.tradeOf(att.playerId);
+    const id = typeof msg.tradeId === 'string' ? msg.tradeId : '';
+    if (msg.type === 'tradeCancel') {
+      if (trade && !trade.executing && (!id || id === trade.id)) this.endTrade(trade, att.playerId, 'cancelled');
+      // A trade we no longer know (evicted, already over): tell the client so it stops waiting for an answer
+      else if (!trade && id) this.refuseTrade(ws, id, 'expired');
+      return;
+    }
+    // Everything else must name the sender's current trade; otherwise it is gone (e.g. the DO was evicted)
+    if (!trade || trade.id !== id) {
+      this.refuseTrade(ws, id, 'expired');
+      return;
+    }
+    if (trade.executing) return;
+    const me = trade.a.playerId === att.playerId ? trade.a : trade.b;
+    const other = me === trade.a ? trade.b : trade.a;
+
+    if (msg.type === 'tradeAccept') {
+      if (trade.state !== 'pending' || trade.b.playerId !== att.playerId) return;
+      if (Date.now() - trade.createdAt > TRADE_REQUEST_TTL_MS + 5000) {
+        this.endTrade(trade, null, 'timeout');
+        return;
+      }
+      if (!att.inTown || !this.socketOf(other.playerId)?.att.inTown) {
+        this.endTrade(trade, null, 'left_town');
+        return;
+      }
+      trade.state = 'open';
+      trade.rev = 0;
+      this.sendTo(trade.a.playerId, { type: 'tradeOpen', tradeId: trade.id, partner: trade.b.playerId, partnerName: trade.b.name });
+      this.sendTo(trade.b.playerId, { type: 'tradeOpen', tradeId: trade.id, partner: trade.a.playerId, partnerName: trade.a.name });
+      this.sendTradeUpdate(trade);
+      return;
+    }
+
+    if (trade.state !== 'open') return;
+
+    if (msg.type === 'tradeOffer') {
+      const offer = parseTradeOffer({ gold: msg.gold, relics: msg.relics });
+      if (!offer) {
+        this.send(ws, { type: 'tradeError', tradeId: trade.id, code: 'invalid_offer' });
+        return;
+      }
+      const seq = ++me.seq;
+      trade.inflight++;
+      let res: Awaited<ReturnType<typeof resolveOfferFromDb>>;
+      try {
+        res = await resolveOfferFromDb(this.env.DB, me.characterId, me.accountId, offer);
+      } finally {
+        trade.inflight--;
+      }
+      // The trade may have ended / started executing, or a newer offer may have arrived, while D1 was read
+      if (this.trades.get(trade.id) !== trade || trade.executing || me.seq !== seq) return;
+      if (!res.ok) {
+        this.send(ws, { type: 'tradeError', tradeId: trade.id, code: res.error });
+        return;
+      }
+      me.offer = offer;
+      me.items = res.items;
+      trade.a.confirmed = false;
+      trade.b.confirmed = false;
+      trade.rev++;
+      this.sendTradeUpdate(trade);
+      return;
+    }
+
+    if (msg.type === 'tradeConfirm') {
+      // Only the exact state the player was looking at can be confirmed; offers still being read settle first
+      if (msg.rev !== trade.rev || trade.inflight > 0 || me.confirmed) return;
+      const empty = (s: TradeSide) => s.offer.gold === 0 && s.offer.relics.length === 0;
+      if (empty(trade.a) && empty(trade.b)) {
+        this.send(ws, { type: 'tradeError', tradeId: trade.id, code: 'empty_trade' });
+        return;
+      }
+      me.confirmed = true;
+      this.sendTradeUpdate(trade);
+      if (other.confirmed) await this.runTrade(trade);
+    }
+  }
+
+  private onTradeReq(ws: WebSocket, att: Attachment, to: unknown): void {
+    const target = typeof to === 'string' && to !== att.playerId ? this.socketOf(to) : undefined;
+    if (!target) return this.refuseTrade(ws, '', 'unavailable');
+    // A request nobody answered is dropped lazily so it cannot block either player forever
+    for (const pid of [att.playerId, target.att.playerId]) {
+      const old = this.tradeOf(pid);
+      if (old && old.state === 'pending' && !old.executing && Date.now() - old.createdAt > TRADE_REQUEST_TTL_MS + 5000) {
+        this.endTrade(old, null, 'timeout');
+      }
+    }
+    if (!att.inTown || !target.att.inTown || this.tradeOf(att.playerId) || this.tradeOf(target.att.playerId)) {
+      return this.refuseTrade(ws, '', 'unavailable');
+    }
+    const side = (a: Attachment): TradeSide => ({
+      playerId: a.playerId,
+      characterId: a.characterId,
+      accountId: a.accountId,
+      name: a.name,
+      offer: EMPTY_TRADE_OFFER,
+      items: [],
+      confirmed: false,
+      seq: 0,
+    });
+    const trade: Trade = {
+      id: crypto.randomUUID().slice(0, 8),
+      a: side(att),
+      b: side(target.att),
+      state: 'pending',
+      rev: 0,
+      createdAt: Date.now(),
+      inflight: 0,
+      executing: false,
+    };
+    this.trades.set(trade.id, trade);
+    this.send(ws, { type: 'tradeWait', tradeId: trade.id, partner: trade.b.playerId, partnerName: trade.b.name });
+    this.send(target.ws, { type: 'tradeRequest', tradeId: trade.id, from: trade.a.playerId, name: trade.a.name });
+  }
+
+  /** Both confirmed: read both saves, check, write both + the trade row in one batch, then tell both players. */
+  private async runTrade(trade: Trade): Promise<void> {
+    trade.executing = true;
+    let res: Awaited<ReturnType<typeof executeTrade>>;
+    try {
+      const party = (s: TradeSide) => ({ characterId: s.characterId, accountId: s.accountId, offer: s.offer, snapshot: s.items });
+      res = await executeTrade(this.env.DB, party(trade.a), party(trade.b));
+    } catch {
+      res = { ok: false, error: 'server_error' };
+    }
+    this.trades.delete(trade.id);
+    if (!res.ok) {
+      for (const s of [trade.a, trade.b]) {
+        this.sendTo(s.playerId, { type: 'tradeEnd', tradeId: trade.id, reason: 'failed', code: res.error });
+      }
+      return;
+    }
+    for (const [s, r] of [[trade.a, res.a], [trade.b, res.b]] as const) {
+      this.sendTo(s.playerId, {
+        type: 'tradeDone',
+        tradeId: trade.id,
+        saveVersion: r.version,
+        gold: r.gold,
+        gave: r.gave,
+        received: r.received,
+      });
+    }
+  }
+
   async webSocketClose(ws: WebSocket): Promise<void> {
     await this.onDisconnect(ws);
   }
@@ -369,6 +661,7 @@ export class Room extends DurableObject<Record<string, never>> {
     if (!att || att.replaced) return; // replaced connections are not a leave
     if (!(await this.loadMeta())) return; // room already closed
     this.latencies.delete(att.playerId);
+    this.cancelTradesOf(att.playerId, 'partner_left');
     if (att.isHost) {
       await this.closeRoom('host_left');
       return;
@@ -380,6 +673,7 @@ export class Room extends DurableObject<Record<string, never>> {
   private async closeRoom(reason: 'host_left' | 'idle'): Promise<void> {
     const sockets = this.ctx.getWebSockets();
     this.meta = null; // from here on joins get 404 and disconnects are ignored
+    this.trades.clear();
     for (const ws of sockets) {
       this.send(ws, { type: 'roomClosed', reason });
       try {

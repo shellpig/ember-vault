@@ -13,6 +13,13 @@ preview_urls = false
 name = "ROOM"
 class_name = "Room"
 
+# P6 trades: the Room DO reads and writes both characters + the `trades` row in one D1 batch. Same database as the
+# Pages project (wrangler.toml); the Worker does not own migrations, `npm run db:migrate:*` applies them from the root.
+[[d1_databases]]
+binding = "DB"
+database_name = "ember-vault-db"
+database_id = "75d9a4a6-43b8-4364-b095-227a05ac20e5"
+
 # The free plan only supports SQLite-backed Durable Objects.
 [[migrations]]
 tag = "v1"

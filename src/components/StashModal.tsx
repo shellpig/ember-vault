@@ -33,7 +33,7 @@ const RARITY_TABS: Array<{ id: RarityFilter; label: string }> = [
 ];
 
 /** Same ordering used by the equipment modal: rarity first, then level (high to low). */
-function compareRarityLevel(a: RelicItem, b: RelicItem): number {
+export function compareRarityLevel(a: RelicItem, b: RelicItem): number {
   return RARITY_ORDER[a.rarity] - RARITY_ORDER[b.rarity] || b.level - a.level;
 }
 
@@ -50,7 +50,7 @@ interface StashModalProps {
   onClose: () => void;
 }
 
-function RelicMiniCard({
+export function RelicMiniCard({
   item,
   heroClass,
   action,

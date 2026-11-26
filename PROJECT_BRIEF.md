@@ -4,7 +4,7 @@
 
 最後更新：2026-11-26
 
-> **當前進度**：單人完整玩法（三職業、40 層四大區域、遺物與套裝、城鎮與倉庫、倒地與傳送門、多英雄引擎與本機 bot 隊友）以及 **Cloudflare 帳號存檔（P1）**、**倉庫（P2）**、**死亡與傳送門改版（P3）**、**多英雄與城鎮場景分離（P4-A／P4-B／P4-C）**、**多人房間基礎設施（P5-A）**、**多人地城即時同步（P5-B）**、**城鎮同步與多人進出流程（P5-C）** 皆已完成並合併至 `main`（`a0da27a`），Room Worker 也已部署更新至 P5-C 版本。目前 1–4 人可完整開房協力打地城、在城鎮互看模型與名牌、全員回城後任一人先行解凍回地城、使用隊伍面板與遊戲內聊天；遊戲開始後鎖房（尚未開放中途加入與自動重連）。路線圖外另新增第三職業**亞馬遜獵人**（`8520060`，弓箭普攻、隨機戰寵與多人戰寵同步）與戰士／法師祭壇升級平衡（`3ff73a3`、`cdb7369`）。**下一步：P6 城鎮交易（城鎮同房玩家交易 UI、Room DO 仲裁、D1 batch 原子寫入與 `save_version` 防刷裝）。**
+> **當前進度**：單人完整玩法（三職業、40 層四大區域、遺物與套裝、城鎮與倉庫、倒地與傳送門、多英雄引擎與本機 bot 隊友）以及 **Cloudflare 帳號存檔（P1）**、**倉庫（P2）**、**死亡與傳送門改版（P3）**、**多英雄與城鎮場景分離（P4-A／P4-B／P4-C）**、**多人房間基礎設施（P5-A）**、**多人地城即時同步（P5-B）**、**城鎮同步與多人進出流程（P5-C）** 皆已完成並合併至 `main`（`a0da27a`），Room Worker 也已部署更新至 P5-C 版本。目前 1–4 人可完整開房協力打地城、在城鎮互看模型與名牌、全員回城後任一人先行解凍回地城、使用隊伍面板與遊戲內聊天；遊戲開始後鎖房（尚未開放中途加入與自動重連）。路線圖外另新增第三職業**亞馬遜獵人**（`8520060`，弓箭普攻、隨機戰寵與多人戰寵同步）與戰士／法師祭壇升級平衡（`3ff73a3`、`cdb7369`）。**P6 城鎮交易（同房玩家交易 UI、Room DO 仲裁、D1 batch 原子寫入與 `save_version` 防刷裝）已實作於分支 `feat/p6-town-trade`，待驗收（Room Worker 現在綁 D1，需 `npm run deploy:room`，見 `docs/p5-setup.md`）。**
 
 ---
 
@@ -34,6 +34,7 @@
 │   └── 0001_init.sql             # D1 schema：accounts, sessions, characters, trades
 ├── shared/                       # 瀏覽器／Pages Functions／Room Worker 共用純 TS
 │   ├── character.ts              # 角色存檔型別與數量上限（8 角色 / 4 裝 / 30 包 / 200 倉）
+│   ├── trade.ts                  # P6 交易提供型別與純函式 `applyTrade`（驗證物品／金幣／空間並算出新存檔）
 │   ├── room.ts                   # 房間 WebSocket 協定、close codes、分角色速率與大小上限
 │   └── game.ts                   # P5-B 遊戲同步協定（快照、輸入、指令、城鎮交接）與流量常數
 ├── functions/                    # Cloudflare Pages Functions（API 與 WS 代理）
@@ -46,7 +47,7 @@
 │       └── rooms/                # POST /api/rooms 開房、GET /api/rooms/:code/ws 代理
 ├── workers/room/                 # 獨立私有 Worker `ember-vault-room`（無公開路由）
 │   ├── wrangler.toml             # SQLite DO migration v1（new_sqlite_classes = ["Room"]）
-│   └── src/index.ts              # Room Durable Object（Hibernation、聊天、ping、預留 relay）
+│   └── src/                      # index.ts（Room Durable Object：Hibernation、聊天、relay、P6 交易仲裁）、trade.ts（D1 讀寫與 batch）
 ├── src/                          # 前端 React + Three.js 應用
 │   ├── App.tsx / main.tsx / api.ts / saveManager.ts
 │   ├── net/roomClient.ts         # 瀏覽器房間 WebSocket 客戶端
@@ -76,7 +77,7 @@
 | **P5-A 房間基礎設施** | ✅ | PR #7（`01883f5`）；`workers/room` SQLite DO（WebSocket Hibernation）、`POST /api/rooms` 與 `/api/rooms/:code/ws` 驗證代理、大廳（單人／開房／房號加入）、房間大廳（成員／職業／層數／延遲／聊天）、房主離開即關房、`dev1`～`dev8` 多開發帳號；單人完全不連線 |
 | **P5-B 多人地城即時同步** | ✅ | PR #8（`9585c7a`）；新增 `shared/game.ts`、DO 啟用 `startGame`（開局鎖房 409）與 `relay`（分角色大小 32 KB 與速率上限）、種子地城、房主權威模擬＋15 Hz 增量快照、隊友遠端模式＋110 ms 插值＋本地移動預測與校正、各自掉寶、城鎮最小交接（`tw`/`handback`）；4 人實測約 3,900 次 DO 請求／小時 |
 | **P5-C 城鎮與位置同步** | ✅ | PR #9（`a0da27a`）；DO 新增 `townPos` 直接扇出（5 Hz 有移動才送、260 ms 插值、模型與名牌）、隊伍狀態 `st`、凍結前補送快照（`mpHostFreezeFlush`）、地城凍結時隊友先行回地城免等房主（背景重建 `mpHostRebuildAway`）、進城等待畫面與 10 秒逾時取消（`hbc`/`hbx`）、木箱本機視覺預測、右上角隊伍面板與遊戲內聊天 |
-| **P6 城鎮交易** | 📐 | 城鎮同房玩家交易 UI、Room DO 仲裁、D1 batch 原子寫入雙方存檔與 `trades` 紀錄、`save_version` 遞增防刷裝 |
+| **P6 城鎮交易** | 🟦 | 分支 `feat/p6-town-trade`：Room Worker 綁 D1；DO 仲裁交易（`tradeReq`／`tradeOffer`／`tradeConfirm` 等，遺物內容一律由 DO 從 D1 讀）；單一 D1 batch（含版本守門，任一語句失敗整批回滾）寫雙方存檔與 `trades` 紀錄、`save_version` +1；客戶端交易前 flush＋鎖定、結果以伺服器存檔覆蓋。規格 §7.1 |
 | **P7 中途加入／重連＋打磨** | ⬜ | 進行中加入（出生城鎮或入口）、斷線自動重連、延遲補償與建房限流打磨 |
 
 ---
@@ -124,6 +125,8 @@ npm run deploy:room
 
 ## 近期動態與下一步
 
+- **P6 城鎮交易（分支 `feat/p6-town-trade`，待驗收）**：Room Worker 新增 D1 binding `DB`，`VerifiedIdentity` 新增 `characterId`；DO 新增 `townState`、`tradeReq`／`tradeAccept`／`tradeOffer`／`tradeConfirm`／`tradeCancel` 與伺服器 `tradeWait`／`tradeRequest`／`tradeOpen`／`tradeUpdate`／`tradeError`／`tradeEnd`／`tradeDone`（交易草稿只放記憶體；任一方改提供即重置雙方確認；`rev` 防止確認到已過期的版本）。執行時讀雙方 D1 存檔，經純函式 `applyTrade`（`shared/trade.ts`）驗證後以單一 D1 batch 寫兩個存檔與 `trades` 紀錄，並用 `changes()` 守門語句讓版本不符時整批回滾（已用本機 D1 與本機 Room DO 實測）。客戶端：隊伍面板「交易」按鈕、邀請提示、`TradeModal`；交易前 `SaveManager.beginTrade()` flush 並暫停上傳、引擎 `setTradeLock` 鎖背包／金幣／倉庫；結果以 HTTP 取新存檔覆蓋（倉庫不經 WebSocket）。`dev:room`／`dev:api` 皆加 `--persist-to .wrangler/state` 讓本機 D1 共用。**部署：`npm run deploy:room` 與 Pages 需一起更新。** 尚未做雙瀏覽器端到端手動驗收。
+
 - **亞馬遜獵人（`8520060`，直接提交 `main`）**：新增第三職業 `hunter`。遠程單體弓箭普攻（基礎間隔 0.28 s、無三段循環）、天生 20% 爆擊、1.2 倍移速、Shift 疾步；右鍵召喚隨機戰寵（熊／陸行鳥／狼，血量比照同層菁英、脫戰回血、換層跟隨、回城收起），已有戰寵時改為 5 秒強化並回 50% 血。祭壇升級 `hp`／`atk`／`atkSpeed`／`crit` 共 60 次（`shared/character.ts` 新增 `atkSpeed` 欄位，舊存檔讀取時補 0）；左上角戰寵 HUD；多人以 `SnapshotPayload.pets` 同步戰寵，未改 Room DO 與 `shared/room.ts`，不需重新部署 Room Worker，但需部署 Pages 後端才接受建立獵人角色。規格見 [`docs/hunter-spec.md`](docs/hunter-spec.md)。
 - **平衡調整（`3ff73a3`、`cdb7369`）**：戰士藥水回復 1.5 倍、菁英攻速 1.25 倍與攻擊距離 1.4 倍、菁英掉寶文字更清楚；戰士與冰雪法師祭壇升級對齊為總計 60 次（攻擊 20、爆擊 15、戰士 HP 20×12）。
 - **P5-C（PR #9，`a0da27a`）**：完成城鎮位置同步與多人進出流程。Room DO 新增 `townPos` 直接廣播給其他成員（不經房主，省一半傳入計費），客戶端 5 Hz 有移動才送、接收端以 260 ms 插值畫出城鎮內隊友模型與名牌；新增房主 `st` 隊伍狀態同步、凍結前補送最後快照／私有狀態（`mpHostFreezeFlush`）；地城凍結時任一隊友回地城不再卡等房主，房主於背景重建該層（`mpHostRebuildAway`）；補上進地城等待畫面與 10 秒逾時取消（`hbc`/`hbx`）、修正 `leaveTownScene` 誤拉隊友問題、加入隊友木箱本機視覺預測、右上角隊伍狀態面板與遊戲內 Enter 聊天。Room Worker 已部署更新。
@@ -135,5 +138,5 @@ npm run deploy:room
 - **P1～P3（PR #1～#3，`0ef1c99`、`d04e527`、`f687a02`）**：完成 Google 登入、D1 雲端存檔與 8 角色管理（P1）、200 格城鎮倉庫（P2）、倒地原地開門與死亡不結束本局（P3）。
 
 ### 下一步
-1. **P6 城鎮交易**：實作城鎮內同房玩家交易 UI、Room DO 仲裁（讀 D1 驗證物品／金幣／空間）、以單一 D1 batch 原子更新雙方存檔與寫入 `trades` 紀錄、遞增 `save_version` 並推回雙方客戶端覆蓋本機狀態。
+1. **P6 城鎮交易驗收**：兩個瀏覽器帳號實測交易 UI、取消／斷線／離開城鎮路徑與重新載入後的存檔；通過後合併並部署（`npm run deploy:room` 與 Pages 一起）。
 2. **後續階段與待決項**：P7 中途加入／斷線重連與延遲補償打磨；待決項詳見 [`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §10（難度系統內容、自選較淺起始層、房主轉移、公開配對、伺服器端防作弊驗證）。
