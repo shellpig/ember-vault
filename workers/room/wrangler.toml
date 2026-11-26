@@ -1,0 +1,19 @@
+# Room Worker: hosts the SQLite-backed Durable Object class `Room` (one instance per room).
+# Pages Functions cannot define Durable Object classes, so the class lives here and Pages binds to it
+# (see ../../wrangler.toml [[durable_objects.bindings]]). See docs/p5-setup.md.
+name = "ember-vault-room"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Not publicly reachable: no routes, no workers.dev subdomain. Only the Pages project can call it through its binding.
+workers_dev = false
+preview_urls = false
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+# The free plan only supports SQLite-backed Durable Objects.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
