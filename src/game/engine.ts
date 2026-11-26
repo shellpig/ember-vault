@@ -3552,6 +3552,8 @@ export class EmbervaultEngine {
 
   /** When true (menus / account screens), keyboard and pointer input no longer takes over the hero. */
   private inputLocked = false;
+  /** P6: a trade is being set up or running; gold / bag / stash actions are refused (see setTradeLock). */
+  private tradeLocked = false;
 
   public setInputLocked(locked: boolean): void {
     this.inputLocked = locked;
@@ -4074,7 +4076,7 @@ export class EmbervaultEngine {
 
   /** Walks through the town gate. `portalId` picks one of `getTownPortalOptions()` (default: the first). */
   public returnToDungeon(portalId?: string): void {
-    if (this.hero.isDead || !this.inTown || this.transitionState !== 'none') return;
+    if (this.hero.isDead || !this.inTown || this.transitionState !== 'none' || this.tradeLocked) return;
     if (this.mp?.role === 'guest') {
       this.mpGuestReturn(portalId);
       return;
@@ -4256,12 +4258,32 @@ export class EmbervaultEngine {
     if (this.persistRun && !this.loadingRun) this.callbacks.onSaveCheckpoint?.(reason);
   }
 
+  /**
+   * P6: while a trade is open (or being requested) the town character's gold / bag / stash must not change, because D1 is
+   * the authority until the trade ends. Closes the stash window; the caller flushes the save right after locking.
+   */
+  public setTradeLock(locked: boolean): void {
+    if (locked === this.tradeLocked) return;
+    if (locked && this.localHero.stashOpen) this.closeStash();
+    this.tradeLocked = locked;
+    this.emitHud();
+  }
+
+  /** P6: replaces the traded parts of the local character (gold, bag, stash) with the server's version after a trade. */
+  public applyTradeSave(save: { gold: number; bag: RelicItem[]; stash: RelicItem[] }): void {
+    const h = this.localHero;
+    h.gold = save.gold;
+    h.relicBag = save.bag.slice(0, h.relicBagCap).map((r) => ({ ...r }));
+    h.stash = save.stash.slice(0, STASH_CAP).map((r) => ({ ...r }));
+    this.emitHud();
+  }
+
   public adjustZoom(delta: number): void {
     this.camZoom = THREE.MathUtils.clamp(this.camZoom + delta, 0.72, 1.35);
   }
 
   public equipRelic(relicId: string, replaceSlotIndex?: number): boolean {
-    if (this.hero.isDead) return false;
+    if (this.hero.isDead || this.tradeLocked) return false;
     if (this.mpGuestDungeon()) {
       this.mpGuestCmd({ c: 'eq', id: relicId, s: replaceSlotIndex });
       return true;
@@ -4295,7 +4317,7 @@ export class EmbervaultEngine {
   }
 
   public unequipRelic(slotIndex: number): boolean {
-    if (this.hero.isDead) return false;
+    if (this.hero.isDead || this.tradeLocked) return false;
     if (this.mpGuestDungeon()) {
       this.mpGuestCmd({ c: 'uneq', s: slotIndex });
       return true;
@@ -4312,7 +4334,7 @@ export class EmbervaultEngine {
   }
 
   public sellRelic(relicId: string): boolean {
-    if (this.hero.isDead || !this.isHeroNearShop()) return false;
+    if (this.hero.isDead || this.tradeLocked || !this.isHeroNearShop()) return false;
     if (this.mpGuestDungeon()) {
       this.mpGuestCmd({ c: 'sell', id: relicId });
       return true;
@@ -4334,7 +4356,7 @@ export class EmbervaultEngine {
   }
 
   public sellCommonBagRelics(includeYellow = true): number {
-    if (this.hero.isDead || !this.isHeroNearShop()) return 0;
+    if (this.hero.isDead || this.tradeLocked || !this.isHeroNearShop()) return 0;
     if (this.mpGuestDungeon()) {
       this.mpGuestCmd({ c: 'sellc', y: includeYellow ? 1 : 0 });
       return 0;
@@ -4512,7 +4534,7 @@ export class EmbervaultEngine {
 
   /** Opens the stash window. Only in town, next to the chest, on a saved character (never for attract mode). */
   public openStash(): boolean {
-    if (this.hero.isDead || !this.inTown || !this.persistRun || this.loadingRun) return false;
+    if (this.hero.isDead || !this.inTown || !this.persistRun || this.loadingRun || this.tradeLocked) return false;
     if (this.transitionState !== 'none' || !this.isHeroNearStash()) return false;
     if (this.hero.stashOpen) return true;
     this.hero.stashOpen = true;
@@ -4535,7 +4557,7 @@ export class EmbervaultEngine {
 
   /** Bag -> stash. Equipped relics must be unequipped to the bag first. */
   public depositRelic(relicId: string): StashMoveResult {
-    if (!this.hero.stashOpen || !this.inTown || this.hero.isDead) return { ok: false, reason: 'closed' };
+    if (!this.hero.stashOpen || !this.inTown || this.hero.isDead || this.tradeLocked) return { ok: false, reason: 'closed' };
     const idx = this.hero.relicBag.findIndex((r) => r.id === relicId);
     if (idx === -1) return { ok: false, reason: 'notFound' };
     if (this.hero.stash.length >= STASH_CAP) return { ok: false, reason: 'stashFull' };
@@ -4548,7 +4570,7 @@ export class EmbervaultEngine {
 
   /** Stash -> bag. */
   public withdrawRelic(relicId: string): StashMoveResult {
-    if (!this.hero.stashOpen || !this.inTown || this.hero.isDead) return { ok: false, reason: 'closed' };
+    if (!this.hero.stashOpen || !this.inTown || this.hero.isDead || this.tradeLocked) return { ok: false, reason: 'closed' };
     const idx = this.hero.stash.findIndex((r) => r.id === relicId);
     if (idx === -1) return { ok: false, reason: 'notFound' };
     if (this.hero.relicBag.length >= this.hero.relicBagCap) return { ok: false, reason: 'bagFull' };
@@ -4565,7 +4587,7 @@ export class EmbervaultEngine {
   }
 
   public purchaseUpgrade(kind: UpgradeKind): boolean {
-    if (!this.dungeon?.altarPos || !this.isHeroNearAltar()) return false;
+    if (this.tradeLocked || !this.dungeon?.altarPos || !this.isHeroNearAltar()) return false;
     if (this.mpGuestDungeon()) {
       if (this.hero.gold < this.getUpgradeCost() || this.hero.getUpgradeMax(kind) <= 0 || this.hero.isUpgradeMaxed(kind)) return false;
       this.mpGuestCmd({ c: 'up', kind });
@@ -4703,7 +4725,7 @@ export class EmbervaultEngine {
   }
 
   public purchasePotion(): boolean {
-    if (this.hero.isDead) return false;
+    if (this.hero.isDead || this.tradeLocked) return false;
     const nearShop = this.isHeroNearShop();
     const nearAltar = this.isHeroNearAltar();
     if (!nearShop && !nearAltar) return false;
@@ -7613,7 +7635,8 @@ export class EmbervaultEngine {
       relicBagCap: lh.relicBagCap,
       nearStash: this.isHeroNearStash(),
       stashOpen: lh.stashOpen,
-      stash: lh.stashOpen ? [...lh.stash] : [],
+      // The trade window picks from the stash too (P6), so it is exposed while a trade holds the lock
+      stash: lh.stashOpen || this.tradeLocked ? [...lh.stash] : [],
       stashCount: lh.stash.length,
       stashCap: STASH_CAP,
       relicStats: lh.relicStats,

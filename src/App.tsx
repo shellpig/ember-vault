@@ -34,10 +34,12 @@ import {
 } from './game/types';
 import { RelicCompendiumModal, RelicEquipmentModal } from './components/RelicModals';
 import { StashModal } from './components/StashModal';
+import { TradeModal } from './components/TradeModal';
 import { CharacterSelectScreen, LobbyScreen, LoginScreen } from './components/AccountScreens';
 import { RoomLobbyScreen, type RoomEntry, type RoomGameStart } from './components/RoomScreens';
 import type { RoomClient } from './net/roomClient';
-import type { ServerMessage } from '../shared/room';
+import type { ServerMessage, TradeDoneMsg, TradeEndReason, TradeSideView } from '../shared/room';
+import { TRADE_REQUEST_TTL_MS, type TradeErrorCode } from '../shared/trade';
 import { ApiError, api, saveToLoadout } from './api';
 import { SaveManager, SaveStatus } from './saveManager';
 import type { CharacterSave, MeResponse } from '../shared/character';
@@ -55,6 +57,43 @@ interface GameChatLine {
 const CHAT_SHOW_MS = 7000;
 const CHAT_FADE_MS = 1200;
 let chatLineId = 1;
+
+/** P6: the local state of a trade / trade request. The server (Room DO) is the authority; this only mirrors it. */
+interface TradeUi {
+  /**
+   * requesting: I asked (flushing my save, then waiting for the answer); incoming: I was asked (prompt);
+   * preparing: I accepted and flush my save; open: both windows are open; applying: the trade ran, I fetch my new save.
+   */
+  phase: 'requesting' | 'incoming' | 'preparing' | 'open' | 'applying';
+  tradeId: string | null;
+  partnerId: string;
+  partnerName: string;
+  rev: number;
+  mine: TradeSideView;
+  theirs: TradeSideView;
+  notice: { text: string; tone: 'info' | 'error' } | null;
+  /** I asked to cancel; waiting for the server's answer (it may still be executing). */
+  cancelling?: boolean;
+}
+const EMPTY_TRADE_SIDE: TradeSideView = { gold: 0, relics: [], confirmed: false };
+const TRADE_ERROR_TEXT: Record<TradeErrorCode, string> = {
+  invalid_offer: '提供的內容不正確',
+  item_missing: '有遺物已不在原本的位置，請重新挑選',
+  gold_insufficient: '金幣不足',
+  no_space: '有一方的背包與倉庫空間不足，無法收下這些遺物',
+  empty_trade: '雙方都還沒放入任何東西',
+  offer_changed: '遺物內容在確認前被更動，交易已取消',
+  version_conflict: '存檔在交易期間被更動，交易已取消，請重試',
+  server_error: '伺服器忙碌，交易未完成，請稍後再試',
+};
+const TRADE_END_TEXT: Partial<Record<TradeEndReason, string>> = {
+  cancelled: '對方取消了交易',
+  timeout: '對方沒有回應',
+  partner_left: '對方已離開房間，交易取消',
+  left_town: '有人離開了城鎮，交易取消',
+  unavailable: '現在無法交易（對方不在城鎮或正在交易中）',
+  expired: '交易已失效',
+};
 
 function HeartIcon({
   state,
@@ -246,6 +285,15 @@ export default function App() {
   const [chatNow, setChatNow] = useState(() => Date.now());
   /** A room game is running on this screen (chat, member panel). */
   const [inRoomGame, setInRoomGame] = useState(false);
+  /** P6 town trade (room games only). The ref mirrors the state so socket handlers never see a stale value. */
+  const [trade, setTradeState] = useState<TradeUi | null>(null);
+  const tradeRef = useRef<TradeUi | null>(null);
+  const tradeMsgRef = useRef<(msg: ServerMessage) => void>(() => undefined);
+  const cancelTradeRef = useRef<() => void>(() => undefined);
+  const setTrade = useCallback((next: TradeUi | null) => {
+    tradeRef.current = next;
+    setTradeState(next);
+  }, []);
   const screenRef = useRef<Screen>('boot');
   screenRef.current = screen;
 
@@ -447,6 +495,8 @@ export default function App() {
         setRelicModalOpen(false);
         setCodexModalOpen(false);
         engineRef.current?.closeStash();
+        const t = tradeRef.current;
+        if (t && (t.phase === 'open' || t.phase === 'requesting')) cancelTradeRef.current();
       }
     };
     window.addEventListener('keydown', onGlobalKeyDown);
@@ -482,7 +532,7 @@ export default function App() {
 
   // In-game chat (P5-C): Enter opens the box (the hero stops while typing), Enter sends, Esc cancels.
   const chatBlockedRef = useRef(false);
-  chatBlockedRef.current = hud.stashOpen || relicModalOpen || codexModalOpen || hud.isDead;
+  chatBlockedRef.current = hud.stashOpen || relicModalOpen || codexModalOpen || hud.isDead || trade !== null;
   useEffect(() => {
     if (!inRoomGame || screen !== 'playing') return;
     const onKey = (e: KeyboardEvent) => {
@@ -558,6 +608,9 @@ export default function App() {
     setChatOpen(false);
     setChatDraft('');
     setInRoomGame(false);
+    tradeRef.current = null;
+    setTradeState(null);
+    engineRef.current?.setTradeLock(false);
     saveMgrRef.current = null;
     setSaveStatus('idle');
     engineRef.current?.restartRun('warrior');
@@ -580,6 +633,7 @@ export default function App() {
   /** Leave the running game for the character list (saves first, never blocks for long). */
   const leaveGame = useCallback(async () => {
     const mgr = saveMgrRef.current;
+    if (tradeRef.current) mgr?.endTrade(); // a held save manager would not upload
     if (mgr) {
       await Promise.race([mgr.flush(), new Promise<void>((r) => window.setTimeout(r, 4000))]);
     }
@@ -603,6 +657,8 @@ export default function App() {
       if (mpEndingRef.current || !mpClientRef.current) return;
       mpEndingRef.current = true;
       const mgr = saveMgrRef.current;
+      // The trade (if any) is abandoned: the old version is uploaded below and, if the trade did run, rejected as stale (409)
+      if (tradeRef.current) mgr?.endTrade();
       if (mgr) await Promise.race([mgr.flush(), new Promise<void>((r) => window.setTimeout(r, 4000))]);
       const id = activeSaveRef.current?.id;
       resetToAttract();
@@ -628,6 +684,184 @@ export default function App() {
   );
   const endRoomGameRef = useRef(endRoomGame);
   endRoomGameRef.current = endRoomGame;
+
+  // --- P6 town trade -------------------------------------------------------------------------------------
+  /** Ends the trade locally: unblocks the save manager and the engine; `serverVersion` when the trade executed. */
+  const releaseTrade = useCallback(
+    (serverVersion?: number) => {
+      saveMgrRef.current?.endTrade(serverVersion);
+      engineRef.current?.setTradeLock(false);
+      setTrade(null);
+    },
+    [setTrade]
+  );
+
+  /** Blocks inventory / gold / stash changes and uploads, after flushing the current save so D1 is the authority. */
+  const lockForTrade = useCallback(async (): Promise<boolean> => {
+    const engine = engineRef.current;
+    const mgr = saveMgrRef.current;
+    if (!engine || !mgr) return false;
+    setRelicModalOpen(false);
+    engine.setTradeLock(true);
+    const ok = await mgr.beginTrade();
+    if (!ok) engine.setTradeLock(false);
+    return ok;
+  }, []);
+
+  const startTradeRequest = useCallback(
+    async (partnerId: string, partnerName: string) => {
+      const client = mpClientRef.current;
+      if (!client || tradeRef.current) return;
+      setTrade({ phase: 'requesting', tradeId: null, partnerId, partnerName, rev: 0, mine: EMPTY_TRADE_SIDE, theirs: EMPTY_TRADE_SIDE, notice: null });
+      const ok = await lockForTrade();
+      if (!ok) {
+        setTrade(null);
+        showToast('無法同步存檔，暫時不能交易');
+        return;
+      }
+      const cur = tradeRef.current as TradeUi | null; // changed while the save was uploading (TS narrowed it to null above)
+      if (!cur || cur.phase !== 'requesting' || cur.partnerId !== partnerId || cur.cancelling) {
+        releaseTrade(); // cancelled while the save was uploading
+        return;
+      }
+      client.tradeRequest(partnerId);
+    },
+    [lockForTrade, releaseTrade, setTrade, showToast]
+  );
+
+  const acceptTrade = useCallback(async () => {
+    const client = mpClientRef.current;
+    const cur = tradeRef.current;
+    if (!client || !cur || cur.phase !== 'incoming' || !cur.tradeId) return;
+    const id = cur.tradeId;
+    setTrade({ ...cur, phase: 'preparing' });
+    const ok = await lockForTrade();
+    if (!ok) {
+      client.tradeCancel(id);
+      setTrade(null);
+      showToast('無法同步存檔，暫時不能交易');
+      return;
+    }
+    if (tradeRef.current?.tradeId !== id) {
+      releaseTrade(); // the requester gave up while the save was uploading
+      return;
+    }
+    client.tradeAccept(id);
+  }, [lockForTrade, releaseTrade, setTrade, showToast]);
+
+  /** Cancel / decline. Anything the server already knows is only released once the server answers (it may be executing). */
+  const cancelTrade = useCallback(() => {
+    const cur = tradeRef.current;
+    if (!cur || cur.phase === 'applying' || cur.cancelling) return;
+    const client = mpClientRef.current;
+    if (cur.phase === 'incoming') {
+      if (cur.tradeId) client?.tradeCancel(cur.tradeId);
+      setTrade(null);
+      return;
+    }
+    if (cur.tradeId) client?.tradeCancel(cur.tradeId);
+    setTrade({ ...cur, cancelling: true, notice: { text: '正在取消交易…', tone: 'info' } });
+  }, [setTrade]);
+  cancelTradeRef.current = cancelTrade;
+
+  /** The trade ran on the server: replace the local gold / bag / stash with the saved version, then unlock. */
+  const finishTrade = useCallback(
+    async (msg: TradeDoneMsg) => {
+      const cur = tradeRef.current;
+      const characterId = saveMgrRef.current?.characterId;
+      if (!cur || !characterId) return;
+      setTrade({ ...cur, phase: 'applying', notice: { text: '交易完成，正在同步存檔…', tone: 'info' } });
+      let fresh: CharacterSave | null = null;
+      for (let i = 0; i < 4 && !fresh; i++) {
+        try {
+          const got = await api.getCharacter(characterId);
+          if (got.save_version >= msg.saveVersion) fresh = got;
+        } catch {
+          // retry below
+        }
+        if (!fresh) await new Promise<void>((r) => window.setTimeout(r, 600));
+      }
+      if (!fresh) {
+        // D1 is right but this client is stale: leave the room so the normal flow reloads the character from the cloud
+        releaseTrade();
+        void endRoomGameRef.current('交易已完成，但無法同步存檔，請重新進入遊戲');
+        return;
+      }
+      engineRef.current?.applyTradeSave({ gold: fresh.gold, bag: fresh.bag, stash: fresh.stash });
+      releaseTrade(fresh.save_version);
+      showToast(`交易完成：收到 ${msg.received.length} 件遺物，金幣 ${msg.gold.toLocaleString('en-US')}`);
+    },
+    [releaseTrade, setTrade, showToast]
+  );
+
+  const handleTradeMessage = (msg: ServerMessage) => {
+    const cur = tradeRef.current;
+    const client = mpClientRef.current;
+    switch (msg.type) {
+      case 'tradeWait':
+        if (cur?.phase === 'requesting' && !cur.tradeId) {
+          setTrade({ ...cur, tradeId: msg.tradeId });
+          if (cur.cancelling) client?.tradeCancel(msg.tradeId);
+        } else {
+          client?.tradeCancel(msg.tradeId); // a request I no longer care about
+        }
+        break;
+      case 'tradeRequest':
+        if (cur) {
+          client?.tradeCancel(msg.tradeId); // already busy
+        } else {
+          setTrade({ phase: 'incoming', tradeId: msg.tradeId, partnerId: msg.from, partnerName: msg.name, rev: 0, mine: EMPTY_TRADE_SIDE, theirs: EMPTY_TRADE_SIDE, notice: null });
+        }
+        break;
+      case 'tradeOpen':
+        if (cur && cur.tradeId === msg.tradeId && (cur.phase === 'requesting' || cur.phase === 'preparing')) {
+          setTrade({ ...cur, phase: 'open', partnerId: msg.partner, partnerName: msg.partnerName, notice: cur.cancelling ? cur.notice : null });
+        }
+        break;
+      case 'tradeUpdate':
+        if (cur && cur.tradeId === msg.tradeId && cur.phase === 'open') {
+          setTrade({ ...cur, rev: msg.rev, mine: msg.mine, theirs: msg.theirs, notice: cur.cancelling ? cur.notice : null });
+        }
+        break;
+      case 'tradeError':
+        if (cur && cur.tradeId === msg.tradeId && cur.phase === 'open') {
+          setTrade({ ...cur, notice: { text: TRADE_ERROR_TEXT[msg.code], tone: 'error' } });
+        }
+        break;
+      case 'tradeEnd': {
+        const isMine = cur && (msg.tradeId === '' ? cur.phase === 'requesting' && !cur.tradeId : cur.tradeId === msg.tradeId);
+        if (!cur || !isMine || cur.phase === 'applying') break;
+        if (msg.reason === 'failed') showToast(TRADE_ERROR_TEXT[msg.code ?? 'server_error']);
+        else if (msg.reason !== 'self' && !cur.cancelling) showToast(TRADE_END_TEXT[msg.reason] ?? '交易已結束');
+        releaseTrade();
+        break;
+      }
+      case 'tradeDone':
+        if (cur && cur.tradeId === msg.tradeId) void finishTrade(msg);
+        break;
+      default:
+        break;
+    }
+  };
+  tradeMsgRef.current = handleTradeMessage;
+
+  // An unanswered request / prompt expires on its own (the server also drops it lazily)
+  useEffect(() => {
+    if (!trade || (trade.phase !== 'requesting' && trade.phase !== 'incoming')) return;
+    const t = window.setTimeout(() => {
+      if (tradeRef.current?.phase === 'requesting') showToast('對方沒有回應，交易請求已取消');
+      cancelTradeRef.current();
+    }, TRADE_REQUEST_TTL_MS);
+    return () => window.clearTimeout(t);
+  }, [trade?.phase, trade?.tradeId, showToast]);
+
+  // Tell the Room DO whether this hero is in town (trades need both sides there); leaving town ends a trade
+  useEffect(() => {
+    if (inRoomGame && screen === 'playing') mpClientRef.current?.sendTownState(hud.inTown);
+  }, [inRoomGame, screen, hud.inTown]);
+  useEffect(() => {
+    if (!hud.inTown && tradeRef.current) cancelTradeRef.current();
+  }, [hud.inTown]);
 
   /** The host pressed start: the room connection now carries the game (P5-B). */
   const handleRoomGameStart = useCallback(
@@ -676,6 +910,15 @@ export default function App() {
               break;
             case 'replaced':
               void endRoomGameRef.current('你已在另一個分頁加入這個房間，這個連線已中斷');
+              break;
+            case 'tradeWait':
+            case 'tradeRequest':
+            case 'tradeOpen':
+            case 'tradeUpdate':
+            case 'tradeError':
+            case 'tradeEnd':
+            case 'tradeDone':
+              tradeMsgRef.current(msg);
               break;
             default:
               break;
@@ -1138,16 +1381,28 @@ export default function App() {
                     {m.isHost ? '★ ' : ''}
                     {m.name}
                   </span>
-                  <span
-                    className={`shrink-0 px-1.5 border text-[10px] ${
-                      m.state === 2
-                        ? 'border-[#a8404c] text-[#ff9ca6]'
-                        : m.state === 1
-                        ? 'border-[#3e9cc2] text-[#8fe3ff]'
-                        : 'border-[#4e8a5c] text-[#9fe9b8]'
-                    }`}
-                  >
-                    {m.state === 2 ? '倒地' : m.state === 1 ? '城鎮' : '地城'}
+                  <span className="flex shrink-0 items-center gap-1">
+                    {hud.inTown && !m.isSelf && m.state === 1 && !trade && (
+                      <button
+                        type="button"
+                        data-testid={`trade-btn-${m.name}`}
+                        onClick={() => void startTradeRequest(m.id, m.name)}
+                        className="pointer-events-auto cursor-pointer border border-[#c8a355] px-1.5 text-[10px] text-[#ffe5a3] hover:bg-[#33290f]"
+                      >
+                        交易
+                      </button>
+                    )}
+                    <span
+                      className={`px-1.5 border text-[10px] ${
+                        m.state === 2
+                          ? 'border-[#a8404c] text-[#ff9ca6]'
+                          : m.state === 1
+                          ? 'border-[#3e9cc2] text-[#8fe3ff]'
+                          : 'border-[#4e8a5c] text-[#9fe9b8]'
+                      }`}
+                    >
+                      {m.state === 2 ? '倒地' : m.state === 1 ? '城鎮' : '地城'}
+                    </span>
                   </span>
                 </li>
               ))}
@@ -2065,6 +2320,75 @@ export default function App() {
           onWithdraw={(id) => engineRef.current!.withdrawRelic(id)}
           onUnequip={(slotIdx) => engineRef.current?.unequipRelic(slotIdx)}
           onClose={() => engineRef.current?.closeStash()}
+        />
+      )}
+
+      {/* P6 trade: request prompts and the trade window (room games only) */}
+      {trade && (trade.phase === 'incoming' || trade.phase === 'requesting' || trade.phase === 'preparing') && (
+        <div
+          data-testid="trade-prompt"
+          className="pointer-events-auto absolute left-1/2 top-24 z-40 -translate-x-1/2 border border-[#c8a355] bg-[#0c0e14]/95 px-4 py-3 text-center font-hud text-xs text-[#f0e6c8] shadow-[0_10px_30px_rgba(0,0,0,0.85)]"
+        >
+          {trade.phase === 'incoming' && (
+            <>
+              <div className="mb-2">
+                <span className="font-bold text-[#ffe5a3]">{trade.partnerName}</span> 想與你交易
+              </div>
+              <div className="flex justify-center gap-2">
+                <button
+                  type="button"
+                  data-testid="trade-accept"
+                  onClick={() => void acceptTrade()}
+                  className="cursor-pointer border border-[#3e6a5a] bg-[#122019] px-3 py-1 font-semibold text-[#b9f2d6] hover:border-[#6ee0a8]"
+                >
+                  接受
+                </button>
+                <button
+                  type="button"
+                  data-testid="trade-decline"
+                  onClick={cancelTrade}
+                  className="cursor-pointer border border-[#6a4040] bg-[#201315] px-3 py-1 text-[#f2c4c4] hover:border-[#e08080]"
+                >
+                  拒絕
+                </button>
+              </div>
+            </>
+          )}
+          {trade.phase === 'requesting' && (
+            <div className="flex items-center gap-3">
+              <span>正在向 {trade.partnerName} 發出交易請求…</span>
+              <button
+                type="button"
+                data-testid="trade-request-cancel"
+                onClick={cancelTrade}
+                disabled={trade.cancelling}
+                className="cursor-pointer border border-[#4a3e2a] bg-[#171a26] px-2.5 py-1 text-[#c7b68d] hover:border-[#d6b25e] disabled:opacity-40"
+              >
+                取消
+              </button>
+            </div>
+          )}
+          {trade.phase === 'preparing' && <span>正在同步存檔，準備交易…</span>}
+        </div>
+      )}
+      {trade && (trade.phase === 'open' || trade.phase === 'applying') && !hud.isDead && (
+        <TradeModal
+          heroClass={hud.heroClass}
+          partnerName={trade.partnerName}
+          bag={hud.relicBag}
+          stash={hud.stash}
+          gold={hud.gold}
+          mine={trade.mine}
+          theirs={trade.theirs}
+          notice={trade.notice}
+          busy={trade.phase === 'applying' || trade.cancelling === true || (trade.mine.confirmed && trade.theirs.confirmed)}
+          onOffer={(offer) => {
+            if (trade.tradeId) mpClientRef.current?.tradeOffer(trade.tradeId, offer);
+          }}
+          onConfirm={() => {
+            if (trade.tradeId) mpClientRef.current?.tradeConfirm(trade.tradeId, trade.rev);
+          }}
+          onCancel={cancelTrade}
         />
       )}
 

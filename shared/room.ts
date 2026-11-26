@@ -1,6 +1,9 @@
 // Room protocol shared by the Room Durable Object (workers/room), the Pages Functions and the browser client.
 // Keep this file free of DOM / Workers specific APIs. See docs/multiplayer-spec.md section 5.
 
+import type { RelicItem } from '../src/game/relics';
+import type { TradeErrorCode, TradeOfferItem } from './trade';
+
 export const ROOM_MAX_PLAYERS = 4;
 export const ROOM_CODE_LENGTH = 6;
 /** Upper-case letters and digits without the easily confused 0 / O / 1 / I / L (31 symbols). */
@@ -87,7 +90,54 @@ export interface TownPosSend {
   f: number;
   a: 0 | 1 | 2;
 }
-export type ClientMessage = ChatSend | PingSend | RelaySend | StartGameSend | TownPosSend;
+/**
+ * P6: the client tells the DO whether its hero is in town (sent on change only). Trades need both sides in town and end
+ * when one leaves. Client reported on purpose: the town runs locally (spec 7).
+ */
+export interface TownStateSend {
+  type: 'townState';
+  inTown: boolean;
+}
+/** P6: ask `to` (a playerId) for a trade. Both must be in town and free of any other trade. */
+export interface TradeReqSend {
+  type: 'tradeReq';
+  to: string;
+}
+/** P6: the receiver accepts the pending request. */
+export interface TradeAcceptSend {
+  type: 'tradeAccept';
+  tradeId: string;
+}
+/** P6: replaces my whole offer (the server re-reads my save and resets both confirmations). */
+export interface TradeOfferSend {
+  type: 'tradeOffer';
+  tradeId: string;
+  gold: number;
+  relics: TradeOfferItem[];
+}
+/** P6: confirm the offers as I saw them; `rev` must be the revision of the last `tradeUpdate` I received. */
+export interface TradeConfirmSend {
+  type: 'tradeConfirm';
+  tradeId: string;
+  rev: number;
+}
+/** P6: cancel (or decline) my current trade or request. */
+export interface TradeCancelSend {
+  type: 'tradeCancel';
+  tradeId?: string;
+}
+export type ClientMessage =
+  | ChatSend
+  | PingSend
+  | RelaySend
+  | StartGameSend
+  | TownPosSend
+  | TownStateSend
+  | TradeReqSend
+  | TradeAcceptSend
+  | TradeOfferSend
+  | TradeConfirmSend
+  | TradeCancelSend;
 
 // --- Server -> client ---------------------------------------------------------------------------
 
@@ -147,6 +197,75 @@ export interface TownPosMsg {
   f: number;
   a: 0 | 1 | 2;
 }
+/** P6: you asked for a trade; waiting for `partner` to answer. */
+export interface TradeWaitMsg {
+  type: 'tradeWait';
+  tradeId: string;
+  partner: string;
+  partnerName: string;
+}
+/** P6: `from` wants to trade with you. */
+export interface TradeRequestMsg {
+  type: 'tradeRequest';
+  tradeId: string;
+  from: string;
+  name: string;
+}
+/** P6: the receiver accepted; both sides open the trade window. */
+export interface TradeOpenMsg {
+  type: 'tradeOpen';
+  tradeId: string;
+  partner: string;
+  partnerName: string;
+}
+/** One side of an open trade as the server sees it. Relics are resolved from the owner's D1 save, never client supplied. */
+export interface TradeSideView {
+  gold: number;
+  relics: Array<{ id: string; from: TradeOfferItem['from']; item: RelicItem }>;
+  confirmed: boolean;
+}
+/** P6: the full state of an open trade, sent to both sides after every change (each gets its own `mine` / `theirs`). */
+export interface TradeUpdateMsg {
+  type: 'tradeUpdate';
+  tradeId: string;
+  rev: number;
+  mine: TradeSideView;
+  theirs: TradeSideView;
+}
+/** P6: a rejected offer / confirmation. The trade stays open with the previous offer. */
+export interface TradeErrorMsg {
+  type: 'tradeError';
+  tradeId: string;
+  code: TradeErrorCode;
+}
+export type TradeEndReason =
+  | 'cancelled' // the other side cancelled / declined
+  | 'self' // answer to my own cancel
+  | 'timeout'
+  | 'partner_left' // disconnected or replaced
+  | 'left_town'
+  | 'unavailable' // request refused: not in town, already busy, unknown partner
+  | 'expired' // the server no longer knows this trade (e.g. it was evicted)
+  | 'failed'; // execution failed, nothing changed (see `code`)
+/** P6: the trade (or request) is over and nothing was transferred. */
+export interface TradeEndMsg {
+  type: 'tradeEnd';
+  tradeId: string;
+  reason: TradeEndReason;
+  code?: TradeErrorCode;
+}
+/**
+ * P6: the trade was executed. The new save is already in D1 (version `saveVersion`); the client fetches it over HTTP and
+ * replaces its local state with it. The stash (up to 200 relics) deliberately never travels over the socket (AGENTS rule 4).
+ */
+export interface TradeDoneMsg {
+  type: 'tradeDone';
+  tradeId: string;
+  saveVersion: number;
+  gold: number;
+  gave: RelicItem[];
+  received: RelicItem[];
+}
 export type ServerMessage =
   | WelcomeMsg
   | MemberJoinedMsg
@@ -157,12 +276,21 @@ export type ServerMessage =
   | ReplacedMsg
   | GameStartedMsg
   | RelayMsg
-  | TownPosMsg;
+  | TownPosMsg
+  | TradeWaitMsg
+  | TradeRequestMsg
+  | TradeOpenMsg
+  | TradeUpdateMsg
+  | TradeErrorMsg
+  | TradeEndMsg
+  | TradeDoneMsg;
 
 /** Header the Pages Function uses to hand the verified identity to the DO (URI-encoded JSON). */
 export const IDENTITY_HEADER = 'x-ev-identity';
 export interface VerifiedIdentity {
   accountId: string;
+  /** P6: the character this connection plays (checked against the session by the Pages Function). Trades use it. */
+  characterId: string;
   name: string;
   classId: string;
   maxDepth: number;

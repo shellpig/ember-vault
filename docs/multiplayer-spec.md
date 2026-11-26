@@ -303,6 +303,45 @@ Room DO 不懂遊戲內容，只做轉發（`relay`）＋把房間標記為「�
    - 把新存檔推給兩個客戶端，客戶端**以伺服器版本取代本機狀態**
 5. 防止刷物品：存檔上傳時帶 `base_version`，版本不符就拒絕（見 §8.3）。斷線再讀回舊檔也會因為版本過舊而無法上傳。
 
+### 7.1 P6 實際協定（已實作，待驗收）
+
+**Room Worker 現在綁 D1**：`workers/room/wrangler.toml` 多了 `[[d1_databases]]` binding `DB`（與根目錄 `wrangler.toml` 同一個資料庫）。DO 只有在交易時碰 D1（讀兩個角色、寫兩個角色＋一筆 `trades`）；沒有新的 migration（`trades` 表 P1 就建好了）。`VerifiedIdentity` 新增 `characterId`（`functions/api/rooms/[code]/ws.ts` 在驗證角色歸屬後填入，DO 的 `parseIdentity` 要求必填），DO 從 socket attachment 取得「這條連線是哪個角色」，不接受瀏覽器自報。
+
+**訊息（皆由 DO 處理，不走 `relay`；型別在 `shared/room.ts`，計算在 `shared/trade.ts`）**：
+
+| 方向 | 訊息 | 說明 |
+|---|---|---|
+| C→S | `townState { inTown }` | 客戶端回報英雄是否在城鎮（只在變動時送）。城鎮本機模擬，所以位置由客戶端回報；對交易的信任等級與 `townPos` 相同（朋友間可接受）。離開城鎮 = 結束該玩家的交易 |
+| C→S | `tradeReq { to }` | A 對 B 發起。雙方都要「已開始遊戲、在城鎮、沒有其他交易／請求」，否則 `tradeEnd(unavailable)` |
+| S→C | `tradeWait` ／ `tradeRequest` | 給 A（等待中）／給 B（來邀請，帶 `tradeId`） |
+| C→S | `tradeAccept { tradeId }` | 只有 B 能接受；DO 再檢查一次雙方仍在城鎮、請求未逾時（30 秒＋5 秒寬限）→ `tradeOpen` 給雙方，緊接著 `tradeUpdate`（rev 0） |
+| C→S | `tradeOffer { tradeId, gold, relics:[{id, from:'bag'\|'stash'}] }` | **整份**取代自己的提供。DO **從 D1 重讀這個角色**，驗證遺物在宣告的來源、金幣足夠，並把**D1 裡的遺物內容**放進給對方看的 `tradeUpdate`（對方看到的永遠是真實存檔資料，不是客戶端自報的）。成功後 `rev++`、雙方確認都重置。失敗只回 `tradeError`（原提供不變） |
+| S→C | `tradeUpdate { tradeId, rev, mine, theirs }` | 每次變動雙方各收一份（`mine`／`theirs` 各含金幣、遺物＋內容、`confirmed`） |
+| C→S | `tradeConfirm { tradeId, rev }` | 只對**看到的那一版**有效：`rev` 不符（對方剛改過）、還有 offer 在讀 D1、雙方都空 → 忽略或 `tradeError(empty_trade)`。雙方都確認就執行 |
+| C→S | `tradeCancel { tradeId? }` | 取消／拒絕。DO 對取消者回 `tradeEnd(self)`、對方回 `tradeEnd(cancelled)`；不認識的交易回 `tradeEnd(expired)`；**執行中不能取消**（結果以 `tradeDone`／`tradeEnd(failed)` 為準） |
+| S→C | `tradeEnd { tradeId, reason, code? }` | 沒有搬任何東西就結束：`cancelled`、`self`、`timeout`、`partner_left`（斷線或被同帳號頂替）、`left_town`、`unavailable`、`expired`（DO 不認得這筆交易，例如被回收）、`failed`（執行失敗，`code` 見下） |
+| S→C | `tradeDone { tradeId, saveVersion, gold, gave, received }` | 已寫入 D1。**倉庫不經 WebSocket**（AGENTS 規則 4）：客戶端收到後用 `GET /api/characters/:id` 取新存檔，再以伺服器版本取代本機的金幣／背包／倉庫與 `save_version` |
+
+錯誤碼（`TradeErrorCode`）：`invalid_offer`、`item_missing`、`gold_insufficient`、`no_space`、`empty_trade`、`offer_changed`、`version_conflict`、`server_error`。
+
+**DO 端狀態**：每房間一個 `Map<tradeId, Trade>`，一人同時只能有一筆交易（含尚未回應的請求）。**只放記憶體、不寫 storage**：DO 被回收就等於交易取消，客戶端下一則交易訊息會收到 `tradeEnd(expired)` 並解鎖（實務上每 5 秒的 ping 會讓房間 DO 保持清醒）。執行中有 `executing` 旗標，期間 offer／confirm／cancel／斷線都不會打斷。對方斷線、被頂替、離開城鎮或房間關閉 → 交易結束。
+
+**執行（`workers/room/src/trade.ts` `executeTrade`）**：
+1. 讀兩個角色（`SELECT`，並確認 `account_id` 與連線身分相符）。
+2. 純函式 `applyTrade`（`shared/trade.ts`）：遺物必須在宣告來源（裝備中的遺物不可交易）、金幣足夠、收件者空間足夠（先放背包 30，溢出放倉庫 200，兩者都滿才 `no_space`；兩邊先各自移出再算空間，所以背包全滿也能 1 換 1）、每邊最多 `MAX_TRADE_RELICS = 20` 件。
+3. 比對「雙方確認時看到的遺物」與 D1 現值（JSON 全等），不同 → `offer_changed`（防止同 id 被改內容）。
+4. **一個 D1 batch**（交易式、任一語句丟錯就整批回滾）：`UPDATE A … WHERE save_version = 讀到的` → 守門 `SELECT CASE WHEN changes() = 1 THEN 1 ELSE abs(-9223372036854775808) END`（沒更新到列就丟 `integer overflow` 錯誤）→ `UPDATE B …` → 守門 → `INSERT INTO trades`（payload 含雙方交出的遺物完整內容與金幣）。版本不符（中間有人 PUT 過存檔）→ 整批回滾、回 `version_conflict`，**不會只寫一半**。
+5. 成功：兩邊 `save_version` +1，各收 `tradeDone`；失敗：兩邊收 `tradeEnd(failed, code)`，沒有任何寫入。
+
+**客戶端（`App.tsx`、`saveManager.ts`、`engine.ts`、`TradeModal.tsx`）**：
+- 城鎮中隊伍面板（右上角）對「也在城鎮」的隊友顯示「交易」；收到邀請時上方出現接受／拒絕（30 秒無回應自動取消）。
+- **開始前上鎖**：發起方送請求前、接受方接受前，先 `engine.setTradeLock(true)`（拒絕裝備／賣出／購買／升級／倉庫操作／進傳送門，並關閉倉庫視窗）再 `SaveManager.beginTrade()`（把目前狀態 PUT 一次，D1 成為權威版本，之後到 `endTrade` 為止不上傳、也不送 `sendBeacon`）。flush 失敗就不開始。
+- 交易視窗（`TradeModal`）：左我方提供（金幣輸入＋遺物，可由背包／倉庫挑選）、右對方提供、雙方確認狀態、取消；Esc 或離開城鎮也會取消。
+- 結果：`tradeDone` → 取新存檔 → `engine.applyTradeSave`（金幣、背包、倉庫）＋ `SaveManager.endTrade(新版本)` → 解鎖；取不到存檔則走「離開房間、從雲端重載」流程（D1 才是真的）。
+- 單人遊玩完全不連線、沒有交易 UI。
+
+**防刷物品**：交易寫入後 D1 的 `save_version` 已 +1。客戶端若在收到結果前斷線，舊狀態只能以舊 `base_version` 上傳，會 409。持有交易鎖的客戶端也不會上傳或送 beacon。
+
 ---
 
 ## 8. 存檔（D1）
@@ -388,7 +427,7 @@ CREATE TABLE trades (
 | **P5-A 房間基礎設施** | Room Worker＋DO（SQLite、Hibernation）、`POST /api/rooms`、`/api/rooms/:code/ws` 代理與身分驗證、房間大廳（成員、職業、層數、延遲、聊天）、房主離開即結束、多開發帳號；**不同步遊戲畫面** | 4 個帳號能開房、用房號加入、互看成員與聊天；房主離開房間即關閉；單人開始完全不連線 |
 | **P5-B 同步遊戲（已完成）** | 房主開始遊戲、快照 / 輸入（`relay`）、插值與預測、各自 loot、各自傳送門、難度縮放接上房間人數、最小版城鎮交接（回城 / 回來）、房主 / 隊友斷線處理 | 4 個瀏覽器分頁能一起打地城（實測見 §5.2.1；**Room Worker 要重新部署**，見 `docs/p5-setup.md`） |
 | **P5-C 城鎮與位置同步（已完成）** | 城鎮內互相看到彼此（`townPos`，由 DO 直接廣播）、全員回城時地城凍結的連線版（任何人都可先回地城、房主背景重建）、等待畫面與 10 秒逾時、成員面板、遊戲中聊天、隊友木箱本機預測 | 多人進出城鎮與地城流程完整（實測見 §5.1.3、§5.2.1；**Room Worker 要重新部署**，見 `docs/p5-setup.md`） |
-| **P6 交易** | 城鎮交易 UI、Room DO 仲裁、D1 batch、`save_version` | 交易後雙方存檔正確，斷線不能刷物品 |
+| **P6 交易（已實作，待驗收）** | 城鎮交易 UI、Room DO 仲裁（Room Worker 綁 D1）、D1 batch 原子寫入、`save_version`（見 §7.1） | 交易後雙方存檔正確，斷線不能刷物品（**Room Worker 要重新部署**，見 `docs/p5-setup.md`） |
 | **P7 中途加入／重連＋打磨** | 進行中加入、斷線重連、延遲補償調整 | 中途加入可直接進地城 |
 
 ---

@@ -62,6 +62,14 @@ P5-C：城鎮裡互相看得到（位置由 Room DO 直接廣播）、全員回�
 2. 再部署 Pages（合併 PR）。
 3. 驗證：兩個帳號開房、開始遊戲、兩人都按 B 回城 → 兩邊都看得到對方的英雄模型與名牌，走動時位置跟著更新；右上角「隊伍」面板顯示兩人都在「城鎮」；其中一人走傳送門回地城（不必等另一人）。
 
+### P6 升級（已部署過 P5-C 的人）
+
+P6 交易讓 Room Worker **多了 D1 binding**（`workers/room/wrangler.toml` 的 `[[d1_databases]]` `DB`，和 Pages 專案是同一個資料庫 `ember-vault-db`）。
+
+1. `npm run deploy:room`（沒有新的 D1 migration：`trades` 表 P1 就有；DO migration 也沒有新增）。Worker 部署時會自動把 `DB` 綁上去，不需要在 dashboard 設定。
+2. **再**（或同時）部署 Pages（合併 PR）。舊的 Pages 不會送 `characterId` 身分欄位，新的 DO 會拒絕沒有它的連線（400）；所以**兩邊要一起更新**，不要只更新其中一邊。
+3. 驗證：兩個帳號開房、開始遊戲、都回城鎮 → 右上角隊伍面板出現「交易」→ 對方接受 → 各放一些遺物／金幣 → 雙方確認 → 兩邊背包／金幣即時更新；重新整理後（從雲端載入）內容仍相同。
+
 ### 之後 Room Worker 有改動時
 
 只要 `workers/room/**` 或 `shared/room.ts` 有變，就要再執行一次 `npm run deploy:room`（Pages 部署不會更新 Worker）。`shared/room.ts` 同時被兩邊使用，改協定時兩邊都要部署。
@@ -84,9 +92,11 @@ npm run db:migrate:local     # 只需第一次
 npm run dev:full             # = dev:room（:8787）+ dev:api（:8788）+ Vite（:3000）
 ```
 
-- `dev:room`：`wrangler dev -c workers/room/wrangler.toml --port 8787`
-- `dev:api`：`wrangler pages dev dist --port 8788 --do ROOM=Room@ember-vault-room`（透過 dev registry 綁到本機的 `ember-vault-room`；**要先有 `dev:room` 在跑**，否則 `/api/rooms` 會 500）
+- `dev:room`：`wrangler dev -c workers/room/wrangler.toml --port 8787 --persist-to .wrangler/state`
+- `dev:api`：`wrangler pages dev dist --port 8788 --do ROOM=Room@ember-vault-room --persist-to .wrangler/state`（透過 dev registry 綁到本機的 `ember-vault-room`；**要先有 `dev:room` 在跑**，否則 `/api/rooms` 會 500）
 - Vite 已設定 `/api` 代理（含 WebSocket）到 `:8788`，用 <http://localhost:3000> 開遊戲。
+
+**P6：兩個行程要看到同一份本機 D1。** Room Worker 現在也讀寫 D1（交易），而 `db:migrate:local`、Pages 與 Room Worker 都要指到同一個本機資料庫檔。兩個 dev 指令因此都明確帶 `--persist-to .wrangler/state`（相對於專案根目錄，也是 `db:migrate:local` 預設用的位置；`wrangler dev` 不帶時會以設定檔所在的 `workers/room/` 為基準，兩邊就分家了），且兩份 `wrangler.toml` 的 `database_id` 相同。本機資料庫檔在 `.wrangler/state/v3/d1/`（已 gitignore）。若交易回 `server_error`，先確認有跑過 `npm run db:migrate:local`。
 
 ### 開發登入：多個帳號
 
@@ -127,7 +137,11 @@ P5-A 的用量估算：4 人房間，每人每 5 秒 1 則 ping ≈ 每小時 4 
 - 傳入 DO 的訊息才計費：房主快照 15 Hz（≈ 54,000 則／小時）＋每位成員「有變化才送」的輸入（最高 20 Hz、沒變化每秒 1 則 keepalive）＋每人每 5 秒 1 則 ping；DO 轉發出去的訊息不計。
 - 實測 4 人房間約 **3,900 次請求／小時**（成員輸入以測試腳本的頻率計；保守上限 3 位成員全程 20 Hz 約 13,600 次／小時）→ 免費額度 100,000 次／天約 7–25 個房間小時。
 
-## 已知限制（P5-A / P5-B / P5-C）
+## 已知限制（P5-A / P5-B / P5-C / P6）
+
+- P6：「是否在城鎮」由客戶端回報（城鎮本機模擬，與 `townPos` 同一信任等級）；交易內容與金幣一律由 DO 從 D1 驗證，所以謊報在城鎮最多只能和同房的人開交易視窗，無法憑空產生物品。
+- P6：交易草稿只存在 DO 記憶體，DO 被回收會讓進行中的交易取消（客戶端會收到 `expired` 並解鎖），已確認但尚未執行的交易也一併作廢。
+- P6：連線在「伺服器已執行、客戶端尚未收到結果」之間斷掉時，客戶端無從得知結果；它離開房間時上傳的舊存檔會因 `save_version` 已前進而被 409 擋下，重新載入即為交易後的存檔。
 
 - P5-B：遊戲開始後不能中途加入（409「遊戲已開始」）。
 - P5-C：房主倒地、坐在死亡畫面上而隊友都在城鎮時，地城不算「清空」，隊友這時回來不會讓怪物重生（要等房主按「回到城鎮」）。城鎮裡沒有碰撞：兩個英雄可以疊在一起（本機英雄也看得到對方站在同一格）。
