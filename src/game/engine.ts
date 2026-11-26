@@ -7452,7 +7452,13 @@ export class EmbervaultEngine {
     this.heroLight.distance = 11.2 * (1 + (this.relicStats.lanternGlowPct / 100) * 0.45);
     const lanternOffX = Math.sin(this.heroFacing - 0.55) * 0.65;
     const lanternOffZ = Math.cos(this.heroFacing - 0.55) * 0.65;
-    this.heroLight.position.set(this.heroX + lanternOffX, 1.85, this.heroZ + lanternOffZ);
+    // Mage: lift the light well above her head so the pale robe/hair isn't blown out at close range
+    const lightRise = this.isMage() ? 1.25 : 1;
+    this.heroLight.position.set(
+      this.heroX + lanternOffX * lightRise,
+      this.isMage() ? 2.9 : 1.85,
+      this.heroZ + lanternOffZ * lightRise
+    );
     this.heroFloorGlow.position.set(this.heroX + lanternOffX * 0.5, 0.022, this.heroZ + lanternOffZ * 0.5);
     (this.heroFloorGlow.material as THREE.MeshBasicMaterial).opacity = 0.36 + flicker * 0.008;
 
