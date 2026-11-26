@@ -97,7 +97,7 @@ export function RelicMiniCard({
       onMouseEnter={(e) => onHover?.(item, e)}
       onMouseMove={(e) => onHover?.(item, e)}
       onMouseLeave={() => onHover?.(null)}
-      className={`flex flex-col justify-between border p-1.5 min-h-[92px] ${css.bg} ${css.border}`}
+      className={`flex flex-col justify-between border p-1.5 ${css.bg} ${css.border}`}
     >
       <div className="min-w-0">
         <div className="flex items-baseline justify-between gap-1">
@@ -109,14 +109,14 @@ export function RelicMiniCard({
           </span>
         </div>
 
-        <div className="mt-1 space-y-0.5 font-hud text-[10px] leading-tight text-[#e5e0d4] tabular-nums">
+        <div className="mt-0.5 space-y-0 font-hud text-[10px] leading-[1.25] text-[#e5e0d4] tabular-nums">
           {visibleStats.map((s, idx) => (
             <div key={idx} className="truncate">
               {formatRelicStat(s)}
             </div>
           ))}
           {extraCount > 0 && (
-            <div className="text-[9px] text-[#9ea4b5]">+{extraCount} 項屬性…</div>
+            <div className="text-[9px] text-[#9ea4b5] truncate">+{extraCount} 項…</div>
           )}
           {item.uniqueEffectTitle && (
             <div className="flex items-center gap-0.5 text-[9px] text-[#ffb878] truncate">
@@ -125,12 +125,12 @@ export function RelicMiniCard({
             </div>
           )}
           {!item.uniqueEffectTitle && item.setName && (
-            <div className="text-[9px] text-[#8ef5a8] truncate">套裝 · {item.setName}</div>
+            <div className="text-[9px] text-[#8ef5a8] truncate">{item.setName}</div>
           )}
         </div>
       </div>
 
-      <div className="mt-1.5 pt-1 border-t border-white/10 flex items-center justify-end gap-1">
+      <div className="mt-1 pt-1 border-t border-white/10 flex items-center justify-between gap-1">
         {action}
       </div>
     </div>
@@ -346,7 +346,7 @@ export function StashModal({
           背包目前沒有遺物
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(124px,1fr))] gap-1.5">
           {sortedBag.map((item) => (
             <RelicMiniCard
               key={item.id}
@@ -358,10 +358,11 @@ export function StashModal({
                   <button
                     type="button"
                     data-action="deposit"
+                    title="存入倉庫"
                     onClick={() => handleMove(onDeposit(item.id), `已存入「${item.name}」`)}
                     className="px-1.5 py-0.5 border border-[#5e523a] bg-[#1a1d28] font-hud text-[10px] font-semibold text-[#f0e2be] hover:border-[#d6b25e] hover:bg-[#272318] cursor-pointer whitespace-nowrap"
                   >
-                    存入
+                    存
                   </button>
                   <button
                     type="button"
@@ -370,7 +371,7 @@ export function StashModal({
                     onClick={() => handleSell(item, 'bag')}
                     className="px-1.5 py-0.5 border border-[#6e5225] bg-[#21190c] font-hud text-[10px] font-semibold text-[#ffd466] hover:border-[#ebbf52] hover:bg-[#2e2310] cursor-pointer whitespace-nowrap tabular-nums"
                   >
-                    賣+{item.sellValue}G
+                    賣 {item.sellValue}G
                   </button>
                 </>
               }
@@ -448,7 +449,7 @@ export function StashModal({
             : '沒有符合篩選條件的遺物。'}
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 gap-1.5">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(124px,1fr))] gap-1.5">
           {visibleStash.map((item) => (
             <RelicMiniCard
               key={item.id}
@@ -460,12 +461,13 @@ export function StashModal({
                   <button
                     type="button"
                     data-action="withdraw"
+                    title="取出到背包"
                     onClick={() =>
                       handleMove(onWithdraw(item.id), `已取出「${item.name}」到背包`)
                     }
                     className="px-1.5 py-0.5 border border-[#3e6a5a] bg-[#122019] font-hud text-[10px] font-semibold text-[#b9f2d6] hover:border-[#6ee0a8] hover:bg-[#183226] cursor-pointer whitespace-nowrap"
                   >
-                    取出
+                    取
                   </button>
                   <button
                     type="button"
@@ -474,7 +476,7 @@ export function StashModal({
                     onClick={() => handleSell(item, 'stash')}
                     className="px-1.5 py-0.5 border border-[#6e5225] bg-[#21190c] font-hud text-[10px] font-semibold text-[#ffd466] hover:border-[#ebbf52] hover:bg-[#2e2310] cursor-pointer whitespace-nowrap tabular-nums"
                   >
-                    賣+{item.sellValue}G
+                    賣 {item.sellValue}G
                   </button>
                 </>
               }
