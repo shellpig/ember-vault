@@ -40,7 +40,7 @@ export interface CharacterState {
   upgrades: CharacterUpgrades;
   equipped: RelicItem[];
   bag: RelicItem[];
-  /** Optional on upload: when omitted the server keeps the stored stash (P1 has no stash UI). */
+  /** Optional on upload: when omitted the server keeps the stored stash (the P2+ client always sends it). */
   stash?: RelicItem[];
 }
 

@@ -4144,6 +4144,138 @@ export function createCentralWell(): THREE.Group {
   return root;
 }
 
+export interface StashChestRig {
+  root: THREE.Group;
+  lid: THREE.Group;
+  halo: THREE.Sprite;
+  glowRing: THREE.Mesh;
+}
+
+/** Large banded wooden storage chest for the town stash (faintly glowing so it is easy to spot). */
+export function createStashChest(glowMap: THREE.Texture): StashChestRig {
+  const root = new THREE.Group();
+
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b4126, roughness: 0.84, metalness: 0.06 });
+  const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x4a2c19, roughness: 0.88, metalness: 0.06 });
+  const ironMat = new THREE.MeshStandardMaterial({ color: 0x5b6070, roughness: 0.5, metalness: 0.7 });
+  const goldMat = new THREE.MeshStandardMaterial({
+    color: 0xd8a83a,
+    emissive: 0x8a5a10,
+    emissiveIntensity: 0.7,
+    roughness: 0.38,
+    metalness: 0.75,
+  });
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: 0xffd27a,
+    emissive: 0xffa630,
+    emissiveIntensity: 1.1,
+    roughness: 0.6,
+  });
+
+  // Stone plinth
+  const plinth = new THREE.Mesh(
+    new THREE.BoxGeometry(2.0, 0.14, 1.4),
+    new THREE.MeshStandardMaterial({ color: 0x6f7480, roughness: 0.9, metalness: 0.08 })
+  );
+  plinth.position.y = 0.07;
+  plinth.receiveShadow = true;
+  root.add(plinth);
+
+  // Body
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.74, 1.08), woodMat);
+  body.position.y = 0.14 + 0.37;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  root.add(body);
+
+  // Iron bands around the body
+  const bandGeo = new THREE.BoxGeometry(0.14, 0.78, 1.14);
+  for (const bx of [-0.62, 0.62]) {
+    const band = new THREE.Mesh(bandGeo, ironMat);
+    band.position.set(bx, 0.14 + 0.37, 0);
+    band.castShadow = true;
+    root.add(band);
+  }
+  // Corner studs
+  const studGeo = new THREE.SphereGeometry(0.05, 6, 6);
+  for (const sx of [-0.8, 0.8]) {
+    for (const sz of [-0.5, 0.5]) {
+      for (const sy of [0.22, 0.78]) {
+        const stud = new THREE.Mesh(studGeo, goldMat);
+        stud.position.set(sx, sy, sz);
+        root.add(stud);
+      }
+    }
+  }
+
+  // Domed lid: half-cylinder lying along X, hinged at the back edge
+  const lid = new THREE.Group();
+  lid.position.set(0, 0.14 + 0.74, -0.54);
+  const lidMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.54, 0.54, 1.7, 14, 1, false, 0, Math.PI),
+    darkWoodMat
+  );
+  lidMesh.rotation.z = Math.PI / 2;
+  lidMesh.position.set(0, 0, 0.54);
+  lidMesh.castShadow = true;
+  lid.add(lidMesh);
+  for (const bx of [-0.62, 0.62]) {
+    const lidBand = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.565, 0.565, 0.14, 14, 1, false, 0, Math.PI),
+      ironMat
+    );
+    lidBand.rotation.z = Math.PI / 2;
+    lidBand.position.set(bx, 0, 0.54);
+    lid.add(lidBand);
+  }
+  root.add(lid);
+
+  // Gold lock plate on the front
+  const lock = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.28, 0.07), goldMat);
+  lock.position.set(0, 0.14 + 0.58, 0.56);
+  root.add(lock);
+  const keyhole = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, 0.08), new THREE.MeshStandardMaterial({ color: 0x1a1208 }));
+  keyhole.position.set(0, 0.14 + 0.56, 0.585);
+  root.add(keyhole);
+
+  // Faint glow seeping out of the lid seam
+  const seam = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.04, 0.05), glowMat);
+  seam.position.set(0, 0.14 + 0.745, 0.54);
+  root.add(seam);
+
+  // Floor glow ring + halo sprite
+  const glowRing = new THREE.Mesh(
+    new THREE.RingGeometry(1.15, 1.4, 28),
+    new THREE.MeshBasicMaterial({
+      color: 0xffc457,
+      transparent: true,
+      opacity: 0.32,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  glowRing.rotation.x = -Math.PI / 2;
+  glowRing.position.y = 0.04;
+  root.add(glowRing);
+
+  const halo = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowMap,
+      color: 0xffb445,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  halo.scale.set(2.6, 2.6, 1);
+  halo.position.set(0, 0.95, 0);
+  root.add(halo);
+
+  return { root, lid, halo, glowRing };
+}
+
 export function createTownHouse(
   variant: 'tavern' | 'cottage',
   glowMap: THREE.Texture

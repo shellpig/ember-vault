@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronUp,
+  Archive,
   Coins,
   DoorOpen,
   Feather,
@@ -33,6 +34,7 @@ import {
   MinimapSnapshot,
 } from './game/types';
 import { RelicCompendiumModal, RelicEquipmentModal } from './components/RelicModals';
+import { StashModal } from './components/StashModal';
 import { CharacterSelectScreen, LobbyScreen, LoginScreen } from './components/AccountScreens';
 import { ApiError, api, saveToLoadout } from './api';
 import { SaveManager, SaveStatus } from './saveManager';
@@ -129,6 +131,11 @@ const INITIAL_HUD: HudState = {
   equippedRelics: [],
   relicBag: [],
   relicBagCap: 30,
+  nearStash: false,
+  stashOpen: false,
+  stash: [],
+  stashCount: 0,
+  stashCap: 200,
   relicStats: computeRelicSummary([]),
   activeSets: [],
   discoveredRelicIds: [],
@@ -400,11 +407,17 @@ export default function App() {
       if (e.code === 'Escape') {
         setRelicModalOpen(false);
         setCodexModalOpen(false);
+        engineRef.current?.closeStash();
       }
     };
     window.addEventListener('keydown', onGlobalKeyDown);
     return () => window.removeEventListener('keydown', onGlobalKeyDown);
   }, []);
+
+  // The stash window replaces the equipment window while it is open.
+  useEffect(() => {
+    if (hud.stashOpen) setRelicModalOpen(false);
+  }, [hud.stashOpen]);
 
   // --- Account / save flow -------------------------------------------------
   // Restore an existing session on load.
@@ -1042,6 +1055,40 @@ export default function App() {
           </div>
         )}
 
+        {hud.inTown && hud.nearStash && !hud.stashOpen && !hud.nearAltar && !hud.nearShop && !hud.nearPortal && (
+          <div
+            data-testid="stash-prompt"
+            className="mb-2.5 bg-[#0c0e14]/95 border border-[#d9a441] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2.5"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[#403320] pb-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Archive className="w-4 h-4 text-[#ffd566] shrink-0" />
+                <span className="font-display text-xs font-bold tracking-[0.12em] text-[#f5dc99] whitespace-nowrap">
+                  城鎮倉庫
+                </span>
+              </div>
+              <span className="font-hud text-[11px] font-bold text-[#e8c777] whitespace-nowrap shrink-0 tabular-nums">
+                {hud.stashCount} / {hud.stashCap}
+              </span>
+            </div>
+            <p className="font-hud text-[11px] text-[#aeb8c7] leading-relaxed">
+              存放暫時用不到的遺物，內容會跨局保留。
+            </p>
+            <button
+              type="button"
+              data-testid="stash-open"
+              onClick={() => engineRef.current?.openStash()}
+              className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-[#b8903a] bg-[#261d0e] hover:border-[#f0c75e] hover:bg-[#332712] transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2 text-xs font-hud font-bold text-[#ffe3a0] whitespace-nowrap">
+                <Archive className="w-4 h-4 text-[#ffd25a] shrink-0" />
+                <span>打開倉庫</span>
+              </div>
+              <span className="font-hud text-[11px] text-[#e0bf74] whitespace-nowrap">按 F 或點擊</span>
+            </button>
+          </div>
+        )}
+
         {hud.inTown && hud.nearAngel && !hud.nearAltar && !hud.nearShop && !hud.nearPortal && (
           <div className="mb-2.5 bg-[#0c0e14]/95 border border-[#f0d98c] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(440px,94vw)] space-y-2.5">
             <div className="flex items-center justify-between gap-3 border-b border-[#403723] pb-2">
@@ -1585,6 +1632,22 @@ export default function App() {
           onSell={(relicId) => engineRef.current?.sellRelic(relicId)}
           onSellCommon={() => engineRef.current?.sellCommonBagRelics(true)}
           onClose={() => setRelicModalOpen(false)}
+        />
+      )}
+
+      {/* Town stash window (engine blocks hero input while open; closing it triggers a save) */}
+      {hud.stashOpen && hud.inTown && !hud.isDead && (
+        <StashModal
+          heroClass={hud.heroClass}
+          equipped={hud.equippedRelics}
+          bag={hud.relicBag}
+          bagCap={hud.relicBagCap}
+          stash={hud.stash}
+          stashCap={hud.stashCap}
+          onDeposit={(id) => engineRef.current!.depositRelic(id)}
+          onWithdraw={(id) => engineRef.current!.withdrawRelic(id)}
+          onUnequip={(slotIdx) => engineRef.current?.unequipRelic(slotIdx)}
+          onClose={() => engineRef.current?.closeStash()}
         />
       )}
 

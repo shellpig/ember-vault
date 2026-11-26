@@ -20,6 +20,7 @@ import {
   HeroRig,
   RelicLootRig,
   SpikeTrapRig,
+  StashChestRig,
   TownPortalRig,
   applyEliteVisuals,
   createAngelModel,
@@ -42,6 +43,7 @@ import {
   createRuneWell,
   createStairwell,
   createTownHouse,
+  createStashChest,
   createTownPortal,
   createUpgradeAltar,
   createVillageLampPost,
@@ -98,10 +100,20 @@ export interface CharacterLoadout {
   upgrades: CharacterUpgrades;
   equipped: RelicItem[];
   bag: RelicItem[];
+  /** Town stash (up to STASH_CAP relics). */
+  stash: RelicItem[];
 }
 
+/** Stash capacity (mirrors MAX_STASH in shared/character.ts). */
+export const STASH_CAP = 200;
+
+/** Result of moving a relic between the bag and the stash. */
+export type StashMoveResult =
+  | { ok: true }
+  | { ok: false; reason: 'closed' | 'notFound' | 'bagFull' | 'stashFull' };
+
 /** Why the engine asks the host to persist the character right now. */
-export type SaveCheckpointReason = 'town' | 'leaveTown' | 'floor' | 'death';
+export type SaveCheckpointReason = 'town' | 'leaveTown' | 'floor' | 'death' | 'stash';
 
 interface EngineCallbacks {
   /** Called at save points (town, leaving town, new floor, death) while a saved character is loaded. */
@@ -594,6 +606,7 @@ interface AnimatedLightProp {
     | 'shop'
     | 'portal'
     | 'angel'
+    | 'stash'
     | 'lamp';
   used?: boolean;
 }
@@ -783,6 +796,11 @@ export class EmbervaultEngine {
   private equippedRelics: RelicItem[] = [];
   private relicBag: RelicItem[] = [];
   private readonly relicBagCap = 30;
+  /** Town stash contents (oldest deposit first). Persisted with the character. */
+  private stash: RelicItem[] = [];
+  private stashOpen = false;
+  private stashPos: { x: number; z: number } | null = null;
+  private stashRig: StashChestRig | null = null;
   private discoveredRelicIds = new Set<string>();
   private relicStats: RelicSummaryStats = computeRelicSummary([]);
   private phantomCritTimer = 0;
@@ -1135,6 +1153,9 @@ export class EmbervaultEngine {
     this.townPortalRig = null;
     this.townPortalPos = null;
     this.angelPos = null;
+    this.stashPos = null;
+    this.stashRig = null;
+    this.stashOpen = false;
     this.wallOpaqueMeshes = [];
     this.wallFadeMeshes = [];
     this.capOpaqueMesh = null;
@@ -2164,6 +2185,32 @@ export class EmbervaultEngine {
       });
     }
 
+    // 8b. Stash chest (town warehouse) at (18, 20): open plaza corner, clear of portal, altar and shop
+    {
+      const cg = { gx: 18, gz: 20 };
+      const cw = gridToWorld(cg.gx, cg.gz);
+      const chest = createStashChest(this.textures.glowMap);
+      chest.root.position.set(cw.x, 0, cw.z);
+      chest.root.rotation.y = Math.PI / 4; // front faces the camera side
+      this.levelGroup.add(chest.root);
+      this.stashRig = chest;
+      this.stashPos = { x: cw.x, z: cw.z };
+      tiles[cg.gz][cg.gx] = 2; // solid footprint so the hero walks around it
+      this.lightProps.push({
+        color: 0xffc060,
+        baseIntensity: 30,
+        distance: 9.5,
+        decay: 2.0,
+        phase: 3.1,
+        x: cw.x,
+        y: 1.5,
+        z: cw.z,
+        halo: chest.halo,
+        decal: chest.glowRing,
+        kind: 'stash',
+      });
+    }
+
     // 9. Atmospheric Village Lamp Posts & Perimeter Forest Pine Trees across the 4x square
     const lampCoords: Array<[number, number]> = [
       [3.5, 3.5],
@@ -2720,8 +2767,19 @@ export class EmbervaultEngine {
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (this.isDead || this.inputLocked) return;
     const tag = (e.target as HTMLElement | null)?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    // Stash window open: the hero stays put (the window handles Esc / F itself).
+    if (this.stashOpen) return;
     const code = e.code;
+
+    // Hotkey F: interact with the town stash chest
+    if (code === 'KeyF' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (this.inTown && this.isHeroNearStash()) {
+        e.preventDefault();
+        this.openStash();
+      }
+      return;
+    }
 
     // Hidden shortcut: Ctrl+J jumps straight to the next floor entrance and grants (nextDepth * 100) gold
     if (e.ctrlKey && !e.altKey && (code === 'KeyJ' || e.key.toLowerCase() === 'j')) {
@@ -3144,6 +3202,8 @@ export class EmbervaultEngine {
       this.slainBy = '地城陷阱';
       this.equippedRelics = [];
       this.relicBag = [];
+      this.stash = [];
+      this.stashOpen = false;
       this.discoveredRelicIds.clear();
       this.phantomCritTimer = 0;
       this.alchemistShieldTimer = 0;
@@ -3200,7 +3260,8 @@ export class EmbervaultEngine {
     this.potions = Math.max(0, Math.floor(l.potions));
     this.equippedRelics = l.equipped.slice(0, 4).map((r) => ({ ...r }));
     this.relicBag = l.bag.slice(0, this.relicBagCap).map((r) => ({ ...r }));
-    for (const r of [...this.equippedRelics, ...this.relicBag]) {
+    this.stash = (l.stash ?? []).slice(0, STASH_CAP).map((r) => ({ ...r }));
+    for (const r of [...this.equippedRelics, ...this.relicBag, ...this.stash]) {
       this.discoveredRelicIds.add(r.templateId);
     }
   }
@@ -3221,6 +3282,7 @@ export class EmbervaultEngine {
       },
       equipped: this.equippedRelics.map((r) => ({ ...r })),
       bag: this.relicBag.map((r) => ({ ...r })),
+      stash: this.stash.map((r) => ({ ...r })),
     };
   }
 
@@ -3550,6 +3612,60 @@ export class EmbervaultEngine {
   private isHeroNearPortal(): boolean {
     if (!this.inTown || !this.townPortalPos) return false;
     return Math.hypot(this.heroX - this.townPortalPos.x, this.heroZ - this.townPortalPos.z) < 2.25;
+  }
+
+  private isHeroNearStash(): boolean {
+    if (!this.inTown || !this.stashPos) return false;
+    return Math.hypot(this.heroX - this.stashPos.x, this.heroZ - this.stashPos.z) < 2.75;
+  }
+
+  /** Opens the stash window. Only in town, next to the chest, on a saved character (never for attract mode). */
+  public openStash(): boolean {
+    if (this.isDead || !this.inTown || !this.persistRun || this.loadingRun) return false;
+    if (this.transitionState !== 'none' || !this.isHeroNearStash()) return false;
+    if (this.stashOpen) return true;
+    this.stashOpen = true;
+    this.keysPressed.clear();
+    this.leftMouseHeld = false;
+    this.audio.playRelicEquip();
+    this.emitHud();
+    return true;
+  }
+
+  /** Closes the stash window and asks the host to save. Safe to call when already closed. */
+  public closeStash(): void {
+    if (!this.stashOpen) return;
+    this.stashOpen = false;
+    this.keysPressed.clear();
+    this.audio.playRelicEquip();
+    this.requestSave('stash');
+    this.emitHud();
+  }
+
+  /** Bag -> stash. Equipped relics must be unequipped to the bag first. */
+  public depositRelic(relicId: string): StashMoveResult {
+    if (!this.stashOpen || !this.inTown || this.isDead) return { ok: false, reason: 'closed' };
+    const idx = this.relicBag.findIndex((r) => r.id === relicId);
+    if (idx === -1) return { ok: false, reason: 'notFound' };
+    if (this.stash.length >= STASH_CAP) return { ok: false, reason: 'stashFull' };
+    const [item] = this.relicBag.splice(idx, 1);
+    this.stash.push(item);
+    this.audio.playRelicEquip();
+    this.emitHud();
+    return { ok: true };
+  }
+
+  /** Stash -> bag. */
+  public withdrawRelic(relicId: string): StashMoveResult {
+    if (!this.stashOpen || !this.inTown || this.isDead) return { ok: false, reason: 'closed' };
+    const idx = this.stash.findIndex((r) => r.id === relicId);
+    if (idx === -1) return { ok: false, reason: 'notFound' };
+    if (this.relicBag.length >= this.relicBagCap) return { ok: false, reason: 'bagFull' };
+    const [item] = this.stash.splice(idx, 1);
+    this.relicBag.unshift(item);
+    this.audio.playRelicEquip();
+    this.emitHud();
+    return { ok: true };
   }
 
   private isHeroNearAngel(): boolean {
@@ -6011,6 +6127,11 @@ export class EmbervaultEngine {
       equippedRelics: [...this.equippedRelics],
       relicBag: [...this.relicBag],
       relicBagCap: this.relicBagCap,
+      nearStash: this.isHeroNearStash(),
+      stashOpen: this.stashOpen,
+      stash: this.stashOpen ? [...this.stash] : [],
+      stashCount: this.stash.length,
+      stashCap: STASH_CAP,
       relicStats: this.relicStats,
       activeSets: this.relicStats.activeSets,
       discoveredRelicIds: Array.from(this.discoveredRelicIds),
@@ -9160,6 +9281,18 @@ export class EmbervaultEngine {
           this.emitFloatingText(lp.x, 1.7, lp.z, 'SANCTUM +20 HP', 'info');
           this.emitHud();
         }
+      } else if (lp.kind === 'stash') {
+        intensity = lp.baseIntensity + Math.sin(this.elapsed * 2.2 + lp.phase) * 3.5;
+        if (lp.halo) {
+          const hs = 2.6 + Math.sin(this.elapsed * 2.2 + lp.phase) * 0.22;
+          lp.halo.scale.set(hs, hs, 1);
+        }
+        if (lp.decal) lp.decal.rotation.z += dt * 0.25;
+        if (this.stashOpen && this.stashRig) {
+          this.stashRig.lid.rotation.x = THREE.MathUtils.lerp(this.stashRig.lid.rotation.x, -1.15, Math.min(1, dt * 8));
+        } else if (this.stashRig) {
+          this.stashRig.lid.rotation.x = THREE.MathUtils.lerp(this.stashRig.lid.rotation.x, 0, Math.min(1, dt * 8));
+        }
       } else if (lp.kind === 'altar' || lp.kind === 'shop') {
         const isShop = lp.kind === 'shop';
         const pulse = Math.sin(this.elapsed * 2.8 + lp.phase) * 4.5;
@@ -9198,7 +9331,11 @@ export class EmbervaultEngine {
 
       // Slightly prioritize altars, potion shops, portals, angel, arcane rune circles, and key pedestals
       const priorityBias =
-        lp.kind === 'altar' || lp.kind === 'shop' || lp.kind === 'angel' || lp.kind === 'portal'
+        lp.kind === 'altar' ||
+        lp.kind === 'shop' ||
+        lp.kind === 'angel' ||
+        lp.kind === 'portal' ||
+        lp.kind === 'stash'
           ? -4.5
           : lp.kind === 'rune' || lp.kind === 'key' || lp.kind === 'stairs'
           ? -3.5

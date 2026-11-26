@@ -261,6 +261,14 @@ export interface HudState {
   equippedRelics: RelicItem[];
   relicBag: RelicItem[];
   relicBagCap: number;
+  /** Hero is next to the town stash chest. */
+  nearStash: boolean;
+  /** Stash window is open (engine blocks hero input while true). */
+  stashOpen: boolean;
+  /** Stash contents; only populated while the window is open. */
+  stash: RelicItem[];
+  stashCount: number;
+  stashCap: number;
   relicStats: RelicSummaryStats;
   activeSets: ActiveSetBonus[];
   discoveredRelicIds: string[];
