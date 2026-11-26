@@ -7,11 +7,20 @@ import {
   RelicSummaryStats,
   SET_RELIC_CATALOG,
   UNIQUE_RELIC_CATALOG,
+  formatMaxHpStatForClass,
   formatRelicStat,
   formatStatRange,
   getRarityCss,
   getRarityLabel,
+  getUniqueEffectDescForClass,
 } from '../game/relics';
+import type { HeroClassId } from '../game/classes';
+
+function MageHpNote({ value, heroClass }: { value: number; heroClass: HeroClassId }) {
+  const note = formatMaxHpStatForClass(value, heroClass);
+  if (!note) return null;
+  return <div className="text-[9px] text-[#8ecbff]/80">{note}</div>;
+}
 
 interface RelicEquipmentModalProps {
   equipped: RelicItem[];
@@ -25,6 +34,7 @@ interface RelicEquipmentModalProps {
   onSell: (relicId: string) => void;
   onSellCommon: () => void;
   onClose: () => void;
+  heroClass?: HeroClassId;
 }
 
 const RARITY_ORDER: Record<RelicRarity, number> = {
@@ -46,6 +56,7 @@ export function RelicEquipmentModal({
   onSell,
   onSellCommon,
   onClose,
+  heroClass = 'warrior',
 }: RelicEquipmentModalProps) {
   const [filter, setFilter] = useState<'all' | RelicRarity>('all');
   const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
@@ -66,12 +77,16 @@ export function RelicEquipmentModal({
   );
 
   const summaryItems = useMemo(() => {
-    const rows: Array<{ label: string; value: string }> = [];
+    const rows: Array<{ label: string; value: string; note?: string }> = [];
     if (relicStats.atkPct > 0) rows.push({ label: '攻擊力', value: `+${relicStats.atkPct}%` });
     if (relicStats.critPct > 0) rows.push({ label: '暴擊率', value: `+${relicStats.critPct}%` });
     if (relicStats.critDmgPct > 0)
       rows.push({ label: '暴擊傷害', value: `+${relicStats.critDmgPct}%` });
-    if (relicStats.maxHp > 0) rows.push({ label: '血量上限', value: `+${relicStats.maxHp}` });
+    if (relicStats.maxHp > 0) rows.push({
+        label: '血量上限',
+        value: `+${relicStats.maxHp}`,
+        note: formatMaxHpStatForClass(relicStats.maxHp, heroClass) ?? undefined,
+      });
     if (relicStats.damageReduction > 0)
       rows.push({ label: '受傷害', value: `-${relicStats.damageReduction}` });
     if (relicStats.blockPct > 0) rows.push({ label: '格擋率', value: `${relicStats.blockPct}%` });
@@ -201,13 +216,18 @@ export function RelicEquipmentModal({
                       </div>
                       <div className="space-y-0.5 font-hud text-[11px] text-[#e8e4da] tabular-nums">
                         {item.stats.map((s, idx) => (
-                          <div key={idx}>{formatRelicStat(s)}</div>
+                          <div key={idx}>
+                            {formatRelicStat(s)}
+                            {s.key === 'maxHp' && <MageHpNote value={s.value} heroClass={heroClass} />}
+                          </div>
                         ))}
                       </div>
                       {item.uniqueEffectTitle && (
                         <div className="mt-2 pt-1.5 border-t border-[#4f3018] font-hud text-[10px] leading-relaxed text-[#ffb878]">
                           <span className="font-bold">【{item.uniqueEffectTitle}】</span>
-                          {item.uniqueEffectDesc}
+                          {item.uniqueEffectId
+                            ? getUniqueEffectDescForClass(item.uniqueEffectId, heroClass)
+                            : item.uniqueEffectDesc}
                         </div>
                       )}
                     </div>
@@ -261,9 +281,12 @@ export function RelicEquipmentModal({
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1.5 font-hud text-xs tabular-nums">
                     {summaryItems.map((row) => (
-                      <div key={row.label} className="flex items-baseline justify-between gap-2">
-                        <span className="text-[#949aaf] truncate">{row.label}</span>
-                        <span className="text-[#f2e2b6] font-semibold shrink-0">{row.value}</span>
+                      <div key={row.label}>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="text-[#949aaf] truncate">{row.label}</span>
+                          <span className="text-[#f2e2b6] font-semibold shrink-0">{row.value}</span>
+                        </div>
+                        {row.note && <div className="text-[9px] text-[#8ecbff]/80">{row.note}</div>}
                       </div>
                     ))}
                   </div>
@@ -393,13 +416,18 @@ export function RelicEquipmentModal({
                         </div>
                         <div className="space-y-0.5 font-hud text-[11px] text-[#ebe7dc] tabular-nums">
                           {item.stats.map((s, idx) => (
-                            <div key={idx}>{formatRelicStat(s)}</div>
+                            <div key={idx}>
+                              {formatRelicStat(s)}
+                              {s.key === 'maxHp' && <MageHpNote value={s.value} heroClass={heroClass} />}
+                            </div>
                           ))}
                         </div>
                         {item.uniqueEffectTitle && (
                           <div className="mt-2 pt-1.5 border-t border-[#4f3018] font-hud text-[10px] leading-relaxed text-[#ffb878]">
                             <span className="font-bold">【{item.uniqueEffectTitle}】</span>
-                            {item.uniqueEffectDesc}
+                            {item.uniqueEffectId
+                            ? getUniqueEffectDescForClass(item.uniqueEffectId, heroClass)
+                            : item.uniqueEffectDesc}
                           </div>
                         )}
                       </div>
@@ -451,9 +479,14 @@ export function RelicEquipmentModal({
 interface RelicCompendiumModalProps {
   discoveredIds: string[];
   onClose: () => void;
+  heroClass?: HeroClassId;
 }
 
-export function RelicCompendiumModal({ discoveredIds, onClose }: RelicCompendiumModalProps) {
+export function RelicCompendiumModal({
+  discoveredIds,
+  onClose,
+  heroClass = 'warrior',
+}: RelicCompendiumModalProps) {
   const [tab, setTab] = useState<'orange' | 'green'>('orange');
   const discoveredSet = useMemo(() => new Set(discoveredIds), [discoveredIds]);
 
@@ -557,7 +590,12 @@ export function RelicCompendiumModal({ discoveredIds, onClose }: RelicCompendium
                         {u.statKeys.map((k) => (
                           <div key={k} className="flex items-center gap-1.5">
                             <Sparkles className="w-3 h-3 text-[#ff9b4a] shrink-0" />
-                            <span>{formatStatRange(k)}</span>
+                            <span>
+                              {formatStatRange(k)}
+                              {k === 'maxHp' && heroClass === 'frost_mage' && (
+                                <span className="ml-1 text-[9px] text-[#8ecbff]/80">（法師：30% HP / 70% 護盾）</span>
+                              )}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -565,7 +603,7 @@ export function RelicCompendiumModal({ discoveredIds, onClose }: RelicCompendium
 
                     <div className="pt-2 border-t border-[#4a2812] font-hud text-xs leading-relaxed text-[#ffc994]">
                       <span className="font-bold text-[#ff9b4a]">獨特能力【{u.uniqueEffectTitle}】：</span>
-                      <span>{u.uniqueEffectDesc}</span>
+                      <span>{getUniqueEffectDescForClass(u.uniqueEffectId, heroClass)}</span>
                     </div>
                   </div>
                 );

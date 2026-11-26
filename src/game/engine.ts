@@ -29,6 +29,10 @@ import {
   createEnemyModel,
   createHeroModel,
   createHeroSetAura,
+  createFrostMageModel,
+  createIceSpikeMesh,
+  createFrozenShell,
+  createSlowMarker,
   createKeyPedestal,
   createLootMesh,
   createPotionShop,
@@ -60,6 +64,15 @@ import {
   rollRelicDrops,
 } from './relics';
 import { DungeonTextureSet, createDungeonTextures } from './textures';
+import {
+  FROST_MAGE,
+  HERO_CLASSES,
+  HeroClassId,
+  UpgradeKind,
+  UpgradeOptionView,
+  getShieldSpeedFactor,
+  splitRelicMaxHpForMage,
+} from './classes';
 import {
   BannerEvent,
   BiomeConfig,
@@ -435,6 +448,46 @@ interface EnemyEntity {
   bossSkillIndex?: number;
   bossChargeStartX?: number;
   bossChargeStartZ?: number;
+  // Frost Mage debuffs
+  /** Seconds of slow remaining. */
+  slowTimer?: number;
+  /** Fraction of move/attack speed removed while slowed (0.4 normal, 0.2 elite, 0.1 boss). */
+  slowPct?: number;
+  /** Seconds of Frost Nova freeze remaining (acts like a stun). */
+  frozenTimer?: number;
+}
+
+interface HeroProjectileEntity {
+  mesh: THREE.Group;
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  traveled: number;
+  /** 0, 1 = normal spike, 2 = empowered spike */
+  shotIdx: number;
+  /** Phantom Boots guaranteed crit captured when the spike was fired. */
+  phantomCrit: boolean;
+}
+
+interface HeroHitParams {
+  baseDmg: number;
+  /** Warrior 3rd-hit cleave / Frost Mage empowered 3rd spike (Stormforged Hammer trigger). */
+  isEmpowered: boolean;
+  atkMult: number;
+  critChance: number;
+  critMult: number;
+  knockMult: number;
+  knockBase: number;
+  originX: number;
+  originZ: number;
+  fallbackX: number;
+  fallbackZ: number;
+  usePhantomCrit: boolean;
+  effMaxHp: number;
+  state: { consumedPhantom: boolean; triggeredStorm: boolean };
+  hitColor?: number;
+  isMageHit?: boolean;
 }
 
 interface ProjectileEntity {
@@ -658,7 +711,29 @@ export class EmbervaultEngine {
   private readonly maxArmorUpgrades = 5;
   private critUpgrades = 0;
   private readonly maxCritUpgrades = 10;
-  private autoNextUpgrade: 'hp' | 'atk' | 'armor' | 'crit' = 'hp';
+  private autoNextUpgrade: UpgradeKind = 'hp';
+
+  // Hero Class (warrior / frost_mage)
+  private heroClass: HeroClassId = 'warrior';
+  // Frost Mage shield & upgrades
+  private shield = 0;
+  private baseMaxShield = 0;
+  private hpShieldUpgrades = 0;
+  private shieldSpeedUpgrades = 0;
+  /** Seconds since the hero last took damage (drives shield regen delay). */
+  private timeSinceDamaged = 999;
+  /** Frost Mage ice spike cycle index: 0, 1, 2 (2 = empowered). Never resets on idle. */
+  private mageShotIndex = 0;
+  private queuedRestartClass: HeroClassId | null = null;
+  private heroProjectiles: HeroProjectileEntity[] = [];
+  /** Last non-zero movement direction (used by Blink). */
+  /** This frame's movement input (zero when idle). Blink uses it before falling back to facing. */
+  private moveInputX = 0;
+  private moveInputZ = 0;
+  /** Mage auto-pilot is waiting for the shield to refill (set below 60%, cleared when full). */
+  private aiMageRecharging = false;
+  /** True when the last hit was fully absorbed by the shield (blue hit flash instead of red). */
+  private heroHitShieldOnly = false;
   private autoUpgradeCooldown = 0;
   private potions = 3;
   private hasKey = false;
@@ -700,7 +775,8 @@ export class EmbervaultEngine {
   private attackCooldown = 0;
   private attackAnim = 0;
   private pommelCooldown = 0;
-  private readonly pommelMaxCooldown = 8.0;
+  /** Right-click class skill max cooldown (Pommel Strike 8s / Frost Nova 10s). */
+  private pommelMaxCooldown = 8.0;
   private pommelAnim = 0;
   private comboStep = 0;
   private comboResetTimer = 0;
@@ -1017,6 +1093,7 @@ export class EmbervaultEngine {
 
     this.enemies = [];
     this.projectiles = [];
+    this.heroProjectiles = [];
     this.loots = [];
     this.breakables = [];
     this.lightProps = [];
@@ -1094,7 +1171,7 @@ export class EmbervaultEngine {
     this.rimLight.color.setHex(isAlienDeck ? 0xd8f3ff : 0x6c8cc4);
     this.rimLight.intensity = isAlienDeck ? 0.62 : 0.09;
     this.scene.environmentIntensity = isAlienDeck ? 0.45 : 0.07;
-    this.heroLight.color.setHex(biome.torchColor);
+    this.heroLight.color.setHex(this.isMage() ? 0x9fe6ff : biome.torchColor);
 
     this.textures = createDungeonTextures(
       biome,
@@ -2644,6 +2721,8 @@ export class EmbervaultEngine {
       }
 
       if (code === 'Space' && !this.inTown) {
+        // Space auto-turns toward the nearest enemy (both classes) before attacking
+        if (this.attackCooldown <= 0) this.autoFaceNearestEnemy();
         this.performAttack();
       } else if (code === 'ShiftLeft' || code === 'ShiftRight') {
         this.performDash();
@@ -2663,6 +2742,18 @@ export class EmbervaultEngine {
     if (e.button === 2) {
       this.performPommelStrike();
     } else if (e.button === 0) {
+      if (this.isMage() && this.attackCooldown <= 0) {
+        // Frost Mage left-click fires toward the mouse cursor
+        const target = this.screenToGround(e.clientX, e.clientY);
+        if (target) {
+          const ax = target.x - this.heroX;
+          const az = target.z - this.heroZ;
+          if (Math.hypot(ax, az) > 0.05) {
+            this.heroFacing = Math.atan2(ax, az);
+            this.heroRig.body.rotation.y = this.heroFacing;
+          }
+        }
+      }
       this.performAttack();
     }
   };
@@ -2877,8 +2968,65 @@ export class EmbervaultEngine {
     return true;
   }
 
-  public restartRun(): void {
-    if (this.transitionState !== 'none') return;
+  public getHeroClass(): HeroClassId {
+    return this.heroClass;
+  }
+
+  /** Swap the hero 3D rig to match the given class (no-op if already matching). */
+  private applyHeroClassRig(classId: HeroClassId): void {
+    if (!this.heroRig || !this.sharedShadowMap) return;
+    const wantMage = classId === 'frost_mage';
+    const isMageRig = Boolean(this.heroRig.root.userData.isFrostMage);
+    if (wantMage === isMageRig) return;
+    this.heroRig.root.remove(this.heroSetAura.group);
+    this.scene.remove(this.heroRig.root);
+    this.heroRig.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose();
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+        else obj.material.dispose();
+      }
+    });
+    this.heroRig = wantMage
+      ? createFrostMageModel(this.sharedShadowMap)
+      : createHeroModel(this.sharedShadowMap);
+    this.heroRig.root.userData.isFrostMage = wantMage;
+    if (this.heroLight) {
+      this.heroLight.color.setHex(wantMage ? 0x9fe6ff : this.dungeon?.biome.torchColor ?? 0xffaa44);
+    }
+    this.heroRig.root.add(this.heroSetAura.group);
+    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
+    this.scene.add(this.heroRig.root);
+  }
+
+  /** Resets class-dependent base stats (HP, shield, upgrades, skill cooldown). */
+  private applyHeroClassStats(classId: HeroClassId): void {
+    const def = HERO_CLASSES[classId];
+    this.heroClass = classId;
+    this.maxHp = def.baseHp;
+    this.hp = def.baseHp;
+    this.baseMaxShield = def.baseShield;
+    this.shield = def.baseShield;
+    this.hpUpgrades = 0;
+    this.atkUpgrades = 0;
+    this.armorUpgrades = 0;
+    this.critUpgrades = 0;
+    this.hpShieldUpgrades = 0;
+    this.shieldSpeedUpgrades = 0;
+    this.timeSinceDamaged = 999;
+    this.mageShotIndex = 0;
+    this.autoNextUpgrade = classId === 'frost_mage' ? 'hp_shield' : 'hp';
+    this.pommelMaxCooldown = def.skillCooldown;
+  }
+
+  public restartRun(classId?: HeroClassId): void {
+    const nextClass: HeroClassId = classId ?? this.heroClass;
+    if (this.transitionState !== 'none') {
+      // A fade is in progress (e.g. the initial fade-in): run the restart as soon as it ends.
+      this.queuedRestartClass = nextClass;
+      return;
+    }
+    this.queuedRestartClass = null;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
@@ -2887,13 +3035,17 @@ export class EmbervaultEngine {
       this.savedDungeon = null;
       this.angelBuff = null;
       this.portalSafePos = null;
-      this.maxHp = 60;
-      this.hp = 60;
-      this.hpUpgrades = 0;
-      this.atkUpgrades = 0;
-      this.armorUpgrades = 0;
-      this.critUpgrades = 0;
-      this.autoNextUpgrade = 'hp';
+      this.applyHeroClassStats(nextClass);
+      this.applyHeroClassRig(nextClass);
+      this.attackCooldown = 0;
+      this.dashCooldown = 0;
+      this.dashTimer = 0;
+      this.heroInvuln = 0;
+      this.catPawHitCounter = 0;
+      this.comboStep = 0;
+      this.moveInputX = 0;
+      this.moveInputZ = 0;
+      this.aiMageRecharging = false;
       this.potions = 3;
       this.gold = 0;
       this.totalGoldEarned = 0;
@@ -2929,7 +3081,20 @@ export class EmbervaultEngine {
   }
 
   private getEffectiveMaxHp(): number {
+    if (this.heroClass === 'frost_mage') {
+      return this.maxHp + splitRelicMaxHpForMage(this.relicStats.maxHp).hp;
+    }
     return this.maxHp + this.relicStats.maxHp;
+  }
+
+  /** Effective max shield (Frost Mage only; 0 for classes without a shield). */
+  private getEffectiveMaxShield(): number {
+    if (this.heroClass !== 'frost_mage') return 0;
+    return this.baseMaxShield + splitRelicMaxHpForMage(this.relicStats.maxHp).shield;
+  }
+
+  private isMage(): boolean {
+    return this.heroClass === 'frost_mage';
   }
 
   private hasUnique(effectId: UniqueEffectId): boolean {
@@ -2941,9 +3106,11 @@ export class EmbervaultEngine {
   }
 
   private recomputeRelicStats(adjustHp = true): void {
-    const prevEffMax = this.maxHp + this.relicStats.maxHp;
+    const prevEffMax = this.getEffectiveMaxHp();
+    const prevMaxShield = this.getEffectiveMaxShield();
     this.relicStats = computeRelicSummary(this.equippedRelics, this.angelBuff?.stats);
-    const nextEffMax = this.maxHp + this.relicStats.maxHp;
+    const nextEffMax = this.getEffectiveMaxHp();
+    const nextMaxShield = this.getEffectiveMaxShield();
 
     if (adjustHp && !this.isDead) {
       if (nextEffMax > prevEffMax) {
@@ -2951,6 +3118,13 @@ export class EmbervaultEngine {
       } else {
         this.hp = Math.min(nextEffMax, this.hp);
       }
+      if (nextMaxShield > prevMaxShield) {
+        this.shield = Math.min(nextMaxShield, this.shield + (nextMaxShield - prevMaxShield));
+      } else {
+        this.shield = Math.min(nextMaxShield, this.shield);
+      }
+    } else {
+      this.shield = Math.min(nextMaxShield, this.shield);
     }
 
     // Update 4-piece green set visual aura around hero
@@ -3061,8 +3235,147 @@ export class EmbervaultEngine {
     return earned;
   }
 
+  private getTotalUpgradeLevel(): number {
+    return (
+      this.hpUpgrades +
+      this.atkUpgrades +
+      this.armorUpgrades +
+      this.critUpgrades +
+      this.hpShieldUpgrades +
+      this.shieldSpeedUpgrades
+    );
+  }
+
+  /** Max purchase count for an upgrade of the current class (0 = not offered). */
+  private getUpgradeMax(kind: UpgradeKind): number {
+    if (this.isMage()) {
+      switch (kind) {
+        case 'hp_shield':
+          return FROST_MAGE.maxHpShieldUpgrades;
+        case 'atk':
+          return FROST_MAGE.maxAtkUpgrades;
+        case 'crit':
+          return FROST_MAGE.maxCritUpgrades;
+        case 'shield_speed':
+          return FROST_MAGE.maxShieldSpeedUpgrades;
+        default:
+          return 0;
+      }
+    }
+    switch (kind) {
+      case 'hp':
+        return Math.round((this.maxHpCap - HERO_CLASSES.warrior.baseHp) / 10);
+      case 'atk':
+        return 999; // warrior attack upgrades are uncapped
+      case 'armor':
+        return this.maxArmorUpgrades;
+      case 'crit':
+        return this.maxCritUpgrades;
+      default:
+        return 0;
+    }
+  }
+
+  private getUpgradeCount(kind: UpgradeKind): number {
+    switch (kind) {
+      case 'hp':
+        return this.hpUpgrades;
+      case 'atk':
+        return this.atkUpgrades;
+      case 'armor':
+        return this.armorUpgrades;
+      case 'crit':
+        return this.critUpgrades;
+      case 'hp_shield':
+        return this.hpShieldUpgrades;
+      case 'shield_speed':
+        return this.shieldSpeedUpgrades;
+    }
+  }
+
+  private isUpgradeMaxed(kind: UpgradeKind): boolean {
+    if (!this.isMage() && kind === 'hp') return this.maxHp >= this.maxHpCap;
+    return this.getUpgradeCount(kind) >= this.getUpgradeMax(kind);
+  }
+
+  public getUpgradeOptions(): UpgradeOptionView[] {
+    const row = (
+      kind: UpgradeKind,
+      accent: UpgradeOptionView['accent'],
+      label: string,
+      maxedLabel: string,
+      progress: string
+    ): UpgradeOptionView => ({
+      kind,
+      accent,
+      label,
+      maxedLabel,
+      progress,
+      count: this.getUpgradeCount(kind),
+      maxCount: this.getUpgradeMax(kind),
+      maxed: this.isUpgradeMaxed(kind),
+    });
+    if (this.isMage()) {
+      const speedPct = Math.round(this.shieldSpeedUpgrades * FROST_MAGE.shieldSpeedStep * 100);
+      return [
+        row(
+          'hp_shield',
+          'shield',
+          `HP +${FROST_MAGE.hpPerUpgrade} · 護盾 +${FROST_MAGE.shieldPerUpgrade}`,
+          'HP / 護盾 MAXED',
+          `${this.hpShieldUpgrades} / ${FROST_MAGE.maxHpShieldUpgrades} · HP ${this.maxHp} · 護盾 ${this.baseMaxShield}`
+        ),
+        row(
+          'atk',
+          'atk',
+          '+10% 攻擊力',
+          'ATK MAXED',
+          `+${this.atkUpgrades * 10}% / +${FROST_MAGE.maxAtkUpgrades * 10}% DMG`
+        ),
+        row(
+          'crit',
+          'crit',
+          '+2% 爆擊',
+          'CRIT MAXED',
+          `+${this.critUpgrades * 2}% / +${FROST_MAGE.maxCritUpgrades * 2}% CRIT`
+        ),
+        row(
+          'shield_speed',
+          'armor',
+          '護盾回充 +12%',
+          'REGEN MAXED',
+          `-${speedPct}% / -${FROST_MAGE.maxShieldSpeedUpgrades * 12}% 等待與回充時間`
+        ),
+      ];
+    }
+    return [
+      row('hp', 'hp', '+10 Max HP', 'HP MAXED', `${this.maxHp} / ${this.maxHpCap} HP`),
+      row(
+        'atk',
+        'atk',
+        '+10% Attack',
+        'ATK MAXED',
+        `+${this.atkUpgrades * 10}% → +${this.atkUpgrades * 10 + 10}% DMG`
+      ),
+      row(
+        'armor',
+        'armor',
+        '+10% Armor',
+        'DEF MAXED',
+        `${this.armorUpgrades * 10}% / ${this.maxArmorUpgrades * 10}% DEF`
+      ),
+      row(
+        'crit',
+        'crit',
+        '+2% Crit',
+        'CRIT MAXED',
+        `+${this.critUpgrades * 2}% / +${this.maxCritUpgrades * 2}% CRIT`
+      ),
+    ];
+  }
+
   public getUpgradeCost(): number {
-    const lv = this.hpUpgrades + this.atkUpgrades + this.armorUpgrades + this.critUpgrades;
+    const lv = this.getTotalUpgradeLevel();
     return 40 + lv * 25 + Math.floor(lv * lv * 4);
   }
 
@@ -3092,13 +3405,11 @@ export class EmbervaultEngine {
     return Math.hypot(this.heroX - this.angelPos.x, this.heroZ - this.angelPos.z) < 2.75;
   }
 
-  public purchaseUpgrade(kind: 'hp' | 'atk' | 'armor' | 'crit'): boolean {
+  public purchaseUpgrade(kind: UpgradeKind): boolean {
     if (!this.dungeon?.altarPos || !this.isHeroNearAltar()) return false;
     const cost = this.getUpgradeCost();
     if (this.gold < cost) return false;
-    if (kind === 'hp' && this.maxHp >= this.maxHpCap) return false;
-    if (kind === 'armor' && this.armorUpgrades >= this.maxArmorUpgrades) return false;
-    if (kind === 'crit' && this.critUpgrades >= this.maxCritUpgrades) return false;
+    if (this.getUpgradeMax(kind) <= 0 || this.isUpgradeMaxed(kind)) return false;
 
     if (!this.audio.isEnabled() && this.controlMode === 'manual') {
       this.audio.unlockAndEnable();
@@ -3106,7 +3417,31 @@ export class EmbervaultEngine {
 
     this.gold -= cost;
     const effMax = this.getEffectiveMaxHp();
-    if (kind === 'hp') {
+    if (kind === 'hp_shield') {
+      this.hpShieldUpgrades += 1;
+      this.maxHp += FROST_MAGE.hpPerUpgrade;
+      this.baseMaxShield += FROST_MAGE.shieldPerUpgrade;
+      this.hp = this.getEffectiveMaxHp();
+      this.shield = this.getEffectiveMaxShield();
+      this.emitFloatingText(
+        this.heroX,
+        2.0,
+        this.heroZ,
+        `HP +${FROST_MAGE.hpPerUpgrade} · 護盾 +${FROST_MAGE.shieldPerUpgrade} · FULL`,
+        'shieldHit'
+      );
+    } else if (kind === 'shield_speed') {
+      this.shieldSpeedUpgrades += 1;
+      this.hp = effMax;
+      this.shield = this.getEffectiveMaxShield();
+      this.emitFloatingText(
+        this.heroX,
+        2.0,
+        this.heroZ,
+        `護盾回充 +${this.shieldSpeedUpgrades * 12}% · FULL`,
+        'shieldHit'
+      );
+    } else if (kind === 'hp') {
       this.hpUpgrades += 1;
       this.maxHp = Math.min(this.maxHpCap, this.maxHp + 10);
       this.hp = this.getEffectiveMaxHp();
@@ -3143,6 +3478,9 @@ export class EmbervaultEngine {
       );
     }
 
+    if (this.isMage()) {
+      this.shield = this.getEffectiveMaxShield();
+    }
     this.audio.playUpgrade();
 
     const aw = gridToWorld(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
@@ -3153,7 +3491,7 @@ export class EmbervaultEngine {
           ? i % 2 === 0
             ? 0xff5a72
             : 0xffe066
-          : kind === 'armor'
+          : kind === 'armor' || kind === 'hp_shield' || kind === 'shield_speed'
           ? i % 2 === 0
             ? 0x6ecbff
             : 0xffe066
@@ -3277,6 +3615,10 @@ export class EmbervaultEngine {
 
   private performDash(): void {
     if (this.dashCooldown > 0 || this.dashTimer > 0) return;
+    if (this.isMage()) {
+      this.performBlink();
+      return;
+    }
     this.dashTimer = 0.16;
     this.dashCooldown = Math.max(0.35, 1.1 * (1 - this.relicStats.dashCdPct / 100));
     this.heroInvuln = Math.max(this.heroInvuln, 0.28);
@@ -3371,6 +3713,10 @@ export class EmbervaultEngine {
 
   private performAttack(): void {
     if (this.attackCooldown > 0) return;
+    if (this.isMage()) {
+      this.performMageAttack();
+      return;
+    }
 
     this.comboStep = this.comboResetTimer > 0 ? (this.comboStep + 1) % 3 : 0;
     this.comboResetTimer = 0.9;
@@ -3419,8 +3765,7 @@ export class EmbervaultEngine {
     let landedHit = false;
     const effMaxHp = this.getEffectiveMaxHp();
     const usePhantomCrit = this.phantomCritTimer > 0;
-    let consumedPhantom = false;
-    let triggeredStorm = false;
+    const hitState = { consumedPhantom: false, triggeredStorm: false };
 
     const avariceBonus = this.hasUnique('avarice_gold_atk')
       ? Math.min(0.4, Math.floor(this.gold / 100) * 0.01)
@@ -3457,242 +3802,26 @@ export class EmbervaultEngine {
         const dot = (dx * fwdX + dz * fwdZ) / dist;
         if (dot < -0.15) continue;
       }
-
-      const isCounter = enemy.isBoss && enemy.bossState === 'recover';
-      const baseDmg = isCleave
-        ? 18 + Math.floor(Math.random() * 8)
-        : 11 + Math.floor(Math.random() * 6);
-      const bananaSlip = this.hasUnique('banana_slip_crit') && Math.random() < 0.15;
-      const isCrit = isCounter || usePhantomCrit || bananaSlip || Math.random() < critChance;
-      if (usePhantomCrit) consumedPhantom = true;
-
-      let mult = atkMult * (isCounter ? Math.max(1.45, critMult) : isCrit ? critMult : 1);
-      if (bananaSlip) {
-        mult *= 1.4;
-      }
-      if (enemy.isBoss || enemy.isElite) {
-        mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
-      }
-      if (this.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
-        mult *= enemy.isBoss ? 1.25 : 1.5;
-      }
-
-      let gamblerTag = bananaSlip ? '滑倒! ' : '';
-      if (this.hasUnique('gambler_coin_flip')) {
-        const gRoll = Math.random();
-        if (gRoll < 0.25) {
-          mult *= 1.6;
-          gamblerTag += 'JACKPOT ';
-        } else if (gRoll < 0.35) {
-          mult *= 0.7;
-          gamblerTag += 'SLIP ';
-        }
-      }
-
-      const dmg = Math.max(1, Math.round(baseDmg * mult));
-
-      this.totalDamageDealt += dmg;
-      if (isCrit) this.critCount += 1;
-      this.aiLastCombatDamageTime = this.elapsed;
-
-      enemy.hp -= dmg;
-      enemy.hitFlash = 0.14;
-      const nx = dist > 0.01 ? dx / dist : fwdX;
-      const nz = dist > 0.01 ? dz / dist : fwdZ;
-      const knock =
-        (isCleave ? 8.5 : 5.5) *
-        knockMult *
-        (bananaSlip ? 1.85 : 1) *
-        (enemy.isBoss ? 0.22 : enemy.isElite ? 0.45 : 1);
-      enemy.vx += nx * knock;
-      enemy.vz += nz * knock;
-
-      this.emitFloatingText(
-        enemy.x,
-        enemy.isBoss ? 2.35 : enemy.isElite ? 2.0 : 1.55,
-        enemy.z,
-        `${gamblerTag}${isCounter ? `COUNTER -${dmg}` : isCrit ? `CRIT -${dmg}` : `-${dmg}`}`,
-        isCrit ? 'crit' : 'damage'
-      );
-
-      // Unique: Overtime Mug — funny quips when hitting Elites/Bosses
-      if (
-        (enemy.isBoss || enemy.isElite) &&
-        this.hasUnique('overtime_mug_fury') &&
-        Math.random() < 0.2
-      ) {
-        const quips = ['準時下班!', '不准加班!', '拒絕開會!', '我要打卡!'];
-        this.emitFloatingText(
-          enemy.x,
-          (enemy.isBoss ? 2.75 : 2.35),
-          enemy.z,
-          quips[Math.floor(Math.random() * quips.length)],
-          'relicOrange'
-        );
-      }
-
-      // Unique: Blood Moon Fang lifesteal (quarter strength: 1.5% with fractional accumulation)
-      if (this.hasUnique('blood_moon_leech') && this.hp < effMaxHp) {
-        this.bloodLeechAccum += dmg * 0.015;
-        const leech = Math.floor(this.bloodLeechAccum);
-        if (leech >= 1) {
-          this.bloodLeechAccum -= leech;
-          this.hp = Math.min(effMaxHp, this.hp + leech);
-        }
-      }
-
-      for (let i = 0; i < 8; i++) {
-        this.spawnParticle(
-          enemy.x,
-          enemy.isBoss ? 1.15 : 0.75,
-          enemy.z,
-          (Math.random() - 0.5) * 4.5 + nx * 2,
-          1.5 + Math.random() * 2.5,
-          (Math.random() - 0.5) * 4.5 + nz * 2,
-          bananaSlip ? 0xffe44d : isCrit ? 0xffdc6b : 0xffffff,
-          0.95,
-          0.35,
-          7.5
-        );
-      }
-
+      this.applyHeroHit(enemy, {
+        baseDmg: isCleave ? 18 + Math.floor(Math.random() * 8) : 11 + Math.floor(Math.random() * 6),
+        isEmpowered: isCleave,
+        atkMult,
+        critChance,
+        critMult,
+        knockMult,
+        knockBase: isCleave ? 8.5 : 5.5,
+        originX: this.heroX,
+        originZ: this.heroZ,
+        fallbackX: fwdX,
+        fallbackZ: fwdZ,
+        usePhantomCrit,
+        effMaxHp,
+        state: hitState,
+      });
       landedHit = true;
-      if (enemy.hp <= 0) {
-        this.killEnemy(enemy);
-      } else if (enemy.isBoss) {
-        this.emitHud();
-      }
-
-      // Unique: Astral Prism — 20% chance for refracted astral double-strike (+35% dmg)
-      if (!enemy.dead && this.hasUnique('astral_double_strike') && Math.random() < 0.2) {
-        const astralDmg = Math.max(3, Math.round(dmg * 0.35));
-        this.applyBonusEnemyDamage(enemy, astralDmg, `星界斬 -${astralDmg}`, 'info', 0x7ef5ff);
-      }
-
-      // Unique: Permafrost Stele — chill enemy cooldown (+35%) & frost chip damage
-      if (!enemy.dead && this.hasUnique('frost_chill_aura')) {
-        enemy.attackCooldown += enemy.isBoss ? 0.22 : 0.45;
-        const frostDmg = Math.max(2, Math.round(dmg * 0.12));
-        this.applyBonusEnemyDamage(enemy, frostDmg, `冰霜 -${frostDmg}`, 'relicBlue', 0x8be9ff);
-      }
-
-      // Unique: Cat Paw Gloves — every 3rd hit triggers rapid "喵!" bonus swat + knockback
-      if (this.hasUnique('cat_paw_swat')) {
-        this.catPawHitCounter += 1;
-        if (!enemy.dead && this.catPawHitCounter % 3 === 0) {
-          const pawDmg = Math.max(4, Math.round(dmg * 0.35));
-          enemy.vx += nx * (enemy.isBoss ? 1.6 : 6.2);
-          enemy.vz += nz * (enemy.isBoss ? 1.6 : 6.2);
-          this.applyBonusEnemyDamage(enemy, pawDmg, `喵! -${pawDmg}`, 'relicOrange', 0xff9ad5);
-        }
-      }
-
-      // Unique: Dungeon Disco Ball — rainbow sparks on crit + 20% bonus tip coin
-      if (isCrit && this.hasUnique('disco_fever_aura')) {
-        const discoColors = [0xff4fd8, 0x3ef5ff, 0xffe047, 0x5cff6b, 0xb266ff];
-        for (let i = 0; i < 12; i++) {
-          const a = (i / 12) * Math.PI * 2;
-          this.spawnParticle(
-            enemy.x,
-            0.95,
-            enemy.z,
-            Math.cos(a) * 4.4,
-            1.6 + Math.random() * 2.0,
-            Math.sin(a) * 4.4,
-            discoColors[i % discoColors.length],
-            1.05,
-            0.48,
-            3.5
-          );
-        }
-        if (Math.random() < 0.2) {
-          this.emitFloatingText(enemy.x, 2.25, enemy.z, '迪斯可小費!', 'gold');
-          this.spawnLoot(
-            enemy.x + (Math.random() - 0.5) * 0.6,
-            enemy.z + (Math.random() - 0.5) * 0.6,
-            'gold'
-          );
-        }
-      }
-
-      // Unique: Crown of Ember Sovereign — fiery AoE nova on crit
-      if (isCrit && this.hasUnique('ember_crit_nova')) {
-        const splashDmg = Math.max(2, Math.round(dmg * 0.22));
-        for (const other of this.enemies) {
-          if (other.dead || other.id === enemy.id) continue;
-          if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 2.9) {
-            this.applyBonusEnemyDamage(other, splashDmg, `焚燒 -${splashDmg}`, 'relicOrange', 0xff6224);
-          }
-        }
-        for (let i = 0; i < 12; i++) {
-          const a = (i / 12) * Math.PI * 2;
-          this.spawnParticle(
-            enemy.x,
-            0.55,
-            enemy.z,
-            Math.cos(a) * 4.8,
-            0.9 + Math.random(),
-            Math.sin(a) * 4.8,
-            i % 2 === 0 ? 0xff6b24 : 0xffd24a,
-            1.1,
-            0.4,
-            1.5
-          );
-        }
-      }
-
-      // Unique: Stormforged Hammer — chain lightning on 3rd-hit cleave
-      if (isCleave && !triggeredStorm && this.hasUnique('storm_cleave_lightning')) {
-        triggeredStorm = true;
-        const arcDmg = Math.max(3, Math.round(dmg * 0.2));
-        let chained = 0;
-        for (const other of this.enemies) {
-          if (other.dead || other.id === enemy.id || chained >= 3) continue;
-          if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 5.2) {
-            chained += 1;
-            this.applyBonusEnemyDamage(other, arcDmg, `⚡ -${arcDmg}`, 'info', 0x62f5ff);
-          }
-        }
-      }
-
-      // 4pc Green Set: Dragonfire Knight — fiery splash on every attack
-      if (this.hasSet4pc('dragonfire')) {
-        const fireDmg = Math.max(2, Math.round(dmg * 0.14));
-        for (const other of this.enemies) {
-          if (other.dead || other.id === enemy.id) continue;
-          if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 2.4) {
-            this.applyBonusEnemyDamage(other, fireDmg, `龍炎 -${fireDmg}`, 'relicOrange', 0xff5a1f);
-          }
-        }
-      }
-
-      // 4pc Green Set: Voidstalker — crit resets dash & fires 3 void blades
-      if (isCrit && this.hasSet4pc('voidstalker')) {
-        this.dashCooldown = 0;
-        const bladeDmg = Math.max(3, Math.round(dmg * 0.18));
-        let hits = 0;
-        for (const other of this.enemies) {
-          if (other.dead || hits >= 3) continue;
-          if (Math.hypot(other.x - this.heroX, other.z - this.heroZ) <= 6.2) {
-            hits += 1;
-            this.applyBonusEnemyDamage(other, bladeDmg, `虛空刃 -${bladeDmg}`, 'info', 0xb46bff);
-          }
-        }
-      }
-
-      // 4pc Green Set: Gilded Syndicate — 20% Golden Smite bonus damage + gold pop
-      if (!enemy.dead && this.hasSet4pc('syndicate') && Math.random() < 0.2) {
-        const smiteDmg = Math.max(4, Math.round(dmg * 0.18));
-        this.applyBonusEnemyDamage(enemy, smiteDmg, `重金轟擊 -${smiteDmg}`, 'gold', 0xffd84a);
-        this.spawnLoot(
-          enemy.x + (Math.random() - 0.5) * 0.6,
-          enemy.z + (Math.random() - 0.5) * 0.6,
-          'gold'
-        );
-      }
     }
 
-    if (consumedPhantom) {
+    if (hitState.consumedPhantom) {
       this.phantomCritTimer = 0;
     }
 
@@ -3713,8 +3842,260 @@ export class EmbervaultEngine {
     }
   }
 
+  /**
+   * Applies one hero basic-attack hit to an enemy: damage roll, crit, knockback,
+   * floating text, and every "on hit" relic / set effect. Shared by the warrior's
+   * sword arc and the Frost Mage's ice spike explosions.
+   */
+  private applyHeroHit(enemy: EnemyEntity, hit: HeroHitParams): void {
+    const dx = enemy.x - hit.originX;
+    const dz = enemy.z - hit.originZ;
+    const dist = Math.hypot(dx, dz);
+
+    const isCounter = enemy.isBoss && enemy.bossState === 'recover';
+    const { atkMult, critChance, critMult, knockMult, usePhantomCrit, effMaxHp } = hit;
+    const baseDmg = hit.baseDmg;
+    const bananaSlip = this.hasUnique('banana_slip_crit') && Math.random() < 0.15;
+    const isCrit = isCounter || usePhantomCrit || bananaSlip || Math.random() < critChance;
+    if (usePhantomCrit) hit.state.consumedPhantom = true;
+
+    let mult = atkMult * (isCounter ? Math.max(1.45, critMult) : isCrit ? critMult : 1);
+    if (bananaSlip) {
+      mult *= 1.4;
+    }
+    if (enemy.isBoss || enemy.isElite) {
+      mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
+    }
+    if (this.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
+      mult *= enemy.isBoss ? 1.25 : 1.5;
+    }
+
+    let gamblerTag = bananaSlip ? '滑倒! ' : '';
+    if (this.hasUnique('gambler_coin_flip')) {
+      const gRoll = Math.random();
+      if (gRoll < 0.25) {
+        mult *= 1.6;
+        gamblerTag += 'JACKPOT ';
+      } else if (gRoll < 0.35) {
+        mult *= 0.7;
+        gamblerTag += 'SLIP ';
+      }
+    }
+
+    const dmg = Math.max(1, Math.round(baseDmg * mult));
+
+    this.totalDamageDealt += dmg;
+    if (isCrit) this.critCount += 1;
+    this.aiLastCombatDamageTime = this.elapsed;
+
+    enemy.hp -= dmg;
+    enemy.hitFlash = 0.14;
+    const nx = dist > 0.01 ? dx / dist : hit.fallbackX;
+    const nz = dist > 0.01 ? dz / dist : hit.fallbackZ;
+    const knock =
+      hit.knockBase *
+      knockMult *
+      (bananaSlip ? 1.85 : 1) *
+      (enemy.isBoss ? 0.22 : enemy.isElite ? 0.45 : 1);
+    enemy.vx += nx * knock;
+    enemy.vz += nz * knock;
+
+    this.emitFloatingText(
+      enemy.x,
+      enemy.isBoss ? 2.35 : enemy.isElite ? 2.0 : 1.55,
+      enemy.z,
+      `${gamblerTag}${isCounter ? `COUNTER -${dmg}` : isCrit ? `CRIT -${dmg}` : `-${dmg}`}`,
+      isCrit ? 'crit' : 'damage'
+    );
+
+    // Unique: Overtime Mug — funny quips when hitting Elites/Bosses
+    if (
+      (enemy.isBoss || enemy.isElite) &&
+      this.hasUnique('overtime_mug_fury') &&
+      Math.random() < 0.2
+    ) {
+      const quips = ['準時下班!', '不准加班!', '拒絕開會!', '我要打卡!'];
+      this.emitFloatingText(
+        enemy.x,
+        (enemy.isBoss ? 2.75 : 2.35),
+        enemy.z,
+        quips[Math.floor(Math.random() * quips.length)],
+        'relicOrange'
+      );
+    }
+
+    // Unique: Blood Moon Fang lifesteal (quarter strength: 1.5% with fractional accumulation)
+    if (this.hasUnique('blood_moon_leech') && this.hp < effMaxHp) {
+      this.bloodLeechAccum += dmg * 0.015;
+      const leech = Math.floor(this.bloodLeechAccum);
+      if (leech >= 1) {
+        this.bloodLeechAccum -= leech;
+        this.hp = Math.min(effMaxHp, this.hp + leech);
+      }
+    }
+
+    for (let i = 0; i < 8; i++) {
+      this.spawnParticle(
+        enemy.x,
+        enemy.isBoss ? 1.15 : 0.75,
+        enemy.z,
+        (Math.random() - 0.5) * 4.5 + nx * 2,
+        1.5 + Math.random() * 2.5,
+        (Math.random() - 0.5) * 4.5 + nz * 2,
+        bananaSlip ? 0xffe44d : isCrit ? 0xffdc6b : hit.hitColor ?? 0xffffff,
+        0.95,
+        0.35,
+        7.5
+      );
+    }
+
+    if (enemy.hp <= 0) {
+      this.killEnemy(enemy);
+    } else if (enemy.isBoss) {
+      this.emitHud();
+    }
+
+    // Unique: Astral Prism — 20% chance for refracted astral double-strike (+35% dmg)
+    if (!enemy.dead && this.hasUnique('astral_double_strike') && Math.random() < 0.2) {
+      const astralDmg = Math.max(3, Math.round(dmg * 0.35));
+      this.applyBonusEnemyDamage(
+        enemy,
+        astralDmg,
+        hit.isMageHit ? `冰稜 -${astralDmg}` : `星界斬 -${astralDmg}`,
+        'info',
+        0x7ef5ff
+      );
+    }
+
+    // Unique: Permafrost Stele — chill enemy cooldown (+35%) & frost chip damage
+    if (!enemy.dead && this.hasUnique('frost_chill_aura')) {
+      enemy.attackCooldown += enemy.isBoss ? 0.22 : 0.45;
+      const frostDmg = Math.max(2, Math.round(dmg * 0.12));
+      this.applyBonusEnemyDamage(enemy, frostDmg, `冰霜 -${frostDmg}`, 'relicBlue', 0x8be9ff);
+    }
+
+    // Unique: Cat Paw Gloves — every 3rd hit triggers rapid "喵!" bonus swat + knockback
+    if (this.hasUnique('cat_paw_swat')) {
+      this.catPawHitCounter += 1;
+      if (!enemy.dead && this.catPawHitCounter % 3 === 0) {
+        const pawDmg = Math.max(4, Math.round(dmg * 0.35));
+        enemy.vx += nx * (enemy.isBoss ? 1.6 : 6.2);
+        enemy.vz += nz * (enemy.isBoss ? 1.6 : 6.2);
+        this.applyBonusEnemyDamage(enemy, pawDmg, `喵! -${pawDmg}`, 'relicOrange', 0xff9ad5);
+      }
+    }
+
+    // Unique: Dungeon Disco Ball — rainbow sparks on crit + 20% bonus tip coin
+    if (isCrit && this.hasUnique('disco_fever_aura')) {
+      const discoColors = [0xff4fd8, 0x3ef5ff, 0xffe047, 0x5cff6b, 0xb266ff];
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        this.spawnParticle(
+          enemy.x,
+          0.95,
+          enemy.z,
+          Math.cos(a) * 4.4,
+          1.6 + Math.random() * 2.0,
+          Math.sin(a) * 4.4,
+          discoColors[i % discoColors.length],
+          1.05,
+          0.48,
+          3.5
+        );
+      }
+      if (Math.random() < 0.2) {
+        this.emitFloatingText(enemy.x, 2.25, enemy.z, '迪斯可小費!', 'gold');
+        this.spawnLoot(
+          enemy.x + (Math.random() - 0.5) * 0.6,
+          enemy.z + (Math.random() - 0.5) * 0.6,
+          'gold'
+        );
+      }
+    }
+
+    // Unique: Crown of Ember Sovereign — fiery AoE nova on crit
+    if (isCrit && this.hasUnique('ember_crit_nova')) {
+      const splashDmg = Math.max(2, Math.round(dmg * 0.22));
+      for (const other of this.enemies) {
+        if (other.dead || other.id === enemy.id) continue;
+        if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 2.9) {
+          this.applyBonusEnemyDamage(other, splashDmg, `焚燒 -${splashDmg}`, 'relicOrange', 0xff6224);
+        }
+      }
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        this.spawnParticle(
+          enemy.x,
+          0.55,
+          enemy.z,
+          Math.cos(a) * 4.8,
+          0.9 + Math.random(),
+          Math.sin(a) * 4.8,
+          i % 2 === 0 ? 0xff6b24 : 0xffd24a,
+          1.1,
+          0.4,
+          1.5
+        );
+      }
+    }
+
+    // Unique: Stormforged Hammer — chain lightning on 3rd-hit cleave
+    if (hit.isEmpowered && !hit.state.triggeredStorm && this.hasUnique('storm_cleave_lightning')) {
+      hit.state.triggeredStorm = true;
+      const arcDmg = Math.max(3, Math.round(dmg * 0.2));
+      let chained = 0;
+      for (const other of this.enemies) {
+        if (other.dead || other.id === enemy.id || chained >= 3) continue;
+        if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 5.2) {
+          chained += 1;
+          this.applyBonusEnemyDamage(other, arcDmg, `⚡ -${arcDmg}`, 'info', 0x62f5ff);
+        }
+      }
+    }
+
+    // 4pc Green Set: Dragonfire Knight — fiery splash on every attack
+    if (this.hasSet4pc('dragonfire')) {
+      const fireDmg = Math.max(2, Math.round(dmg * 0.14));
+      for (const other of this.enemies) {
+        if (other.dead || other.id === enemy.id) continue;
+        if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 2.4) {
+          this.applyBonusEnemyDamage(other, fireDmg, `龍炎 -${fireDmg}`, 'relicOrange', 0xff5a1f);
+        }
+      }
+    }
+
+    // 4pc Green Set: Voidstalker — crit resets dash & fires 3 void blades
+    if (isCrit && this.hasSet4pc('voidstalker')) {
+      this.dashCooldown = 0;
+      const bladeDmg = Math.max(3, Math.round(dmg * 0.18));
+      let hits = 0;
+      for (const other of this.enemies) {
+        if (other.dead || hits >= 3) continue;
+        if (Math.hypot(other.x - this.heroX, other.z - this.heroZ) <= 6.2) {
+          hits += 1;
+          this.applyBonusEnemyDamage(other, bladeDmg, `虛空刃 -${bladeDmg}`, 'info', 0xb46bff);
+        }
+      }
+    }
+
+    // 4pc Green Set: Gilded Syndicate — 20% Golden Smite bonus damage + gold pop
+    if (!enemy.dead && this.hasSet4pc('syndicate') && Math.random() < 0.2) {
+      const smiteDmg = Math.max(4, Math.round(dmg * 0.18));
+      this.applyBonusEnemyDamage(enemy, smiteDmg, `重金轟擊 -${smiteDmg}`, 'gold', 0xffd84a);
+      this.spawnLoot(
+        enemy.x + (Math.random() - 0.5) * 0.6,
+        enemy.z + (Math.random() - 0.5) * 0.6,
+        'gold'
+      );
+    }
+  }
+
   private performPommelStrike(): void {
     if (this.isDead || this.pommelCooldown > 0) return;
+    if (this.isMage()) {
+      this.performFrostNova();
+      return;
+    }
 
     this.pommelCooldown = this.pommelMaxCooldown;
     this.pommelAnim = 0.34;
@@ -3943,6 +4324,614 @@ export class EmbervaultEngine {
       this.hitStopTimer = 0.04;
     }
     this.emitHud();
+  }
+
+  // =========================================================================
+  // FROST MAGE — combat core
+  // =========================================================================
+
+  /** Attack multiplier from upgrades, relics and conditional uniques (shared by both classes). */
+  private getHeroAtkMult(): number {
+    const effMaxHp = this.getEffectiveMaxHp();
+    const avariceBonus = this.hasUnique('avarice_gold_atk')
+      ? Math.min(0.4, Math.floor(this.gold / 100) * 0.01)
+      : 0;
+    const titanFuryBonus =
+      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
+    const berserkerBonus = this.hasUnique('berserker_combo_ramp')
+      ? Math.min(0.25, this.floorKills * 0.01)
+      : 0;
+    return (
+      1 +
+      this.atkUpgrades * 0.1 +
+      this.relicStats.atkPct / 100 +
+      avariceBonus +
+      titanFuryBonus +
+      berserkerBonus
+    );
+  }
+
+  /** Rough collision radius of an enemy body for projectile / AoE checks. */
+  private getEnemyHitRadius(e: EnemyEntity): number {
+    if (e.isBoss) return 1.0;
+    if (isGuardianEnemy(e.kind) || e.isElite) return 0.55;
+    if (isSwarmEnemy(e.kind)) return 0.3;
+    return 0.42;
+  }
+
+  /** Visual scale for the frozen-ice shell per enemy size. */
+  private getFrozenShellScale(e: EnemyEntity): number {
+    if (e.isBoss) return 2.2;
+    if (isGuardianEnemy(e.kind)) return 1.35;
+    if (e.isElite) return 1.3;
+    if (isSwarmEnemy(e.kind)) return 0.75;
+    return 1.05;
+  }
+
+  private applySlow(e: EnemyEntity): void {
+    if (e.dead) return;
+    const factor = e.isBoss
+      ? FROST_MAGE.bossSlowFactor
+      : e.isElite || isGuardianEnemy(e.kind)
+      ? FROST_MAGE.eliteSlowFactor
+      : 1;
+    const pct = FROST_MAGE.slowPct * factor;
+    const wasSlowed = (e.slowTimer ?? 0) > 0;
+    e.slowPct = Math.max(wasSlowed ? e.slowPct ?? 0 : 0, pct);
+    e.slowTimer = FROST_MAGE.slowDuration;
+    if (!e.rig.slowMarker) {
+      const marker = createSlowMarker();
+      const sc = e.isBoss ? 2.0 : isGuardianEnemy(e.kind) || e.isElite ? 1.3 : isSwarmEnemy(e.kind) ? 0.7 : 1.0;
+      marker.scale.set(sc, 1, sc);
+      e.rig.root.add(marker);
+      e.rig.slowMarker = marker;
+    }
+    e.rig.slowMarker.visible = true;
+    if (!wasSlowed) {
+      this.emitFloatingText(e.x, e.isBoss ? 2.7 : 1.95, e.z, `緩速 -${Math.round(pct * 100)}%`, 'frost');
+    }
+  }
+
+  private applyFreeze(e: EnemyEntity, duration: number): void {
+    if (e.dead) return;
+    e.frozenTimer = Math.max(e.frozenTimer ?? 0, duration);
+    // Freezing interrupts boss windups / ranged casts, exactly like Pommel Strike
+    if (e.isBoss && (e.bossState === 'windup' || e.bossState === 'strike')) {
+      e.bossState = 'chase';
+      e.bossStateTimer = 0;
+      e.bossHitApplied = false;
+      e.attackCooldown = Math.max(e.attackCooldown, 0.75);
+      if (e.telegraph) e.telegraph.group.visible = false;
+    } else if (e.isRanged && e.windupTimer > 0) {
+      e.windupTimer = 0;
+      e.attackCooldown = Math.max(e.attackCooldown, 0.6);
+    }
+    if (!e.rig.frozenShell) {
+      const shell = createFrozenShell();
+      shell.scale.setScalar(this.getFrozenShellScale(e));
+      e.rig.root.add(shell);
+      e.rig.frozenShell = shell;
+    }
+    e.rig.frozenShell.visible = true;
+  }
+
+  /** Rotates the hero to face the nearest valid enemy. Returns true if a target was found. */
+  private autoFaceNearestEnemy(): boolean {
+    const mage = this.isMage();
+    const range = mage ? FROST_MAGE.projectileRange : 3.2;
+    let best: EnemyEntity | null = null;
+    let bestDist = Infinity;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const d = Math.hypot(e.x - this.heroX, e.z - this.heroZ);
+      if (d > range + this.getEnemyHitRadius(e) || d >= bestDist) continue;
+      if (
+        mage &&
+        !hasLineOfSight(this.dungeon, this.heroX, this.heroZ, e.x, e.z, this.doorUnlocked, 0.2)
+      ) {
+        continue;
+      }
+      best = e;
+      bestDist = d;
+    }
+    if (!best) return false;
+    this.heroFacing = Math.atan2(best.x - this.heroX, best.z - this.heroZ);
+    this.heroRig.body.rotation.y = this.heroFacing;
+    return true;
+  }
+
+  /** Projects a screen point onto the ground plane (y = 0.85, ice spike height). */
+  private screenToGround(clientX: number, clientY: number): { x: number; z: number } | null {
+    if (!this.camera || !this.renderer) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.85);
+    const hitPoint = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(plane, hitPoint)) return null;
+    return { x: hitPoint.x, z: hitPoint.z };
+  }
+
+  /** Frost Mage basic attack: fires one ice spike along heroFacing (3-shot cycle, never resets). */
+  private performMageAttack(): void {
+    if (this.attackCooldown > 0) return;
+    const shotIdx = this.mageShotIndex;
+    const empowered = shotIdx === 2;
+    this.mageShotIndex = (this.mageShotIndex + 1) % 3;
+    this.attackCooldown = FROST_MAGE.shotCooldown[shotIdx];
+    this.attackAnim = empowered ? 0.3 : 0.22;
+    this.audio.playIceCast(empowered);
+
+    const dirX = Math.sin(this.heroFacing);
+    const dirZ = Math.cos(this.heroFacing);
+    this.spawnIceSpike(this.heroX + dirX * 0.55, this.heroZ + dirZ * 0.55, dirX, dirZ, shotIdx);
+
+    // Muzzle frost sparkle at the staff tip
+    for (let i = 0; i < (empowered ? 10 : 5); i++) {
+      this.spawnParticle(
+        this.heroX + dirX * 0.7,
+        1.05,
+        this.heroZ + dirZ * 0.7,
+        dirX * 2 + (Math.random() - 0.5) * 1.6,
+        0.6 + Math.random(),
+        dirZ * 2 + (Math.random() - 0.5) * 1.6,
+        i % 2 === 0 ? 0xbff4ff : empowered ? 0xffe066 : 0x7fdcff,
+        0.8,
+        0.28,
+        1.5
+      );
+    }
+  }
+
+  private spawnIceSpike(x: number, z: number, dirX: number, dirZ: number, shotIdx: number): void {
+    const empowered = shotIdx === 2;
+    const mesh = createIceSpikeMesh(empowered);
+    mesh.position.set(x, 0.85, z);
+    mesh.rotation.y = Math.atan2(dirX, dirZ);
+    this.dynamicGroup.add(mesh);
+    this.heroProjectiles.push({
+      mesh,
+      x,
+      z,
+      vx: dirX * FROST_MAGE.projectileSpeed,
+      vz: dirZ * FROST_MAGE.projectileSpeed,
+      traveled: 0,
+      shotIdx,
+      phantomCrit: this.phantomCritTimer > 0,
+    });
+    this.phantomCritTimer = 0;
+  }
+
+  private removeHeroProjectileAt(idx: number): void {
+    const p = this.heroProjectiles[idx];
+    this.dynamicGroup.remove(p.mesh);
+    p.mesh.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose();
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+        else obj.material.dispose();
+      }
+    });
+    this.heroProjectiles.splice(idx, 1);
+  }
+
+  private isPointInWall(x: number, z: number): boolean {
+    const g = worldToGrid(x, z);
+    return !isTileWalkable(this.dungeon, g.gx, g.gz, this.doorUnlocked);
+  }
+
+  private updateHeroProjectiles(dt: number): void {
+    for (let i = this.heroProjectiles.length - 1; i >= 0; i--) {
+      const p = this.heroProjectiles[i];
+      const speed = Math.hypot(p.vx, p.vz);
+      // Sub-step so fast spikes never tunnel through thin enemies or wall corners
+      const steps = Math.max(1, Math.ceil((speed * dt) / 0.3));
+      const sdt = dt / steps;
+      let exploded = false;
+      for (let s = 0; s < steps && !exploded; s++) {
+        const nx = p.x + p.vx * sdt;
+        const nz = p.z + p.vz * sdt;
+        if (this.isPointInWall(nx, nz)) {
+          this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+          exploded = true;
+          break;
+        }
+        p.x = nx;
+        p.z = nz;
+        p.traveled += speed * sdt;
+
+        for (const e of this.enemies) {
+          if (e.dead) continue;
+          if (Math.hypot(e.x - p.x, e.z - p.z) <= FROST_MAGE.projectileHitRadius + this.getEnemyHitRadius(e)) {
+            this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+            exploded = true;
+            break;
+          }
+        }
+        if (exploded) break;
+        for (const br of this.breakables) {
+          if (br.broken) continue;
+          if (Math.hypot(br.x - p.x, br.z - p.z) <= 0.6) {
+            this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+            exploded = true;
+            break;
+          }
+        }
+        if (!exploded && p.traveled >= FROST_MAGE.projectileRange) {
+          this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
+          exploded = true;
+        }
+      }
+      if (exploded) {
+        this.removeHeroProjectileAt(i);
+        continue;
+      }
+      p.mesh.position.set(p.x, 0.85, p.z);
+      p.mesh.rotation.z += dt * (p.shotIdx === 2 ? 9 : 5);
+      if (Math.random() < (p.shotIdx === 2 ? 0.9 : 0.5)) {
+        this.spawnParticle(
+          p.x,
+          0.85,
+          p.z,
+          (Math.random() - 0.5) * 0.4,
+          0.2 + Math.random() * 0.4,
+          (Math.random() - 0.5) * 0.4,
+          p.shotIdx === 2 && Math.random() < 0.3 ? 0xffe066 : 0xbff4ff,
+          0.6,
+          0.24,
+          0
+        );
+      }
+    }
+  }
+
+  private explodeIceSpike(x: number, z: number, shotIdx: number, phantomCrit = false): void {
+    const empowered = shotIdx === 2;
+    const radius = FROST_MAGE.shotExplosionRadius[shotIdx];
+    this.audio.playIceShatter(empowered);
+
+    // Expanding frost ring on the floor
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: empowered ? 0xbff4ff : 0x8fe3ff,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.62, 28), ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, 0.2, z);
+    this.scene.add(ring);
+    this.slashArcs.push({
+      mesh: ring,
+      life: 0,
+      maxLife: empowered ? 0.3 : 0.2,
+      isCleave: false,
+      isShockwave: true,
+      targetScale: radius / 0.62,
+    });
+    for (let i = 0; i < (empowered ? 18 : 9); i++) {
+      const a = (i / (empowered ? 18 : 9)) * Math.PI * 2;
+      const spd = (empowered ? 4.2 : 2.6) + Math.random() * 1.6;
+      this.spawnParticle(
+        x,
+        0.75,
+        z,
+        Math.cos(a) * spd,
+        1.4 + Math.random() * 1.8,
+        Math.sin(a) * spd,
+        i % 3 === 0 ? 0xffffff : empowered && i % 4 === 1 ? 0xffe066 : 0x9fe8ff,
+        empowered ? 1.0 : 0.8,
+        0.4,
+        6.5
+      );
+    }
+
+    const atkMult = this.getHeroAtkMult();
+    const usePhantomCrit = phantomCrit;
+    const hitState = { consumedPhantom: false, triggeredStorm: false };
+    const critChance = Math.min(
+      0.95,
+      FROST_MAGE.shotBaseCrit[shotIdx] + this.critUpgrades * 0.02 + this.relicStats.critPct / 100
+    );
+    const critMult = 1.35 + this.relicStats.critDmgPct / 100 + (usePhantomCrit ? 0.25 : 0);
+    const knockMult = 1 + this.relicStats.dramaticKnockback / 100;
+    const effMaxHp = this.getEffectiveMaxHp();
+    let landedHit = false;
+
+    for (const enemy of this.enemies) {
+      if (enemy.dead) continue;
+      const d = Math.hypot(enemy.x - x, enemy.z - z);
+      if (d > radius + this.getEnemyHitRadius(enemy)) continue;
+      // Walls block the blast
+      if (d > 0.6 && !hasLineOfSight(this.dungeon, x, z, enemy.x, enemy.z, this.doorUnlocked, 0.05)) continue;
+      const warriorBase = 11 + Math.floor(Math.random() * 6);
+      this.applyHeroHit(enemy, {
+        baseDmg: Math.max(1, Math.round(warriorBase * FROST_MAGE.shotDamageMult[shotIdx])),
+        isEmpowered: empowered,
+        atkMult,
+        critChance,
+        critMult,
+        knockMult,
+        knockBase: empowered ? 3.6 : 1.8,
+        originX: x,
+        originZ: z,
+        fallbackX: Math.sin(this.heroFacing),
+        fallbackZ: Math.cos(this.heroFacing),
+        usePhantomCrit,
+        effMaxHp,
+        state: hitState,
+        hitColor: 0xbff4ff,
+        isMageHit: true,
+      });
+      landedHit = true;
+      if (!enemy.dead && Math.random() < FROST_MAGE.shotSlowChance[shotIdx]) {
+        this.applySlow(enemy);
+      }
+    }
+    for (const br of this.breakables) {
+      if (br.broken) continue;
+      const bd = Math.hypot(br.x - x, br.z - z);
+      if (
+        bd <= radius + 0.35 &&
+        (bd <= 0.8 || hasLineOfSight(this.dungeon, x, z, br.x, br.z, this.doorUnlocked, 0.05))
+      ) {
+        this.breakProp(br);
+        landedHit = true;
+      }
+    }
+
+    if (landedHit) {
+      this.hitStopTimer = Math.max(this.hitStopTimer, empowered ? 0.045 : 0.02);
+      this.addScreenShake(empowered ? 0.2 : 0.08, 0.1);
+    }
+  }
+
+  /** Frost Mage right-click: screen-wide expanding ice nova — freeze, damage, push. */
+  private performFrostNova(): void {
+    if (this.isDead || this.pommelCooldown > 0) return;
+    this.pommelCooldown = this.pommelMaxCooldown;
+    this.attackAnim = 0.34;
+    this.attackCooldown = Math.max(this.attackCooldown, 0.3);
+    this.audio.playFrostNova();
+    this.addScreenShake(0.32, 0.28);
+
+    const rings: Array<[number, number, number, number]> = [
+      // [inner, outer, maxLife, color]
+      // Thin rings: they scale ~19x to reach the nova radius, so keep them narrow
+      [0.64, 0.7, 0.55, 0x8fe3ff],
+      [0.6, 0.64, 0.42, 0xdff8ff],
+      [0.67, 0.7, 0.68, 0xffe066],
+    ];
+    for (const [inner, outer, life, color] of rings) {
+      const mat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.7,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 48), mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(this.heroX, 0.24, this.heroZ);
+      this.scene.add(mesh);
+      this.slashArcs.push({
+        mesh,
+        life: 0,
+        maxLife: life,
+        isCleave: false,
+        isShockwave: true,
+        targetScale: FROST_MAGE.novaRadius / outer,
+      });
+    }
+    for (let i = 0; i < 40; i++) {
+      const a = (i / 40) * Math.PI * 2;
+      const spd = 8 + Math.random() * 6;
+      this.spawnParticle(
+        this.heroX + Math.cos(a) * 0.5,
+        0.4 + Math.random() * 0.6,
+        this.heroZ + Math.sin(a) * 0.5,
+        Math.cos(a) * spd,
+        0.8 + Math.random() * 1.6,
+        Math.sin(a) * spd,
+        i % 5 === 0 ? 0xffe066 : i % 2 === 0 ? 0xffffff : 0x9fe8ff,
+        1.1,
+        0.7,
+        1.0
+      );
+    }
+
+    const atkMult = this.getHeroAtkMult();
+    const critChance = Math.min(0.95, 0.08 + this.critUpgrades * 0.02 + this.relicStats.critPct / 100);
+    const critMult = 1.35 + this.relicStats.critDmgPct / 100;
+    const knockMult = 1 + this.relicStats.dramaticKnockback / 100;
+    let landedHit = false;
+
+    for (const enemy of this.enemies) {
+      if (enemy.dead) continue;
+      const dx = enemy.x - this.heroX;
+      const dz = enemy.z - this.heroZ;
+      const dist = Math.hypot(dx, dz);
+      if (dist > FROST_MAGE.novaRadius + this.getEnemyHitRadius(enemy)) continue;
+
+      const base = (11 + Math.floor(Math.random() * 6)) * FROST_MAGE.novaDamageMult;
+      const isCrit = Math.random() < critChance;
+      let mult = atkMult * (isCrit ? critMult : 1);
+      if (enemy.isBoss || enemy.isElite) mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
+      if (this.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
+        mult *= enemy.isBoss ? 1.25 : 1.5;
+      }
+      const dmg = Math.max(1, Math.round(base * mult));
+      this.totalDamageDealt += dmg;
+      if (isCrit) this.critCount += 1;
+      this.aiLastCombatDamageTime = this.elapsed;
+      enemy.hp -= dmg;
+      enemy.hitFlash = 0.18;
+
+      if (!enemy.isBoss) {
+        const nx = dist > 0.01 ? dx / dist : Math.sin(this.heroFacing);
+        const nz = dist > 0.01 ? dz / dist : Math.cos(this.heroFacing);
+        const knock = FROST_MAGE.novaKnockback * knockMult * (enemy.isElite ? 0.45 : 1);
+        enemy.vx += nx * knock;
+        enemy.vz += nz * knock;
+      }
+      this.applyFreeze(enemy, FROST_MAGE.novaFreeze);
+      this.emitFloatingText(
+        enemy.x,
+        enemy.isBoss ? 2.45 : enemy.isElite ? 2.15 : 1.65,
+        enemy.z,
+        isCrit ? `冰封 CRIT -${dmg}` : `冰封 -${dmg}`,
+        isCrit ? 'crit' : 'frost'
+      );
+      for (let i = 0; i < 6; i++) {
+        this.spawnParticle(
+          enemy.x,
+          enemy.isBoss ? 1.3 : 0.85,
+          enemy.z,
+          (Math.random() - 0.5) * 3.6,
+          1.4 + Math.random() * 1.8,
+          (Math.random() - 0.5) * 3.6,
+          i % 2 === 0 ? 0xbff4ff : 0xffffff,
+          0.9,
+          0.4,
+          6
+        );
+      }
+      landedHit = true;
+      if (enemy.hp <= 0) this.killEnemy(enemy);
+    }
+
+    for (const br of this.breakables) {
+      if (br.broken) continue;
+      if (
+        Math.hypot(br.x - this.heroX, br.z - this.heroZ) <= FROST_MAGE.novaRadius &&
+        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, br.x, br.z, this.doorUnlocked, 0.05)
+      ) {
+        this.breakProp(br);
+      }
+    }
+    if (landedHit) this.hitStopTimer = 0.05;
+    this.emitHud();
+  }
+
+  /** Phoenix Plume fire ring at a point (shared by Dash and Blink). */
+  private triggerPhoenixRingAt(x: number, z: number): void {
+    const fireDmg = Math.max(8, Math.round(14 * (1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100)));
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const edx = e.x - x;
+      const edz = e.z - z;
+      const edist = Math.hypot(edx, edz);
+      if (edist <= 3.4) {
+        const push = e.isBoss ? 1.8 : 6.0;
+        e.vx += (edx / (edist || 1)) * push;
+        e.vz += (edz / (edist || 1)) * push;
+        this.applyBonusEnemyDamage(e, fireDmg, `鳳焰 -${fireDmg}`, 'relicOrange', 0xff6224);
+      }
+    }
+    for (let i = 0; i < 18; i++) {
+      const a = (i / 18) * Math.PI * 2;
+      this.spawnParticle(
+        x + Math.cos(a) * 0.35,
+        0.55,
+        z + Math.sin(a) * 0.35,
+        Math.cos(a) * 5.2,
+        1.1 + Math.random() * 1.4,
+        Math.sin(a) * 5.2,
+        i % 2 === 0 ? 0xff5a1f : 0xffd24a,
+        1.2,
+        0.45,
+        1.5
+      );
+    }
+  }
+
+  /** Frost Mage mobility: instant short teleport along the move direction (or facing). */
+  private performBlink(dirOverride?: { x: number; z: number }): void {
+    if (this.dashCooldown > 0 || this.dashTimer > 0) return;
+    // Direction priority: explicit (AI) > current move input (manual) > facing
+    let dirX = Math.sin(this.heroFacing);
+    let dirZ = Math.cos(this.heroFacing);
+    if (dirOverride) {
+      dirX = dirOverride.x;
+      dirZ = dirOverride.z;
+    } else if (this.controlMode === 'manual' && Math.hypot(this.moveInputX, this.moveInputZ) > 0.1) {
+      dirX = this.moveInputX;
+      dirZ = this.moveInputZ;
+    }
+    const len = Math.hypot(dirX, dirZ) || 1;
+    dirX /= len;
+    dirZ /= len;
+
+    const startX = this.heroX;
+    const startZ = this.heroZ;
+    let endX = startX;
+    let endZ = startZ;
+    const stepLen = 0.2;
+    for (let d = stepLen; d <= FROST_MAGE.blinkDistance + 1e-6; d += stepLen) {
+      const tx = startX + dirX * d;
+      const tz = startZ + dirZ * d;
+      if (!this.canMoveTo(tx, tz, 0.4)) break; // stop in front of walls (enemies don't block)
+      endX = tx;
+      endZ = tz;
+    }
+
+    this.dashCooldown = Math.max(0.35, 1.1 * (1 - this.relicStats.dashCdPct / 100));
+    this.heroInvuln = Math.max(this.heroInvuln, 0.28);
+    if (this.hasUnique('phantom_dash_crit')) this.phantomCritTimer = 2.0;
+    this.audio.playBlink();
+
+    const burst = (bx: number, bz: number, outward: boolean) => {
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2;
+        const spd = outward ? 2.6 : -1.2;
+        this.spawnParticle(
+          bx + Math.cos(a) * 0.3,
+          0.3 + Math.random() * 1.0,
+          bz + Math.sin(a) * 0.3,
+          Math.cos(a) * spd,
+          0.8 + Math.random() * 1.2,
+          Math.sin(a) * spd,
+          i % 4 === 0 ? 0xffe066 : i % 2 === 0 ? 0xffffff : 0x9fe8ff,
+          1.0,
+          0.42,
+          -0.4
+        );
+      }
+    };
+    burst(startX, startZ, false);
+    if (this.hasUnique('phoenix_dash_nova')) this.triggerPhoenixRingAt(startX, startZ);
+
+    this.heroX = endX;
+    this.heroZ = endZ;
+    this.heroVx = 0;
+    this.heroVz = 0;
+    this.heroFacing = Math.atan2(dirX, dirZ);
+    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
+    burst(endX, endZ, true);
+    if (this.hasUnique('phoenix_dash_nova')) this.triggerPhoenixRingAt(endX, endZ);
+    this.emitHud();
+  }
+
+  /** Frost Mage shield regeneration tick. */
+  private updateShield(dt: number): void {
+    this.timeSinceDamaged += dt;
+    if (!this.isMage()) return;
+    const maxShield = this.getEffectiveMaxShield();
+    if (this.shield >= maxShield) {
+      this.shield = maxShield;
+      return;
+    }
+    if (this.timeSinceDamaged < this.getShieldRegenDelay()) return;
+    const rate = maxShield / Math.max(0.1, this.getShieldRefillTime());
+    this.shield = Math.min(maxShield, this.shield + rate * dt);
   }
 
   private breakProp(br: BreakableEntity): void {
@@ -4482,6 +5471,7 @@ export class EmbervaultEngine {
 
   private buildRunSummary(): RunSummary {
     return {
+      heroClass: this.heroClass,
       depth: this.depth,
       biomeName: this.dungeon.biome.name,
       durationSec: Math.max(1, Math.floor(this.runElapsedSec)),
@@ -4491,11 +5481,11 @@ export class EmbervaultEngine {
       normalKills: this.normalKills,
       eliteKills: this.eliteKills,
       bossKills: this.bossKills,
-      upgradeLevel:
-        this.hpUpgrades + this.atkUpgrades + this.armorUpgrades + this.critUpgrades,
-      hpUpgrades: this.hpUpgrades,
+      upgradeLevel: this.getTotalUpgradeLevel(),
+      // For the Frost Mage, "hpUpgrades" reports HP+shield upgrades and "armorUpgrades" reports shield-speed upgrades
+      hpUpgrades: this.isMage() ? this.hpShieldUpgrades : this.hpUpgrades,
       atkUpgrades: this.atkUpgrades,
-      armorUpgrades: this.armorUpgrades,
+      armorUpgrades: this.isMage() ? this.shieldSpeedUpgrades : this.armorUpgrades,
       critUpgrades: this.critUpgrades,
       maxHp: this.maxHp,
       atkBonusPct: this.atkUpgrades * 10,
@@ -4587,22 +5577,46 @@ export class EmbervaultEngine {
     const dz = this.heroZ - sourceZ;
     const dist = Math.hypot(dx, dz) || 1;
 
-    this.hp = Math.max(0, this.hp - actualDamage);
+    // Frost Mage: the shield absorbs damage first, HP only takes the remainder
+    let shieldAbsorbed = 0;
+    let hpDamage = actualDamage;
+    if (this.isMage() && this.shield > 0) {
+      const absorb = Math.min(this.shield, actualDamage);
+      this.shield = Math.max(0, this.shield - absorb);
+      hpDamage = Math.max(0, actualDamage - Math.ceil(absorb));
+      shieldAbsorbed = actualDamage - hpDamage;
+      if (this.shield <= 0) this.audio.playShieldBreak();
+    }
+    this.timeSinceDamaged = 0;
+
+    this.hp = Math.max(0, this.hp - hpDamage);
     // Swarm critters use a brief invuln window so their 2/sec rapid chip bites (-1, -1, -2, -2) land cleanly
     this.heroInvuln = isSwarmHit ? 0.14 : 0.72;
     this.heroHitFlash = isSwarmHit ? 0.1 : 0.18;
+    this.heroHitShieldOnly = hpDamage <= 0;
     this.audio.playPlayerHurt();
     this.addScreenShake(isSwarmHit ? 0.08 : 0.24, isSwarmHit ? 0.08 : 0.18);
     const labelJitterX = isSwarmHit ? (Math.random() - 0.5) * 0.55 : 0;
     const labelJitterZ = isSwarmHit ? (Math.random() - 0.5) * 0.55 : 0;
     const labelY = isSwarmHit ? 1.6 + Math.random() * 0.35 : 1.8;
-    this.emitFloatingText(
-      this.heroX + labelJitterX,
-      labelY,
-      this.heroZ + labelJitterZ,
-      `-${actualDamage}`,
-      'playerHit'
-    );
+    if (shieldAbsorbed > 0) {
+      this.emitFloatingText(
+        this.heroX + labelJitterX - 0.15,
+        labelY + (hpDamage > 0 ? 0.3 : 0),
+        this.heroZ + labelJitterZ,
+        `-${shieldAbsorbed}`,
+        'shieldHit'
+      );
+    }
+    if (hpDamage > 0) {
+      this.emitFloatingText(
+        this.heroX + labelJitterX,
+        labelY,
+        this.heroZ + labelJitterZ,
+        `-${hpDamage}`,
+        'playerHit'
+      );
+    }
 
     // Relic Thorns: reflect fixed damage to melee attacker
     if (attacker && !attacker.dead && this.relicStats.thorns > 0) {
@@ -4687,7 +5701,7 @@ export class EmbervaultEngine {
     this.heroVz += (dz / dist) * kbForce;
 
     // Auto-heal trigger in autonomous mode if low HP
-    const healThreshold = Math.max(20, Math.floor(effMaxHp * 0.45));
+    const healThreshold = this.getAutoHealThreshold(effMaxHp);
     if (this.controlMode === 'auto' && this.hp > 0 && this.hp <= healThreshold && this.potions > 0) {
       this.usePotion();
     }
@@ -4699,7 +5713,10 @@ export class EmbervaultEngine {
       !this.chronosUsedThisFloor
     ) {
       this.chronosUsedThisFloor = true;
-      this.hp = Math.max(10, Math.round(effMaxHp * 0.2));
+      this.hp = this.isMage()
+        ? Math.max(1, Math.round(effMaxHp * 0.2))
+        : Math.max(10, Math.round(effMaxHp * 0.2));
+      if (this.isMage()) this.shield = this.getEffectiveMaxShield();
       this.heroInvuln = 1.65;
       this.audio.playUpgrade();
       this.addScreenShake(0.32, 0.25);
@@ -4808,8 +5825,7 @@ export class EmbervaultEngine {
       armorMaxPct: this.maxArmorUpgrades * 10,
       critBonusPct: this.critUpgrades * 2,
       critMaxPct: this.maxCritUpgrades * 2,
-      upgradeLevel:
-        this.hpUpgrades + this.atkUpgrades + this.armorUpgrades + this.critUpgrades,
+      upgradeLevel: this.getTotalUpgradeLevel(),
       upgradeCost: this.getUpgradeCost(),
       potionCost: this.getPotionCost(),
       nearAltar: this.isHeroNearAltar(),
@@ -4845,7 +5861,31 @@ export class EmbervaultEngine {
       relicStats: this.relicStats,
       activeSets: this.relicStats.activeSets,
       discoveredRelicIds: Array.from(this.discoveredRelicIds),
+      heroClass: this.heroClass,
+      shield: Math.round(this.shield),
+      maxShield: this.getEffectiveMaxShield(),
+      shieldRegenerating:
+        this.isMage() &&
+        this.shield < this.getEffectiveMaxShield() &&
+        this.timeSinceDamaged >= this.getShieldRegenDelay(),
+      skillName: HERO_CLASSES[this.heroClass].skillName,
+      mobilityName: HERO_CLASSES[this.heroClass].mobilityName,
+      upgradeOptions: this.getUpgradeOptions(),
     });
+  }
+
+  /** HP at or below which the auto-pilot drinks a potion. */
+  private getAutoHealThreshold(effMaxHp: number): number {
+    if (this.isMage()) return Math.max(4, Math.floor(effMaxHp * 0.5));
+    return Math.max(20, Math.floor(effMaxHp * 0.45));
+  }
+
+  private getShieldRegenDelay(): number {
+    return FROST_MAGE.shieldDelayBase * getShieldSpeedFactor(this.shieldSpeedUpgrades);
+  }
+
+  private getShieldRefillTime(): number {
+    return FROST_MAGE.shieldRefillBase * getShieldSpeedFactor(this.shieldSpeedUpgrades);
   }
 
   private emitMinimap(): void {
@@ -5098,6 +6138,8 @@ export class EmbervaultEngine {
   }
 
   private tryAutoTravelDash(moveX: number, moveZ: number, distToGoal: number): void {
+    // The mage's Blink is a 5-unit teleport: keep it for combat escapes, never for travel
+    if (this.isMage()) return;
     if (
       this.dashCooldown > 0 ||
       this.dashTimer > 0 ||
@@ -5277,6 +6319,148 @@ export class EmbervaultEngine {
     this.nudgeHeroToClearTile();
   }
 
+  /**
+   * Frost Mage auto-pilot combat: keep 4.5–7 units away, kite back when threatened (< 3),
+   * shoot only with line of sight, Frost Nova / Blink to escape crowds and swarms.
+   * Returns null when the target has no line of sight (caller then path-finds toward it).
+   */
+  private updateMageCombatAI(
+    target: EnemyEntity,
+    targetDist: number
+  ): { moveX: number; moveZ: number } | null {
+    const dx = target.x - this.heroX;
+    const dz = target.z - this.heroZ;
+    const shotLOS = hasLineOfSight(
+      this.dungeon,
+      this.heroX,
+      this.heroZ,
+      target.x,
+      target.z,
+      this.doorUnlocked,
+      0.2
+    );
+
+    // Threat census around the mage
+    let within4 = 0;
+    let adjacent = 0;
+    let swarmClose = 0;
+    let bossWindup = false;
+    let closest: EnemyEntity | null = null;
+    let closestDist = Infinity;
+    let cx = 0;
+    let cz = 0;
+    let cn = 0;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const d = Math.hypot(e.x - this.heroX, e.z - this.heroZ);
+      const frozen = (e.frozenTimer ?? 0) > 0 || e.stunTimer > 0;
+      if (d <= 4 && !frozen) within4 += 1;
+      if (d <= 1.9 && !frozen) adjacent += 1;
+      if (d <= 3.2 && isSwarmEnemy(e.kind) && !frozen) swarmClose += 1;
+      if (e.isBoss && e.bossState === 'windup' && d <= FROST_MAGE.novaRadius) bossWindup = true;
+      if (d < 6) {
+        cx += e.x;
+        cz += e.z;
+        cn += 1;
+      }
+      if (d < closestDist && !frozen) {
+        closestDist = d;
+        closest = e;
+      }
+    }
+    const shieldBroken = this.getEffectiveMaxShield() > 0 && this.shield <= 0.5;
+    let castNova = false;
+
+    // 1. Frost Nova
+    if (
+      this.pommelCooldown <= 0 &&
+      (within4 >= 3 || (shieldBroken && adjacent > 0) || bossWindup || swarmClose >= 2)
+    ) {
+      this.performFrostNova();
+      this.aiStatus = 'Frost Nova!';
+      castNova = true;
+    }
+
+    // 2. Blink out of a swarm / melee crowd when Nova is not available
+    if (
+      !castNova &&
+      this.pommelCooldown > 0 &&
+      this.dashCooldown <= 0 &&
+      cn > 0 &&
+      (swarmClose >= 2 || adjacent >= 2 || (shieldBroken && adjacent >= 1))
+    ) {
+      const awayX = this.heroX - cx / cn;
+      const awayZ = this.heroZ - cz / cn;
+      const len = Math.hypot(awayX, awayZ);
+      const baseAng = len > 0.05 ? Math.atan2(awayX, awayZ) : this.heroFacing + Math.PI;
+      // Try straight away from the crowd first, then fan out
+      for (const off of [0, 0.6, -0.6, 1.2, -1.2, 1.9, -1.9]) {
+        const ex = Math.sin(baseAng + off);
+        const ez = Math.cos(baseAng + off);
+        if (this.canMoveTo(this.heroX + ex * 2.5, this.heroZ + ez * 2.5, 0.4)) {
+          this.performBlink({ x: ex, z: ez });
+          this.aiStatus = 'Blinking Clear';
+          break;
+        }
+      }
+    }
+
+    // 3. Shoot the target when we have a clean shot
+    if (shotLOS && targetDist <= FROST_MAGE.projectileRange + this.getEnemyHitRadius(target)) {
+      this.heroFacing = Math.atan2(dx, dz);
+      if (this.attackCooldown <= 0) this.performAttack();
+    } else if (!shotLOS) {
+      return null; // let the shared pathing bring us around the corner
+    }
+
+    // 4. Movement: kite, hold the band, or close in
+    const tryDir = (mx: number, mz: number): { moveX: number; moveZ: number } | null => {
+      const l = Math.hypot(mx, mz) || 1;
+      const nx = mx / l;
+      const nz = mz / l;
+      if (this.canMoveTo(this.heroX + nx * 0.7, this.heroZ + nz * 0.7, 0.4)) return { moveX: nx, moveZ: nz };
+      return null;
+    };
+
+    if (closest && closestDist < 3) {
+      this.aiStatus = 'Kiting';
+      const ax = this.heroX - closest.x;
+      const az = this.heroZ - closest.z;
+      const l = Math.hypot(ax, az) || 1;
+      const bx = ax / l;
+      const bz = az / l;
+      const px = -bz * this.aiStrafeSign;
+      const pz = bx * this.aiStrafeSign;
+      const step =
+        tryDir(bx, bz) ??
+        tryDir(bx + px, bz + pz) ??
+        tryDir(bx - px, bz - pz) ??
+        tryDir(px, pz) ??
+        tryDir(-px, -pz);
+      if (step) return step;
+      // Cornered: Blink sideways if possible, otherwise stand and shoot
+      if (this.dashCooldown <= 0) {
+        this.performBlink({ x: px, z: pz });
+      }
+      return { moveX: 0, moveZ: 0 };
+    }
+
+    const l = targetDist || 1;
+    if (targetDist > 7) {
+      this.aiStatus = target.isBoss ? `Battling ${target.bossName}` : 'Closing Distance';
+      return { moveX: dx / l, moveZ: dz / l };
+    }
+    if (targetDist < 4.5) {
+      const back = tryDir(-dx / l, -dz / l);
+      if (back) return { moveX: back.moveX * 0.7, moveZ: back.moveZ * 0.7 };
+    }
+    // Comfortable range: light strafing so slow ranged shots and boss telegraphs miss
+    return {
+      moveX: (-dz / l) * 0.3 * this.aiStrafeSign,
+      moveZ: (dx / l) * 0.3 * this.aiStrafeSign,
+    };
+  }
+
   private updateAI(dt: number): { moveX: number; moveZ: number } {
     this.aiForcePathTimer = Math.max(0, this.aiForcePathTimer - dt);
 
@@ -5328,7 +6512,7 @@ export class EmbervaultEngine {
     }
 
     // 1. Auto-heal check
-    const healThreshold = Math.max(20, Math.floor(this.getEffectiveMaxHp() * 0.45));
+    const healThreshold = this.getAutoHealThreshold(this.getEffectiveMaxHp());
     if (this.hp <= healThreshold && this.potions > 0) {
       this.usePotion();
     }
@@ -5538,8 +6722,14 @@ export class EmbervaultEngine {
         0.42
       );
 
+      // Frost Mage: ranged kiting combat. Falls through to path navigation only when LOS is blocked.
+      if (this.isMage()) {
+        const mageMove = this.updateMageCombatAI(nearestEnemy, nearestEnemyDist);
+        if (mageMove) return mageMove;
+      }
+
       // Auto AI casts Pommel Strike when off CD to interrupt windups or stun nearby foes
-      if (this.pommelCooldown <= 0) {
+      if (!this.isMage() && this.pommelCooldown <= 0) {
         let inShockRange = 0;
         let hasPriorityInterrupt = false;
         let hasUnstunnedElite = false;
@@ -5573,7 +6763,7 @@ export class EmbervaultEngine {
       }
 
       const attackRange = nearestEnemy.isBoss ? 2.25 : 1.85;
-      if (nearestEnemyDist <= attackRange && clearLOS) {
+      if (!this.isMage() && nearestEnemyDist <= attackRange && clearLOS) {
         this.heroFacing = Math.atan2(dx, dz);
         if (this.attackCooldown <= 0) {
           this.performAttack();
@@ -5613,6 +6803,26 @@ export class EmbervaultEngine {
       }
       if (this.canMoveTo(this.heroX - perpX * 0.65, this.heroZ - perpZ * 0.65, 0.4)) {
         return { moveX: -perpX, moveZ: -perpZ };
+      }
+    }
+
+    // 2a. Frost Mage: with no enemy nearby and the shield below 60%, hold position until it refills
+    if (this.isMage() && !nearestEnemy) {
+      const maxShield = this.getEffectiveMaxShield();
+      const anyNear = this.enemies.some(
+        (e) => !e.dead && Math.hypot(e.x - this.heroX, e.z - this.heroZ) < 11
+      );
+      if (maxShield > 0 && this.shield < maxShield * 0.6) this.aiMageRecharging = true;
+      if (this.shield >= maxShield * 0.99) this.aiMageRecharging = false;
+      if (maxShield > 0 && this.aiMageRecharging && !anyNear) {
+        this.aiStatus = 'Recharging Frost Shield';
+        this.aiProgressAnchorX = this.heroX;
+        this.aiProgressAnchorZ = this.heroZ;
+        this.aiNoProgressTimer = 0;
+        this.aiStuckTimer = 0;
+        this.aiLastCheckX = this.heroX;
+        this.aiLastCheckZ = this.heroZ;
+        return { moveX: 0, moveZ: 0 };
       }
     }
 
@@ -5762,7 +6972,9 @@ export class EmbervaultEngine {
     const targetPotions = Math.min(8, 4 + Math.floor(this.depth / 6));
     const urgentPotionNeed = this.potions <= 2 && this.gold >= this.getPotionCost();
     const wantsMorePotions = this.potions < targetPotions && this.gold >= this.getPotionCost();
-    const canAutoUpgradeStat = this.gold >= this.getUpgradeCost();
+    const canAutoUpgradeStat =
+      this.gold >= this.getUpgradeCost() &&
+      this.getUpgradeOptions().some((o) => !o.maxed);
     const hasSellableBagRelics = this.relicBag.some(
       (r) => r.rarity === 'blue' || r.rarity === 'yellow'
     );
@@ -5788,14 +7000,14 @@ export class EmbervaultEngine {
               this.aiPath = [];
             }
           } else if (this.gold >= this.getUpgradeCost()) {
-            const cycle: Array<'hp' | 'atk' | 'armor' | 'crit'> = ['hp', 'atk', 'armor', 'crit'];
-            const startIdx = cycle.indexOf(this.autoNextUpgrade);
-            let choice: 'hp' | 'atk' | 'armor' | 'crit' = 'atk';
+            const cycle: UpgradeKind[] = this.isMage()
+              ? ['hp_shield', 'atk', 'shield_speed', 'crit']
+              : ['hp', 'atk', 'armor', 'crit'];
+            const startIdx = Math.max(0, cycle.indexOf(this.autoNextUpgrade));
+            let choice: UpgradeKind = 'atk';
             for (let offset = 0; offset < cycle.length; offset++) {
               const cand = cycle[(startIdx + offset) % cycle.length];
-              if (cand === 'hp' && this.maxHp >= this.maxHpCap) continue;
-              if (cand === 'armor' && this.armorUpgrades >= this.maxArmorUpgrades) continue;
-              if (cand === 'crit' && this.critUpgrades >= this.maxCritUpgrades) continue;
+              if (this.isUpgradeMaxed(cand)) continue;
               choice = cand;
               break;
             }
@@ -6031,6 +7243,9 @@ export class EmbervaultEngine {
       this.emitHud();
       if (this.fadeOpacity <= 0) {
         this.transitionState = 'none';
+        if (this.queuedRestartClass) {
+          this.restartRun(this.queuedRestartClass);
+        }
       }
     }
 
@@ -6058,6 +7273,7 @@ export class EmbervaultEngine {
     this.heroHitFlash = Math.max(0, this.heroHitFlash - dt);
     this.phantomCritTimer = Math.max(0, this.phantomCritTimer - dt);
     this.alchemistShieldTimer = Math.max(0, this.alchemistShieldTimer - dt);
+    this.updateShield(dt);
 
     // 4pc Green Set: Dragonfire Knight periodic fiery breath nova every 3.0s
     if (this.hasSet4pc('dragonfire')) {
@@ -6122,6 +7338,9 @@ export class EmbervaultEngine {
       moveX = aiMove.moveX;
       moveZ = aiMove.moveZ;
     }
+
+    this.moveInputX = moveX;
+    this.moveInputZ = moveZ;
 
     // 2. Move Hero (Dash or Walk + Knockback)
     const moveSpeed = 4.65 * (1 + this.relicStats.moveSpeedPct / 100);
@@ -6216,7 +7435,8 @@ export class EmbervaultEngine {
     }
 
     // Hero Hit Flash
-    const heroEmissive = this.heroHitFlash > 0 ? 0xff3b3b : 0x000000;
+    const heroEmissive =
+      this.heroHitFlash > 0 ? (this.heroHitShieldOnly ? 0x6fd8ff : 0xff3b3b) : 0x000000;
     for (const m of this.heroRig.flashMaterials) {
       m.emissive.setHex(heroEmissive);
       m.emissiveIntensity = this.heroHitFlash > 0 ? 0.75 : 0;
@@ -6253,7 +7473,13 @@ export class EmbervaultEngine {
         (Math.random() - 0.5) * 0.45,
         0.9 + Math.random() * 0.9,
         (Math.random() - 0.5) * 0.45,
-        Math.random() < 0.5 ? 0xffcf5c : 0xff7c24,
+        this.isMage()
+          ? Math.random() < 0.75
+            ? 0xbff4ff
+            : 0xffe066
+          : Math.random() < 0.5
+          ? 0xffcf5c
+          : 0xff7c24,
         0.72,
         0.85,
         -0.1
@@ -6275,6 +7501,7 @@ export class EmbervaultEngine {
       // 5. Update Enemies & Projectiles
       this.updateEnemies(dt);
       this.updateProjectiles(dt);
+      this.updateHeroProjectiles(dt);
 
       // 6. Update Loot Drops
       this.updateLoot(dt);
@@ -7238,9 +8465,21 @@ export class EmbervaultEngine {
     for (const e of this.enemies) {
       if (e.dead) continue;
 
-      e.attackCooldown = Math.max(0, e.attackCooldown - dt);
       e.hitFlash = Math.max(0, e.hitFlash - dt);
       e.stunTimer = Math.max(0, e.stunTimer - dt);
+      e.frozenTimer = Math.max(0, (e.frozenTimer ?? 0) - dt);
+      const isFrozen = e.frozenTimer > 0;
+      const isSlowed = (e.slowTimer ?? 0) > 0;
+      if (isSlowed) e.slowTimer = Math.max(0, (e.slowTimer ?? 0) - dt);
+      // Slowed enemies run their whole AI (movement, attack cooldowns, boss windups) on scaled time
+      const edt = dt * (isSlowed ? 1 - (e.slowPct ?? 0) : 1);
+      e.attackCooldown = Math.max(0, e.attackCooldown - edt);
+
+      if (e.rig.frozenShell) e.rig.frozenShell.visible = isFrozen;
+      if (e.rig.slowMarker) {
+        e.rig.slowMarker.visible = isSlowed && !isFrozen;
+        if (isSlowed) e.rig.slowMarker.rotation.y += dt * 2.2;
+      }
 
       if (e.rig.stunStars) {
         e.rig.stunStars.visible = e.stunTimer > 0;
@@ -7250,15 +8489,15 @@ export class EmbervaultEngine {
         }
       }
 
-      if (e.stunTimer > 0) {
-        // Stunned: only slide from remaining knockback, sway dizzily, cannot move/attack/cast
+      if (e.stunTimer > 0 || isFrozen) {
+        // Stunned / Frozen: only slide from remaining knockback, sway dizzily, cannot move/attack/cast
         const stunnedPos = this.moveWithSlide(e.x, e.z, e.vx * dt, e.vz * dt, e.isBoss ? 0.72 : 0.38);
         e.x = stunnedPos.x;
         e.z = stunnedPos.z;
         e.vx *= Math.exp(-9 * dt);
         e.vz *= Math.exp(-9 * dt);
         e.rig.root.position.set(e.x, 0, e.z);
-        e.rig.body.rotation.z = Math.sin(this.elapsed * 18 + e.id) * 0.12;
+        e.rig.body.rotation.z = isFrozen ? 0 : Math.sin(this.elapsed * 18 + e.id) * 0.12;
         if (e.rig.auraRing) {
           e.rig.auraRing.rotation.z += dt * 1.4;
         }
@@ -7266,6 +8505,9 @@ export class EmbervaultEngine {
           if (e.hitFlash > 0) {
             m.emissive.setHex(0xffffff);
             m.emissiveIntensity = 0.85;
+          } else if (isFrozen) {
+            m.emissive.setHex(0x7fdcff);
+            m.emissiveIntensity = 0.45;
           } else {
             m.emissive.setHex(0xffd24d);
             m.emissiveIntensity = 0.16;
@@ -7281,12 +8523,12 @@ export class EmbervaultEngine {
       const dist = Math.hypot(dx, dz);
 
       if (e.isBoss) {
-        this.updateBoss(e, dt, dx, dz, dist);
+        this.updateBoss(e, edt, dx, dz, dist);
         continue;
       }
 
       if (e.isRanged) {
-        this.updateRangedEnemy(e, dt, dx, dz, dist);
+        this.updateRangedEnemy(e, edt, dx, dz, dist);
         continue;
       }
 
@@ -7325,14 +8567,14 @@ export class EmbervaultEngine {
       const nextPos = this.moveWithSlide(
         e.x,
         e.z,
-        (moveX + e.vx) * dt,
-        (moveZ + e.vz) * dt,
+        (moveX + e.vx) * edt,
+        (moveZ + e.vz) * edt,
         isSwarm ? 0.25 : 0.38
       );
       e.x = nextPos.x;
       e.z = nextPos.z;
-      e.vx *= Math.exp(-9 * dt);
-      e.vz *= Math.exp(-9 * dt);
+      e.vx *= Math.exp(-9 * edt);
+      e.vz *= Math.exp(-9 * edt);
 
       // Enemy Attack on Hero
       const isGuard = isGuardianEnemy(e.kind);
@@ -7355,13 +8597,13 @@ export class EmbervaultEngine {
       e.rig.root.position.set(e.x, 0, e.z);
       e.rig.body.rotation.y = e.facing;
       if (e.rig.auraRing) {
-        e.rig.auraRing.rotation.z += dt * 1.4;
+        e.rig.auraRing.rotation.z += edt * 1.4;
       }
       const isBouncy = e.kind === 'slime' || e.kind === 'flesh_cell';
       const isWingedFlyer = e.kind === 'cavern_bat' || e.kind === 'flesh_parasite';
       const isHoverTech = e.kind === 'wisp' || e.kind === 'alien_probe' || e.kind === 'alien_saucer';
       e.hopPhase +=
-        dt * (isSwarm ? 24.0 : isBouncy ? 5.8 : isWingedFlyer ? 14.0 : isHoverTech ? 6.5 : 8.5);
+        edt * (isSwarm ? 24.0 : isBouncy ? 5.8 : isWingedFlyer ? 14.0 : isHoverTech ? 6.5 : 8.5);
 
       if (isSwarm) {
         const chasing = dist < aggroRange;
@@ -7378,7 +8620,7 @@ export class EmbervaultEngine {
           }
         } else if (e.kind === 'alien_nanobot') {
           e.rig.body.position.y = 0.04 + Math.sin(e.hopPhase * 0.6) * 0.07;
-          if (e.rig.coreMesh) e.rig.coreMesh.rotation.z += dt * 16;
+          if (e.rig.coreMesh) e.rig.coreMesh.rotation.z += edt * 16;
           if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = scurry * 0.55;
           if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -scurry * 0.55;
           const snap = e.attackCooldown > 0.34 ? 0.42 : scurry * 0.18;
@@ -7405,7 +8647,7 @@ export class EmbervaultEngine {
         const baseScale = e.isSpecialElite ? 1.38 : e.isElite ? 1.32 : 1;
         e.rig.body.scale.set(squash * baseScale, stretch * baseScale, squash * baseScale);
         if (e.rig.coreMesh) {
-          e.rig.coreMesh.rotation.y += dt * 2.5;
+          e.rig.coreMesh.rotation.y += edt * 2.5;
         }
       } else if (isWingedFlyer) {
         e.rig.body.position.y = 0.12 + Math.sin(e.hopPhase * 0.45) * 0.16;
@@ -7415,9 +8657,9 @@ export class EmbervaultEngine {
       } else if (isHoverTech) {
         e.rig.body.position.y = Math.sin(e.hopPhase) * 0.2;
         if (e.rig.coreMesh) {
-          e.rig.coreMesh.rotation.y += dt * (e.kind === 'alien_saucer' ? 6.5 : 4.2);
+          e.rig.coreMesh.rotation.y += edt * (e.kind === 'alien_saucer' ? 6.5 : 4.2);
           if (e.kind === 'alien_probe') {
-            e.rig.coreMesh.rotation.z += dt * 3.0;
+            e.rig.coreMesh.rotation.z += edt * 3.0;
           }
         }
       } else {
