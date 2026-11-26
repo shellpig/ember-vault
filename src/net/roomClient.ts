@@ -185,6 +185,11 @@ export class RoomClient {
     this.send({ type: 'relay', kind, payload, to });
   }
 
+  /** P5-C: this hero's town position; the server fans it out to everybody else (never through the host). */
+  sendTownPos(p: { x: number; z: number; f: number; a: 0 | 1 | 2 }): void {
+    this.send({ type: 'townPos', x: p.x, z: p.z, f: p.f, a: p.a });
+  }
+
   sendChat(text: string): void {
     const t = text.trim();
     if (t && Array.from(t).length <= MAX_CHAT_LENGTH) this.send({ type: 'chat', text: t });

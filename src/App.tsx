@@ -44,6 +44,18 @@ import type { CharacterSave, MeResponse } from '../shared/character';
 
 type Screen = 'boot' | 'login' | 'characters' | 'lobby' | 'room' | 'playing';
 
+/** One line of the in-game chat overlay. */
+interface GameChatLine {
+  id: number;
+  name: string;
+  text: string;
+  at: number;
+}
+/** Chat lines stay fully visible this long, then fade out over the next second. */
+const CHAT_SHOW_MS = 7000;
+const CHAT_FADE_MS = 1200;
+let chatLineId = 1;
+
 function HeartIcon({
   state,
   halfContainer = false,
@@ -135,6 +147,8 @@ const INITIAL_HUD: HudState = {
   beingRescued: 0,
   rescuePrompt: null,
   partySize: 1,
+  party: [],
+  mpWait: null,
   equippedRelics: [],
   relicBag: [],
   relicBagCap: 30,
@@ -223,6 +237,14 @@ export default function App() {
   activeSaveRef.current = activeSave;
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef(0);
+  /** In-game chat (P5-C): recent lines (fade out), the open input box and its draft. */
+  const [gameChat, setGameChat] = useState<GameChatLine[]>([]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatDraft, setChatDraft] = useState('');
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const [chatNow, setChatNow] = useState(() => Date.now());
+  /** A room game is running on this screen (chat, member panel). */
+  const [inRoomGame, setInRoomGame] = useState(false);
   const screenRef = useRef<Screen>('boot');
   screenRef.current = screen;
 
@@ -454,8 +476,39 @@ export default function App() {
 
   // Menus sit on top of the attract-mode game: keep it from reacting to keys / clicks.
   useEffect(() => {
-    engineRef.current?.setInputLocked(screen !== 'playing');
-  }, [screen]);
+    engineRef.current?.setInputLocked(screen !== 'playing' || chatOpen);
+  }, [screen, chatOpen]);
+
+  // In-game chat (P5-C): Enter opens the box (the hero stops while typing), Enter sends, Esc cancels.
+  const chatBlockedRef = useRef(false);
+  chatBlockedRef.current = hud.stashOpen || relicModalOpen || codexModalOpen || hud.isDead;
+  useEffect(() => {
+    if (!inRoomGame || screen !== 'playing') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
+      if (chatBlockedRef.current) return;
+      e.preventDefault();
+      setChatOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [inRoomGame, screen]);
+  useEffect(() => {
+    if (chatOpen) chatInputRef.current?.focus();
+  }, [chatOpen]);
+  useEffect(() => {
+    if (gameChat.length === 0 && !chatOpen) return;
+    const t = window.setInterval(() => setChatNow(Date.now()), 400);
+    return () => window.clearInterval(t);
+  }, [gameChat.length, chatOpen]);
+  const sendGameChat = useCallback(() => {
+    const text = chatDraft.trim();
+    if (text) mpClientRef.current?.sendChat(text);
+    setChatDraft('');
+    setChatOpen(false);
+  }, [chatDraft]);
 
   // The attract-mode hero may die behind the menus: just start another demo run (never saves: no SaveManager, persistRun=false).
   useEffect(() => {
@@ -500,6 +553,10 @@ export default function App() {
       mpClientRef.current.close();
       mpClientRef.current = null;
     }
+    setGameChat([]);
+    setChatOpen(false);
+    setChatDraft('');
+    setInRoomGame(false);
     saveMgrRef.current = null;
     setSaveStatus('idle');
     engineRef.current?.restartRun('warrior');
@@ -582,6 +639,8 @@ export default function App() {
       }
       mpClientRef.current = info.client;
       mpEndingRef.current = false;
+      setInRoomGame(true);
+      setGameChat([]);
       saveMgrRef.current = new SaveManager(
         save.id,
         save.save_version,
@@ -598,6 +657,12 @@ export default function App() {
           switch (msg.type) {
             case 'relay':
               engineRef.current?.mpOnRelay(msg.from, msg.kind, msg.payload);
+              break;
+            case 'townPos':
+              engineRef.current?.mpOnTownPos(msg.from, msg);
+              break;
+            case 'chat':
+              setGameChat((prev) => [...prev.slice(-19), { id: chatLineId++, name: msg.name, text: msg.text, at: Date.now() }]);
               break;
             case 'memberJoined':
               engineRef.current?.mpOnMemberJoined(msg.member);
@@ -624,6 +689,7 @@ export default function App() {
           members: info.members,
           send: (kind, payload, to) => info.client.sendRelay(kind, payload, to),
           onNotice: showToast,
+          sendTownPos: (p) => info.client.sendTownPos(p),
         },
         save.class_id as HeroClassId,
         saveToLoadout(save)
@@ -735,6 +801,15 @@ export default function App() {
           className="pointer-events-none absolute inset-0 bg-[#07080d] z-40 transition-opacity duration-75"
           style={{ opacity: hud.fadeOpacity }}
         />
+      )}
+
+      {/* Room game: what the black screen is waiting for (P5-C: never a bare black screen) */}
+      {hud.mpWait && hud.fadeOpacity > 0.6 && (
+        <div className="pointer-events-none absolute inset-0 z-[41] flex items-center justify-center">
+          <div data-testid="mp-wait" className="font-display text-lg tracking-[0.2em] text-[#e7cf93] animate-pulse">
+            {hud.mpWait}
+          </div>
+        </div>
       )}
 
       {/* WebGL Unavailable Fallback */}
@@ -998,6 +1073,43 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {inRoomGame && hud.party.length > 1 && (
+          <div
+            data-testid="party-panel"
+            className="bg-[#0c0e14]/90 border border-[#6e5a34]/70 px-3 py-2 min-w-[162px] shadow-[0_6px_18px_rgba(0,0,0,0.6)]"
+          >
+            <div className="font-display text-[10px] tracking-[0.15em] text-[#bfa86a] border-b border-[#3a3328] pb-1 mb-1.5">
+              隊伍 · PARTY
+            </div>
+            <ul className="space-y-1">
+              {hud.party.map((m) => (
+                <li
+                  key={m.id}
+                  data-testid={`party-${m.name}`}
+                  data-state={m.state}
+                  className="flex items-center justify-between gap-3 font-hud text-[11px]"
+                >
+                  <span className={`truncate max-w-[92px] ${m.isSelf ? 'text-[#ffe9b0]' : 'text-[#d8d3c4]'}`}>
+                    {m.isHost ? '★ ' : ''}
+                    {m.name}
+                  </span>
+                  <span
+                    className={`shrink-0 px-1.5 border text-[10px] ${
+                      m.state === 2
+                        ? 'border-[#a8404c] text-[#ff9ca6]'
+                        : m.state === 1
+                        ? 'border-[#3e9cc2] text-[#8fe3ff]'
+                        : 'border-[#4e8a5c] text-[#9fe9b8]'
+                    }`}
+                  >
+                    {m.state === 2 ? '倒地' : m.state === 1 ? '城鎮' : '地城'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="bg-[#0c0e14]/90 border border-[#6e5a34]/70 p-1.5 shadow-[0_6px_18px_rgba(0,0,0,0.6)]">
           <canvas
@@ -1784,6 +1896,51 @@ export default function App() {
           }}
           onGameStart={handleRoomGameStart}
         />
+      )}
+
+      {/* In-game chat (P5-C) */}
+      {inRoomGame && screen === 'playing' && (
+        <div className="absolute left-4 bottom-[76px] z-[35] w-[min(360px,46vw)] flex flex-col gap-1 pointer-events-none">
+          <div data-testid="game-chat-lines" className="flex flex-col gap-0.5">
+            {gameChat.map((l) => {
+              const age = chatNow - l.at;
+              if (!chatOpen && age > CHAT_SHOW_MS + CHAT_FADE_MS) return null;
+              const op = chatOpen || age <= CHAT_SHOW_MS ? 1 : Math.max(0, 1 - (age - CHAT_SHOW_MS) / CHAT_FADE_MS);
+              return (
+                <div
+                  key={l.id}
+                  style={{ opacity: op, transition: 'opacity 0.4s linear' }}
+                  className="font-hud text-xs leading-snug text-[#efe8d4] bg-[#07080d]/70 px-2 py-0.5 break-words"
+                >
+                  <span className="text-[#e7cf93] font-bold">{l.name}：</span>
+                  {l.text}
+                </div>
+              );
+            })}
+          </div>
+          {chatOpen && (
+            <input
+              ref={chatInputRef}
+              data-testid="game-chat-input"
+              value={chatDraft}
+              maxLength={200}
+              placeholder="輸入訊息，Enter 送出，Esc 取消"
+              onChange={(e) => setChatDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  sendGameChat();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setChatDraft('');
+                  setChatOpen(false);
+                }
+              }}
+              onBlur={() => setChatOpen(false)}
+              className="pointer-events-auto w-full bg-[#0b0d13]/92 border border-[#b89448]/85 px-2 py-1 font-hud text-xs text-[#f3e1b4] outline-none placeholder:text-[#7c7560]"
+            />
+          )}
+        </div>
       )}
 
       {toast && (

@@ -19,6 +19,7 @@ import type {
   LevelPayload,
   LoadoutPayload,
   LootSnap,
+  PartyStatePayload,
   PrivatePayload,
   ProjSnap,
   RosterEntry,
@@ -52,7 +53,10 @@ import {
   KEY_W,
   LOADOUT_WAIT_MS,
   MAX_EVENTS_PER_SNAPSHOT,
+  RETURN_WAIT_MS,
   SNAPSHOT_HZ,
+  TOWN_INTERP_DELAY_MS,
+  TOWN_POS_HZ,
   q100,
 } from '../../shared/game';
 import {
@@ -130,6 +134,7 @@ import {
   FloatingLabelData,
   HudState,
   MinimapSnapshot,
+  PartyMemberInfo,
   ProjectileKind,
   RunSummary,
   TerrainTheme,
@@ -158,7 +163,18 @@ export interface MpConfig {
   send: (kind: GameKind, payload: unknown, to?: string) => void;
   /** A short notice for the player ("XXX 已離開"). */
   onNotice: (msg: string) => void;
+  /** P5-C: broadcasts this hero's town position straight to everybody else (not through the host). */
+  sendTownPos: (p: { x: number; z: number; f: number; a: 0 | 1 | 2 }) => void;
 }
+
+/** One teammate's town position stream (P5-C). Positions are stamped with the local receive time. */
+interface MpTownPeer {
+  buf: MpSample[];
+  /** A position is known and the teammate is still in town (cleared when the host says they left). */
+  has: boolean;
+  speed: number;
+}
+
 
 interface MpSample {
   t: number;
@@ -189,6 +205,10 @@ interface MpGuestState {
   lastUnlocked: boolean;
   usedRunes: Set<number>;
   brokenProps: Set<number>;
+  /** Crates / urns this client already shattered locally (visual only), mapped to the time the host has to confirm. */
+  pendingBreaks: Map<BreakableEntity, number>;
+  /** Party states the host reported (heroId -> 0 dungeon / 1 town / 2 downed); authoritative while I am in town. */
+  partyState: Map<string, 0 | 1 | 2>;
   doorSig: string;
   lastSnapAt: number;
   depth: number;
@@ -219,6 +239,10 @@ interface MpHostState {
   doorSig: string;
   worldSig: string;
   tapped: boolean;
+  /** Last party state message (sent only when it changes). */
+  stSig: string;
+  /** The "nobody is alive in the dungeon" freeze has been announced (final snapshot + private states sent). */
+  frozenFlushed: boolean;
   lastHeroSig: string;
   lastSentAt: number;
   lastDepthSent: number;
@@ -233,6 +257,13 @@ interface MpState {
   onNotice: (msg: string) => void;
   /** Holding at black: waiting for the host's reply (level / town) or for the loadouts. */
   hold: boolean;
+  /** What the held screen says (P5-C: never a bare black screen) and what it waits for. */
+  holdText: string;
+  holdKind: 'start' | 'level' | 'town' | null;
+  holdSince: number;
+  /** Town positions of the others + what I sent last (P5-C). */
+  town: { peers: Map<string, MpTownPeer>; acc: number; last: { x: number; z: number; f: number; a: 0 | 1 | 2 } | null };
+  sendTownPos: (p: { x: number; z: number; f: number; a: 0 | 1 | 2 }) => void;
   inbox: Array<{ kind: GameKind; payload: unknown }>;
   /** min(local receive time - host timestamp): maps the host clock to ours. */
   clockOff: number;
@@ -825,6 +856,8 @@ interface SpikeInstance {
 // Module-scoped scratch vectors for zero GC churn in render loop
 const _projVec = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
+/** A teammate's predicted crate break is undone if the host's snapshot has not confirmed it after this long (ms). */
+const MP_BREAK_CONFIRM_MS = 1500;
 const _camGoal = new THREE.Vector3();
 const _mat4 = new THREE.Matrix4();
 const _quat = new THREE.Quaternion();
@@ -1821,7 +1854,9 @@ export class EmbervaultEngine {
       }
     }
     this.inTown = false;
-    for (const h of this.heroes) h.inTown = false;
+    // Room games: a teammate standing in their own town stays there while my camera leaves mine (P5-C fix: this used
+    // to flag them as back in the dungeon, so the host simulated a ghost and sent them a level they never asked for)
+    for (const h of this.heroes) if (!h.isRemote) h.inTown = false;
     this.setViewGroups(false);
   }
 
@@ -3746,15 +3781,18 @@ export class EmbervaultEngine {
   private enterTownFromDungeon(): void {
     const local = this.localHero;
     this.awayAnchor = { x: local.x, z: local.z };
+    local.inTown = true;
+    if (this.mp) this.mp.town.last = null; // announce my town position (P5-C)
     if (this.partyHoldsDungeon()) {
       this.dungeonCtx = this.captureCtx();
       this.savedDungeon = null;
     } else {
+      // The floor freezes: the teammates still in it (downed) hear about it one last time (P5-C)
+      if (this.mp?.role === 'host') this.mpHostFreezeFlush();
       this.savedDungeon = this.snapshotDungeon({ x: local.x, z: local.z });
       this.clearLevel();
       this.dungeonCtx = null;
     }
-    local.inTown = true;
     this.applyCtx(this.blankCtx());
     this.setViewGroups(true);
     this.buildTown();
@@ -3907,7 +3945,7 @@ export class EmbervaultEngine {
             ? `Bot ${h.botIndex} 的傳送門`
             : '隊友的傳送門',
         isOwn: h === local,
-        downed: h.isDead,
+        downed: h.isDead || (this.mp?.role === 'guest' && h !== local && this.mp.guest.partyState.get(h.id) === 2),
       });
     }
     if (opts.length === 0) {
@@ -4133,7 +4171,7 @@ export class EmbervaultEngine {
         // Room game: the floor comes later (host: once every loadout is in; teammate: the host's level message)
         this.setupBots(null);
         this.hero.controlMode = 'manual';
-        this.mp.hold = true;
+        this.mpHold('start', this.mp.role === 'host' ? '正在載入隊友的角色…' : '等待房主建立地城…');
         if (this.mp.role === 'host') this.mp.host!.waitStart = performance.now();
         return;
       }
@@ -5949,8 +5987,12 @@ export class EmbervaultEngine {
   }
 
   private breakProp(br: BreakableEntity): void {
-    // Teammate client: the host decides what breaks (and what drops); the crate vanishes with its next snapshot
-    if (this.mpGuestDungeon()) return;
+    if (this.mpGuestDungeon()) {
+      // Teammate client: the host decides what breaks (and what drops). My own hit shatters the crate right away
+      // (purely visual); the host's snapshot confirms it, otherwise it comes back (see mpGuestWorld)
+      this.mpGuestPredictBreak(br);
+      return;
+    }
     br.broken = true;
     br.mesh.visible = false;
     this.audio.playCrateBreak();
@@ -6974,6 +7016,8 @@ export class EmbervaultEngine {
       beingRescued: rescueHud.beingRescued,
       rescuePrompt: rescueHud.prompt,
       partySize: this.heroes.length,
+      party: this.mpPartyInfo(),
+      mpWait: this.mp?.hold ? this.mp.holdText || null : null,
       equippedRelics: [...lh.equippedRelics],
       relicBag: [...lh.relicBag],
       relicBagCap: lh.relicBagCap,
@@ -8530,9 +8574,15 @@ export class EmbervaultEngine {
     } else if (this.transitionState === 'fadeIn') {
       if (this.mp?.hold) {
         // Room game: stay black until the host's answer (new floor, town hand-off, start) has arrived
-        this.fadeOpacity = 1;
-        this.emitHud();
-        return;
+        const mp = this.mp;
+        if (mp.holdKind === 'level' && this.townBuilt && performance.now() - mp.holdSince > RETURN_WAIT_MS) {
+          // The host never answered my hand-back: give up and fade back into my town (P5-C)
+          this.mpGuestReturnFailed('房主沒有回應，無法進入地城，已留在城鎮');
+        } else {
+          this.fadeOpacity = 1;
+          this.emitHud();
+          return;
+        }
       }
       this.fadeOpacity = Math.max(0, this.fadeOpacity - dt * 2.0);
       this.emitHud();
@@ -8547,6 +8597,7 @@ export class EmbervaultEngine {
     // Everybody is downed: the dungeon freezes (spec §3.4) until a hero walks back through a portal / is
     // revived by the "back to town" button. As long as one hero stands, the world keeps running (spec §3.3).
     if (this.heroes.every((h) => h.isDead)) {
+      this.mpHostFreezeFlush();
       this.mpHostFrozenTick();
       this.animateHeroPortal(dt);
       this.updateParticles(dt);
@@ -8571,6 +8622,11 @@ export class EmbervaultEngine {
       this.updateRescue(dt);
       this.runDungeonBackground(dt);
       if (this.mp?.role === 'host' && !this.dungeonCtx) this.mpHostFrozenTick();
+      if (this.mp) {
+        // Room game: others in town are drawn, my own position goes out at 5 Hz while I move (P5-C)
+        this.mpTownSend(dt);
+        this.mpTownRemotes(dt);
+      }
     } else if (this.mp?.role === 'guest') {
       // Teammate client: predict my own hero, draw everybody else from the host's snapshots
       this.mpGuestFrame(dt);
@@ -8720,6 +8776,7 @@ export class EmbervaultEngine {
     const townCtx = this.captureCtx();
     this.applyCtx(this.dungeonCtx);
     this.dungeonCtx = null;
+    if (this.mp?.role === 'host') this.mpHostFreezeFlush();
     const sp = gridToWorld(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
     this.savedDungeon = this.snapshotDungeon(sp);
     this.clearLevel();
@@ -10905,7 +10962,12 @@ export class EmbervaultEngine {
       members: cfg.members.map((m) => ({ ...m })),
       send: cfg.send,
       onNotice: cfg.onNotice,
+      sendTownPos: cfg.sendTownPos,
       hold: false,
+      holdText: '',
+      holdKind: null as MpState['holdKind'],
+      holdSince: 0,
+      town: { peers: new Map<string, MpTownPeer>(), acc: 0, last: null as MpState['town']['last'] },
       inbox: [] as Array<{ kind: GameKind; payload: unknown }>,
       clockOff: Infinity,
       classId,
@@ -10935,6 +10997,8 @@ export class EmbervaultEngine {
           privAt: new Map(),
           doorSig: '',
           worldSig: '',
+          stSig: '',
+          frozenFlushed: false,
           tapped: false,
           pids: new WeakMap(),
           lastHeroSig: '',
@@ -10971,6 +11035,8 @@ export class EmbervaultEngine {
       lastUnlocked: false,
       usedRunes: new Set(),
       brokenProps: new Set(),
+      pendingBreaks: new Map(),
+      partyState: new Map(),
       doorSig: '',
       lastSnapAt: 0,
       depth: 0,
@@ -11009,7 +11075,7 @@ export class EmbervaultEngine {
       if (kind === 's') {
         mp.inbox.push({ kind: 's', payload });
         if (mp.inbox.length > 60) mp.inbox.splice(0, mp.inbox.length - 40);
-      } else if (kind === 'level' || kind === 'tw' || kind === 'priv' || kind === 'abort') {
+      } else if (kind === 'level' || kind === 'tw' || kind === 'priv' || kind === 'abort' || kind === 'st' || kind === 'hbx') {
         mp.inbox.push({ kind: kind as GameKind, payload });
       }
     }
@@ -11112,7 +11178,11 @@ export class EmbervaultEngine {
     const mp = this.mp;
     if (!mp) return;
     if (mp.role === 'host') {
-      if (!mp.host!.launched && mp.hold && this.transitionState === 'fadeIn') this.mpHostTryLaunch();
+      if (!mp.host!.launched) {
+        if (mp.hold && this.transitionState === 'fadeIn') this.mpHostTryLaunch();
+        return;
+      }
+      this.mpHostSendParty(false);
       return;
     }
     const g = mp.guest;
@@ -11121,6 +11191,10 @@ export class EmbervaultEngine {
     for (const m of mp.inbox) {
       if (m.kind === 'priv') {
         this.mpGuestApplyPrivate(m.payload as PrivatePayload);
+      } else if (m.kind === 'st') {
+        this.mpGuestApplyParty(m.payload as PartyStatePayload);
+      } else if (m.kind === 'hbx') {
+        if (mp.hold && mp.holdKind === 'level') this.mpGuestReturnFailed('房主目前無法帶你回到地城，已留在城鎮');
       } else if (m.kind === 'abort') {
         mp.onNotice('房主無法開始遊戲（沒有收到你的角色資料）');
       } else {
@@ -11134,12 +11208,17 @@ export class EmbervaultEngine {
         else if (this.inTown) this.mpGuestTownSnapshot(m.payload as SnapshotPayload);
       } else if (m.kind === 'level') {
         const lv = m.payload as LevelPayload;
+        if (this.localHero.inTown && !(mp.hold && mp.holdKind === 'level')) {
+          // A late answer to a hand-back I already gave up on: I am (and stay) in my town
+          continue;
+        }
         if (mp.hold && this.transitionState === 'fadeIn') {
+          if (this.townBuilt) this.mpGuestTownToHold();
           this.mpGuestBuild(lv);
-          mp.hold = false;
+          this.mpReleaseHold();
         } else if (this.transitionState === 'none' && !mp.hold) {
           // A floor change the host made: fade out, then the held message builds the new floor
-          mp.hold = true;
+          this.mpHold('level', `正在前往第 ${lv.n} 層…`);
           this.beginTransition(() => undefined);
           mp.inbox.push(m);
         } else {
@@ -11148,12 +11227,30 @@ export class EmbervaultEngine {
       } else if (m.kind === 'tw') {
         if (mp.hold && this.transitionState === 'fadeIn') {
           this.mpGuestEnterTown(m.payload as TownPayload);
-          mp.hold = false;
+          this.mpReleaseHold();
         } else {
           mp.inbox.push(m);
         }
       }
     }
+  }
+
+  /** Holds the screen at black with a message (P5-C): the player always sees what the game is waiting for. */
+  private mpHold(kind: NonNullable<MpState['holdKind']>, text: string): void {
+    const mp = this.mp;
+    if (!mp) return;
+    mp.hold = true;
+    mp.holdKind = kind;
+    mp.holdText = text;
+    mp.holdSince = performance.now();
+  }
+
+  private mpReleaseHold(): void {
+    const mp = this.mp;
+    if (!mp) return;
+    mp.hold = false;
+    mp.holdKind = null;
+    mp.holdText = '';
   }
 
   private mpHostTryLaunch(): void {
@@ -11179,7 +11276,7 @@ export class EmbervaultEngine {
     this.mpApplyViewGroupsForRemotes();
     this.buildLevel(startDepth);
     this.loadingRun = false;
-    mp.hold = false;
+    this.mpReleaseHold();
   }
 
   private mpApplyViewGroupsForRemotes(): void {
@@ -11220,6 +11317,20 @@ export class EmbervaultEngine {
       if (host.cmds.length < 64) host.cmds.push({ from, cmd: payload as CommandPayload });
     } else if (kind === 'handback') {
       host.handbacks.push({ from, hb: payload as HandbackPayload });
+    } else if (kind === 'hbc') {
+      // The teammate gave up waiting for the level: forget a hand-back still in the queue, or take them out of the
+      // dungeon again if it was already done (they are standing in their town)
+      const queued = host.handbacks.length;
+      host.handbacks = host.handbacks.filter((x) => x.from !== from);
+      if (host.handbacks.length === queued && !h.inTown) {
+        h.inTown = true;
+        h.input.keys.clear();
+        h.input.leftMouseHeld = false;
+        h.rig.root.visible = false;
+        h.rescueTargetId = null;
+        h.rescueProgress = 0;
+        host.privSig.delete(from);
+      }
     }
   }
 
@@ -11280,6 +11391,7 @@ export class EmbervaultEngine {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
+    host.frozenFlushed = false; // the dungeon is running again
     if (host.cmds.length > 0) {
       const cmds = host.cmds;
       host.cmds = [];
@@ -11298,11 +11410,58 @@ export class EmbervaultEngine {
     }
   }
 
+  /** The doors (portals heroes left behind) of the current floor, as sent in snapshots and party states. */
+  private mpDoors(): DoorSnap[] {
+    const dr: DoorSnap[] = [];
+    for (const h of this.heroes) {
+      if (h.portal && h.portal.depth === this.depth) dr.push([h.id, q100(h.portal.x), q100(h.portal.z), h.isDead ? 1 : 0]);
+    }
+    return dr;
+  }
+
+  /**
+   * P5-C party state, host -> everybody, only when it changes: which hero is in town / downed and where the doors are.
+   * Snapshots stop while the floor is frozen or nobody is in it, but the town UI (door list, member panel) must keep up.
+   */
+  private mpHostSendParty(force: boolean): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host' || !mp.host!.launched) return;
+    const host = mp.host!;
+    const h: PartyStatePayload['h'] = this.heroes.map((x) => [x.id, x.isDead ? 2 : x.inTown ? 1 : 0]);
+    const dr = this.mpDoors();
+    const sig = JSON.stringify([this.depth, h, dr]);
+    if (!force && sig === host.stSig) return;
+    host.stSig = sig;
+    if (!this.heroes.some((x) => x.isRemote)) return;
+    mp.send('st', { d: this.depth, h, dr } as PartyStatePayload);
+  }
+
+  /**
+   * The dungeon is about to freeze (nobody alive in it, spec 3.4): the downed teammates still in it get a last snapshot and
+   * their private state (death flags, doors) because no snapshot is sent from now until somebody comes back.
+   */
+  private mpHostFreezeFlush(): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host' || !mp.host!.launched) return;
+    const host = mp.host!;
+    if (host.frozenFlushed) return;
+    host.frozenFlushed = true;
+    host.lastHeroSig = '';
+    this.mpHostSendSnapshot();
+    this.mpHostFlushPrivate(true);
+  }
+
   /** Teammates that asked to go to town while the whole dungeon is parked / frozen (nobody can run commands). */
   private mpHostFrozenTick(): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
+    if (host.handbacks.length > 0 && this.transitionState === 'none') {
+      // Teammates walking back through a town gate while the floor is frozen: they do not wait for the host (P5-C)
+      const hbs = host.handbacks;
+      host.handbacks = [];
+      for (const hb of hbs) this.mpHostOnHandback(hb.from, hb.hb);
+    }
     if (host.cmds.length === 0) return;
     const keep: typeof host.cmds = [];
     for (const c of host.cmds) {
@@ -11390,15 +11549,25 @@ export class EmbervaultEngine {
     h.recomputeRelicStats(false);
     h.hp = Math.min(h.getEffectiveMaxHp(), Math.max(1, hb.hp));
     h.shield = Math.min(h.getEffectiveMaxShield(), hb.shield);
-    h.maxDepthReached = Math.max(h.maxDepthReached, hb.loadout.maxDepth, this.depth);
+    // P5-C: the floor is frozen (nobody is alive in it, the host is in town too): the first one to come back rebuilds it
+    // right here in the background, with fresh monsters (spec 3.4) and without waiting for the host.
+    const frozen = this.inTown && !this.dungeonCtx;
+    const parked = frozen ? this.savedDungeon : null;
+    if (frozen && !parked) {
+      mp.send('hbx', {}, from);
+      return;
+    }
+    h.maxDepthReached = Math.max(h.maxDepthReached, hb.loadout.maxDepth, parked ? parked.depth : this.depth);
     let tx: number;
     let tz: number;
+    const doorDepth = parked ? parked.depth : this.depth;
     const door = hb.door !== 'entrance' ? this.heroById(hb.door)?.portal : null;
-    if (door && door.depth === this.depth) {
+    if (door && door.depth === doorDepth) {
       tx = door.x;
       tz = door.z;
     } else {
-      const sp = gridToWorld(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
+      const d = parked ? parked.dungeon : this.dungeon;
+      const sp = gridToWorld(d.spawn.gx, d.spawn.gz);
       tx = sp.x;
       tz = sp.z;
     }
@@ -11414,8 +11583,46 @@ export class EmbervaultEngine {
     h.rig.root.visible = !this.inTown;
     h.rig.body.rotation.z = 0;
     h.rig.body.position.y = 0;
-    this.mpHostSendLevelTo(h.id, false);
+    if (parked) {
+      // buildLevel announces the rebuilt floor to every teammate that is in it, this one included
+      this.mpHostRebuildAway(parked, { x: tx, z: tz });
+    } else {
+      this.mpHostSendLevelTo(h.id, false);
+    }
     mp.host!.privSig.delete(h.id);
+  }
+
+  /**
+   * The host is in town and the floor is frozen; a teammate walked back through a gate. Rebuild the frozen floor in the
+   * background (monsters respawn, doors stay, the arriving teammate stands at their chosen door) exactly like a floor
+   * change that happens while the local hero is in town: the new level becomes the parked dungeon (`dungeonCtx`) and
+   * keeps being simulated, so the host can step into it later through any door.
+   */
+  private mpHostRebuildAway(snap: SavedDungeonSnapshot, target: { x: number; z: number }): void {
+    const local = this.localHero;
+    this.savedDungeon = null;
+    snap.returnX = target.x;
+    snap.returnZ = target.z;
+    const townCtx = this.captureCtx();
+    this.applyCtx(this.blankCtx());
+    this.inTown = false;
+    this.bgSim = true;
+    this.audio.suppressed = true;
+    const arcsBefore = this.slashArcs.length;
+    try {
+      this.buildLevel(snap.depth, { savedSnapshot: snap });
+    } finally {
+      this.dungeonCtx = this.captureCtx();
+      this.applyCtx(townCtx);
+      this.inTown = true;
+      this.bgSim = false;
+      this.setActor(local);
+      for (let i = arcsBefore; i < this.slashArcs.length; i++) this.slashArcs[i].mesh.visible = false;
+      for (const bar of this.rescueBars.values()) bar.group.visible = false;
+      this.pendingAwayFloor = null; // not a new floor: nothing to announce to the host
+    }
+    if (this.mp?.role === 'host') this.mp.host!.frozenFlushed = false;
+    this.emitHud();
   }
 
   /** Called at the end of `buildLevel` on the host: every teammate in the dungeon gets the new floor. */
@@ -11429,6 +11636,7 @@ export class EmbervaultEngine {
     host.sentLoot.clear();
     host.doorSig = '';
     host.worldSig = '';
+    host.frozenFlushed = false;
     host.events = [];
     host.eventKeys.clear();
     const snap = this.mpBuildSnapshot(true);
@@ -11734,10 +11942,7 @@ export class EmbervaultEngine {
     if (lr.length) snap.lr = lr;
 
     // Doors (the portals heroes left behind) and the shared objectives
-    const dr: DoorSnap[] = [];
-    for (const h of this.heroes) {
-      if (h.portal && h.portal.depth === this.depth) dr.push([h.id, q100(h.portal.x), q100(h.portal.z), h.isDead ? 1 : 0]);
-    }
+    const dr = this.mpDoors();
     const doorSig = JSON.stringify(dr);
     if (full || doorSig !== host.doorSig) {
       snap.dr = dr;
@@ -11805,6 +12010,7 @@ export class EmbervaultEngine {
     g.history = [];
     g.usedRunes.clear();
     g.brokenProps.clear();
+    g.pendingBreaks.clear();
     g.lastHasKey = false;
     g.lastUnlocked = false;
     g.doorSig = '';
@@ -12244,6 +12450,48 @@ export class EmbervaultEngine {
     }
   }
 
+  /** Visual-only shatter of a crate / urn my hero just hit on a teammate client (P5-C). */
+  private mpGuestPredictBreak(br: BreakableEntity): void {
+    const g = this.mp!.guest;
+    if (this.hero !== this.localHero || br.broken) return; // only my own hits are predicted
+    br.broken = true;
+    br.mesh.visible = false;
+    g.pendingBreaks.set(br, performance.now() + MP_BREAK_CONFIRM_MS);
+    this.audio.playCrateBreak();
+    this.mpBreakBurst(br);
+  }
+
+  private mpBreakBurst(br: BreakableEntity): void {
+    const color = this.dungeon.biome.terrainTheme === 'alien' ? 0x70d8ff : br.kind === 'crate' ? 0x7c502d : 0xb38252;
+    for (let i = 0; i < 10; i++) {
+      this.spawnParticle(
+        br.x + (Math.random() - 0.5) * 0.4,
+        0.5,
+        br.z + (Math.random() - 0.5) * 0.4,
+        (Math.random() - 0.5) * 4.2,
+        2.2 + Math.random() * 2.4,
+        (Math.random() - 0.5) * 4.2,
+        color,
+        1.25,
+        0.55,
+        9.5
+      );
+    }
+  }
+
+  /** Predicted crates the host never confirmed within the grace period come back (the host did not break them). */
+  private mpGuestCheckBreaks(): void {
+    const g = this.mp!.guest;
+    if (g.pendingBreaks.size === 0) return;
+    const now = performance.now();
+    for (const [br, deadline] of g.pendingBreaks) {
+      if (now < deadline) continue;
+      g.pendingBreaks.delete(br);
+      br.broken = false;
+      br.mesh.visible = true;
+    }
+  }
+
   private mpGuestApplyWorld(w: WorldSnap): void {
     const g = this.mp!.guest;
     this.hasKey = w.k === 1;
@@ -12267,7 +12515,11 @@ export class EmbervaultEngine {
     }
     for (const i of w.br) {
       const br = this.breakables[i];
-      if (!br || br.broken) continue;
+      if (!br) continue;
+      if (br.broken) {
+        g.pendingBreaks.delete(br); // my own prediction, now confirmed by the host
+        continue;
+      }
       br.broken = true;
       br.mesh.visible = false;
       for (let k = 0; k < 8; k++) {
@@ -12388,10 +12640,11 @@ export class EmbervaultEngine {
     this.setActor(local);
   }
 
-  private mpAnimatePuppetHero(h: Hero, dt: number, speed: number): void {
-    h.rig.root.visible = !this.inTown && !h.inTown;
-    h.rig.root.position.set(h.x, 0, h.z);
-    h.rig.body.rotation.y = h.facing;
+  private mpAnimatePuppetHero(h: Hero, dt: number, speed: number, at?: { x: number; z: number; f: number }): void {
+    // `at`: drawn in my town at the position its owner broadcast (their dungeon position `h.x / h.z` stays untouched)
+    h.rig.root.visible = at ? true : !this.inTown && !h.inTown;
+    h.rig.root.position.set(at ? at.x : h.x, 0, at ? at.z : h.z);
+    h.rig.body.rotation.y = at ? at.f : h.facing;
     h.hitFlash = Math.max(0, h.hitFlash - dt);
     h.attackAnim = Math.max(0, h.attackAnim - dt);
     h.pommelAnim = Math.max(0, h.pommelAnim - dt);
@@ -12410,7 +12663,7 @@ export class EmbervaultEngine {
       const slam = Math.sin(p * Math.PI);
       h.rig.rightArm.rotation.x = -1.35 + slam * 1.15;
       h.rig.rightArm.rotation.y = -0.35 + p * 1.35;
-      h.rig.body.rotation.y = h.facing + slam * 0.72;
+      h.rig.body.rotation.y = (at ? at.f : h.facing) + slam * 0.72;
     } else if (h.attackAnim > 0) {
       const p = 1 - h.attackAnim / 0.28;
       h.rig.swordGroup.rotation.x = THREE.MathUtils.damp(h.rig.swordGroup.rotation.x, Math.PI * 0.42, 22, dt);
@@ -12467,6 +12720,7 @@ export class EmbervaultEngine {
   private mpGuestWorld(dt: number): void {
     const mp = this.mp!;
     const g = mp.guest;
+    this.mpGuestCheckBreaks();
     const renderT = performance.now() - (Number.isFinite(mp.clockOff) ? mp.clockOff : 0) - INTERP_DELAY_MS;
     const tmp = { x: 0, z: 0, f: 0 };
     for (const p of g.enemies.values()) {
@@ -12585,6 +12839,133 @@ export class EmbervaultEngine {
     }
   }
 
+  // --- Town: seeing each other (P5-C) -------------------------------------------------------------------------
+
+  /** A teammate's town position arrived (broadcast by the room server; kept even while I am not in town). */
+  public mpOnTownPos(from: string, p: { x: number; z: number; f: number; a: number }): void {
+    const mp = this.mp;
+    if (!mp || from === mp.selfId) return;
+    let peer = mp.town.peers.get(from);
+    if (!peer) {
+      peer = { buf: [], has: false, speed: 0 };
+      mp.town.peers.set(from, peer);
+    }
+    if (p.a === 2) {
+      peer.buf = []; // (re)appeared: no sliding in from wherever they were before
+      peer.speed = 0;
+    }
+    peer.buf.push({ t: performance.now(), x: p.x / 100, z: p.z / 100, f: p.f / 100 });
+    if (peer.buf.length > 8) peer.buf.shift();
+    peer.has = true;
+  }
+
+  /** I am in town (and not fading): broadcast my position at 5 Hz while moving, once more when I stop (spec 5.2). */
+  private mpTownSend(dt: number): void {
+    const mp = this.mp!;
+    const t = mp.town;
+    t.acc += dt;
+    const local = this.localHero;
+    if (this.transitionState !== 'none' || mp.hold || local.isDead) return;
+    const x = q100(local.x);
+    const z = q100(local.z);
+    const f = q100(local.facing);
+    if (!t.last) {
+      t.last = { x, z, f, a: 2 };
+      t.acc = 0;
+      mp.sendTownPos({ x, z, f, a: 2 });
+      return;
+    }
+    if (t.acc < 1 / TOWN_POS_HZ - 1e-6) return;
+    const moved = Math.abs(x - t.last.x) > 2 || Math.abs(z - t.last.z) > 2;
+    let a: 0 | 1;
+    if (moved) a = 1;
+    else if (t.last.a !== 0) a = 0;
+    else return;
+    t.acc = 0;
+    t.last = { x, z, f, a };
+    mp.sendTownPos({ x, z, f, a });
+  }
+
+  /** Draws the teammates that are in town right now (host: their town is their own machine's; guest: same). */
+  private mpTownRemotes(dt: number): void {
+    const mp = this.mp!;
+    const renderT = performance.now() - TOWN_INTERP_DELAY_MS;
+    const tmp = { x: 0, z: 0, f: 0 };
+    for (const h of this.heroes) {
+      if (!h.isRemote) continue;
+      const peer = mp.town.peers.get(h.id);
+      const state = this.mpHeroState(h);
+      if (state !== 1 || !peer || !peer.has || !this.mpSample(peer.buf, renderT, tmp)) {
+        h.rig.root.visible = false;
+        continue;
+      }
+      const px = h.rig.root.position.x;
+      const pz = h.rig.root.position.z;
+      const moved = h.rig.root.visible ? Math.hypot(tmp.x - px, tmp.z - pz) / Math.max(dt, 1e-4) : 0;
+      peer.speed += (moved - peer.speed) * Math.min(1, dt * 10);
+      this.mpAnimatePuppetHero(h, dt, peer.speed, tmp);
+      this.refreshBotPlate(h);
+    }
+  }
+
+  /** 0 in the dungeon, 1 in town, 2 downed: what this client believes about a hero. */
+  private mpHeroState(h: Hero): 0 | 1 | 2 {
+    const mp = this.mp;
+    if (mp?.role === 'guest' && h !== this.localHero && this.inTown) {
+      // In town the host's party messages are the freshest source (no snapshots flow while the floor is frozen)
+      const st = mp.guest.partyState.get(h.id);
+      if (st !== undefined) return st;
+    }
+    return h.isDead ? 2 : h.inTown ? 1 : 0;
+  }
+
+  /** The member panel (town and dungeon): who is where. Empty outside room games. */
+  private mpPartyInfo(): PartyMemberInfo[] {
+    const mp = this.mp;
+    if (!mp) return [];
+    return this.heroes.map((h) => ({
+      id: h.id,
+      name: h === this.localHero ? this.mpNameOf(h.id) : h.displayName || this.mpNameOf(h.id),
+      classId: h.classId,
+      isSelf: h === this.localHero,
+      isHost: h.id === mp.hostId,
+      state: this.mpHeroState(h),
+    }));
+  }
+
+  /** Guest: the host's party state (P5-C): who is in town / downed, which floor and which doors. Applied while in town. */
+  private mpGuestApplyParty(p: PartyStatePayload): void {
+    const mp = this.mp!;
+    const g = mp.guest;
+    for (const [id, st] of p.h) {
+      g.partyState.set(id, st);
+      if (id === mp.selfId) continue;
+      if (st !== 1) {
+        const peer = mp.town.peers.get(id);
+        if (peer) peer.has = false;
+      }
+    }
+    if (!this.inTown) return; // in the dungeon the snapshots carry the same truth, with positions
+    if (p.d !== this.depth) {
+      this.depth = p.d;
+      for (const h of this.heroes) h.portal = null;
+      g.doorSig = '';
+    }
+    for (const [id, st] of p.h) {
+      if (id === mp.selfId) continue;
+      const h = this.heroById(id);
+      if (!h) continue;
+      h.inTown = st === 1;
+      if (st !== 2 && h.isDead) {
+        // Went to town from the death screen while I was not looking: stand them up again
+        h.isDead = false;
+        this.mpSetDownedPose(h, false);
+      }
+    }
+    this.mpGuestApplyDoors(p.dr);
+    this.emitHud();
+  }
+
   // --- Guest: town hand-off -----------------------------------------------------------------------------------
 
   /** The host sent me to town: I own my character from here on (the town runs locally, spec 5.2). */
@@ -12599,6 +12980,7 @@ export class EmbervaultEngine {
     this.mpSetDownedPose(local, false);
     local.restoreAfterDowned();
     local.inTown = true;
+    mp.town.last = null;
     this.awayAnchor = { x: local.x, z: local.z };
     g.built = false;
     g.enemies.clear();
@@ -12630,11 +13012,21 @@ export class EmbervaultEngine {
       shield: local.getEffectiveMaxShield(),
     };
     this.audio.playPortal();
-    mp.hold = true;
+    local.input.keys.clear();
+    // The town stays built (and is shown again if the host never answers); it is dropped when the level arrives
+    this.mpHold('level', `正在進入第 ${this.depth} 層…`);
     this.beginTransition(() => {
-      this.mpGuestTownToHold();
       mp.send('handback', hb, mp.hostId);
     });
+  }
+
+  /** The host did not answer my hand-back in time (or refused): stay in town and tell the host to keep me there. */
+  private mpGuestReturnFailed(notice: string): void {
+    const mp = this.mp!;
+    this.mpReleaseHold();
+    mp.send('hbc', {}, mp.hostId);
+    mp.town.last = null; // show everybody where I stand again
+    mp.onNotice(notice);
   }
 
   /** At the black of a fade: the town is dropped, the next 'level' message builds the dungeon. */
@@ -12655,7 +13047,7 @@ export class EmbervaultEngine {
   /** Guest in the dungeon asked for town (B / death screen): hold at black until the host's reply arrives. */
   private mpGuestAskTown(death: boolean): void {
     const mp = this.mp!;
-    mp.hold = true;
+    this.mpHold('town', '正在返回城鎮…');
     this.audio.playPortal();
     this.localHero.input.keys.clear();
     this.localHero.input.leftMouseHeld = false;

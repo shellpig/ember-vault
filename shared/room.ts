@@ -75,7 +75,19 @@ export interface RelaySend {
 export interface StartGameSend {
   type: 'startGame';
 }
-export type ClientMessage = ChatSend | PingSend | RelaySend | StartGameSend;
+/**
+ * P5-C: position of a hero walking around its own town. Everybody in the room (not only the host) can send it and the
+ * server fans it out to all other members directly, so it never goes through the host (that would count twice in the
+ * Durable Object request budget, spec 5.2.1). Numbers are x100 integers; `a`: 0 standing, 1 walking, 2 (re)appeared here.
+ */
+export interface TownPosSend {
+  type: 'townPos';
+  x: number;
+  z: number;
+  f: number;
+  a: 0 | 1 | 2;
+}
+export type ClientMessage = ChatSend | PingSend | RelaySend | StartGameSend | TownPosSend;
 
 // --- Server -> client ---------------------------------------------------------------------------
 
@@ -127,6 +139,14 @@ export interface RelayMsg {
   kind: string;
   payload: unknown;
 }
+export interface TownPosMsg {
+  type: 'townPos';
+  from: string;
+  x: number;
+  z: number;
+  f: number;
+  a: 0 | 1 | 2;
+}
 export type ServerMessage =
   | WelcomeMsg
   | MemberJoinedMsg
@@ -136,7 +156,8 @@ export type ServerMessage =
   | PongMsg
   | ReplacedMsg
   | GameStartedMsg
-  | RelayMsg;
+  | RelayMsg
+  | TownPosMsg;
 
 /** Header the Pages Function uses to hand the verified identity to the DO (URI-encoded JSON). */
 export const IDENTITY_HEADER = 'x-ev-identity';

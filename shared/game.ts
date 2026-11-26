@@ -19,6 +19,12 @@ export const INTERP_DELAY_MS = 110;
 export const INPUT_STALE_MS = 3000;
 /** Host waits this long for the teammates' loadouts after the start. */
 export const LOADOUT_WAIT_MS = 10_000;
+/** P5-C: a teammate in town broadcasts its town position at this rate, only while it is moving (spec 5.2.1). */
+export const TOWN_POS_HZ = 5;
+/** Town puppets are drawn this far in the past (the 5 Hz stream has 200 ms gaps; two samples must bracket the time). */
+export const TOWN_INTERP_DELAY_MS = 260;
+/** A teammate returning to the dungeon waits this long for the host's answer before giving up and staying in town. */
+export const RETURN_WAIT_MS = 10_000;
 /** Cap on events per snapshot (damage numbers / sounds / banners are merged into the snapshot, never sent alone). */
 export const MAX_EVENTS_PER_SNAPSHOT = 28;
 
@@ -32,7 +38,10 @@ export type GameKind =
   | 'in' // member -> host: input state + one-shot actions
   | 'cmd' // member -> host: UI command (equip, sell, buy, go to town ...)
   | 'tw' // host -> one member: you are in town now (final private state)
-  | 'handback'; // member -> host: leaving town through a door, here is my current loadout
+  | 'handback' // member -> host: leaving town through a door, here is my current loadout
+  | 'st' // host -> all: party state (who is in town / downed, which doors exist); only sent on change (P5-C)
+  | 'hbc' // member -> host: I gave up waiting for the level, put me back in town (P5-C)
+  | 'hbx'; // host -> member: your hand-back could not be done, stay in town (P5-C)
 
 // --- Teammate -> host ------------------------------------------------------------------------------------------
 export const KEY_W = 1;
@@ -214,6 +223,14 @@ export interface SnapshotPayload {
   w?: WorldSnap;
   dr?: DoorSnap[];
   ev?: GameEvent[];
+}
+
+/** Party state: [heroId, 0 in the dungeon | 1 in town | 2 downed]. Sent by the host whenever it (or the doors) change. */
+export interface PartyStatePayload {
+  /** Depth of the floor the doors belong to. */
+  d: number;
+  h: Array<[string, 0 | 1 | 2]>;
+  dr: DoorSnap[];
 }
 
 export interface TownPayload {
