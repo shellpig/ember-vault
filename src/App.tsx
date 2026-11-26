@@ -652,9 +652,6 @@ export default function App() {
             <span className="font-display text-xs font-bold tracking-[0.14em] text-[#efd89c] tabular-nums whitespace-nowrap">
               LV {1 + hud.upgradeLevel}
             </span>
-            <span className="font-hud text-[11px] font-semibold text-[#f2e8d4] tabular-nums whitespace-nowrap">
-              {hud.hp} / {hud.maxHp} HP
-            </span>
           </div>
 
           <div
@@ -668,6 +665,10 @@ export default function App() {
                 style={{ width: `${hpPct}%` }}
               />
             </div>
+            {/* Fixed-width value column so the HP and shield bars stay the same length */}
+            <span className="w-[78px] shrink-0 text-right font-hud text-[11px] font-semibold text-[#f2e8d4] tabular-nums whitespace-nowrap">
+              {hud.hp} / {hud.maxHp}
+            </span>
           </div>
 
           {hud.maxShield > 0 && (
@@ -689,7 +690,7 @@ export default function App() {
                   <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-pulse" />
                 )}
               </div>
-              <span className="font-hud text-[11px] font-semibold text-[#b6ecff] tabular-nums whitespace-nowrap">
+              <span className="w-[78px] shrink-0 text-right font-hud text-[11px] font-semibold text-[#b6ecff] tabular-nums whitespace-nowrap">
                 {Math.ceil(hud.shield)} / {hud.maxShield}
               </span>
             </div>
