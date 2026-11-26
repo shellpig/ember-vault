@@ -1,11 +1,14 @@
-// Browser side of the room connection (P5-A: lobby only). Single player never imports or calls this.
-// Reconnect is intentionally not implemented yet (P7): a dropped connection is reported and the UI returns to the lobby.
+// Browser side of the room connection. Single player never imports or calls this.
+// P7: `reconnect()` re-joins the same room with backoff after an unexpected drop (the caller decides what a successful
+// re-join means: the host resumes in place, a member joins the running game again).
 
 import {
   KEEPALIVE_INTERVAL_MS,
   KEEPALIVE_PING,
   MAX_CHAT_LENGTH,
   PING_INTERVAL_MS,
+  RECONNECT_BASE_DELAY_MS,
+  RECONNECT_MAX_DELAY_MS,
   ROOM_CODE_PATTERN,
   type ClientMessage,
   type ServerMessage,
@@ -43,7 +46,7 @@ export function roomErrorText(kind: RoomErrorKind): string {
     case 'full':
       return '房間已滿（最多 4 人）';
     case 'game_started':
-      return '遊戲已開始，無法加入（中途加入尚未開放）';
+      return '遊戲已開始，無法加入';
     case 'network':
       return '無法連線到伺服器';
     default:
@@ -67,10 +70,17 @@ export interface RoomClientHandlers {
   onClose: (info: { code: number; wasRequested: boolean }) => void;
 }
 
-function wsUrl(code: string, characterId: string): string {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/api/rooms/${code}/ws?characterId=${encodeURIComponent(characterId)}`;
+function query(characterId: string, resume: string): string {
+  return `characterId=${encodeURIComponent(characterId)}&resume=${encodeURIComponent(resume)}`;
 }
+
+function wsUrl(code: string, characterId: string, resume: string): string {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${location.host}/api/rooms/${code}/ws?${query(characterId, resume)}`;
+}
+
+/** Errors that no amount of retrying fixes (the session or the character is gone). */
+const FATAL_RECONNECT_KINDS: readonly RoomErrorKind[] = ['unauthorized', 'forbidden', 'invalid_code'];
 
 export class RoomClient {
   private ws: WebSocket | null = null;
@@ -78,6 +88,10 @@ export class RoomClient {
   private keepAliveTimer = 0;
   private lastRtt: number | undefined;
   private requestedClose = false;
+  private code = '';
+  private characterId = '';
+  /** P7: random per client (= per page and game); the host sends it on every join so only this page can resume the room. */
+  private readonly resumeToken = crypto.randomUUID().replace(/-/g, '');
 
   constructor(private handlers: RoomClientHandlers) {}
 
@@ -90,10 +104,12 @@ export class RoomClient {
   async connect(rawCode: string, characterId: string): Promise<void> {
     const code = normalizeRoomCode(rawCode);
     if (!isRoomCode(code)) throw new RoomConnectError('invalid_code');
+    this.code = code;
+    this.characterId = characterId;
 
     let res: Response;
     try {
-      res = await fetch(`/api/rooms/${code}/ws?characterId=${encodeURIComponent(characterId)}`, {
+      res = await fetch(`/api/rooms/${code}/ws?${query(characterId, this.resumeToken)}`, {
         credentials: 'same-origin',
       });
     } catch {
@@ -116,7 +132,7 @@ export class RoomClient {
     }
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(wsUrl(code, characterId));
+      const ws = new WebSocket(wsUrl(code, characterId, this.resumeToken));
       this.ws = ws;
       let opened = false;
       ws.onopen = () => {
@@ -151,6 +167,30 @@ export class RoomClient {
         this.handlers.onClose({ code: ev.code, wasRequested: this.requestedClose });
       };
     });
+  }
+
+  /**
+   * P7: after an unexpected drop, join the same room again (backoff 1 s, 2 s, 4 s, 8 s, 8 s ... with a little jitter so
+   * members do not retry in lockstep) until it works or `windowMs` is used up. Resolves true once the socket is open (the
+   * server's `welcome` follows through the handlers); false when it gave up, the room is gone or `close()` was called.
+   */
+  async reconnect(windowMs: number): Promise<boolean> {
+    const started = performance.now();
+    let delay = RECONNECT_BASE_DELAY_MS;
+    while (!this.requestedClose) {
+      const wait = delay + Math.random() * 250;
+      if (performance.now() - started + wait > windowMs) return false;
+      await new Promise<void>((r) => window.setTimeout(r, wait));
+      if (this.requestedClose) return false;
+      try {
+        await this.connect(this.code, this.characterId);
+        return !this.requestedClose;
+      } catch (err) {
+        if (err instanceof RoomConnectError && FATAL_RECONNECT_KINDS.includes(err.kind)) return false;
+      }
+      delay = Math.min(delay * 2, RECONNECT_MAX_DELAY_MS);
+    }
+    return false;
   }
 
   private startTimers(): void {

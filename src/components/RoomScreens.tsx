@@ -16,6 +16,8 @@ export interface RoomGameStart {
   hostId: string;
   isHost: boolean;
   members: RoomMember[];
+  /** P7: the room's game was already running when this client joined (mid-game join): the host adds the hero in town. */
+  late?: boolean;
 }
 
 const MAX_CHAT_LINES = 100;
@@ -78,6 +80,14 @@ export function RoomLobbyScreen({
             setMembers(msg.members);
             setCode(msg.code);
             setStatus('open');
+            // P7: the game is already running: skip the lobby and join it (the host puts this hero in town)
+            if (msg.started && !msg.isHost && !handedOffRef.current) {
+              const host = msg.members.find((m) => m.isHost);
+              if (!host) break;
+              handedOffRef.current = true;
+              exitedRef.current = true;
+              onGameStartRef.current({ client, selfId: msg.playerId, hostId: host.playerId, isHost: false, members: msg.members, late: true });
+            }
             break;
           case 'memberJoined':
             membersRef.current = [...membersRef.current.filter((m) => m.playerId !== msg.member.playerId), msg.member];
@@ -135,8 +145,11 @@ export function RoomLobbyScreen({
       } catch (err) {
         if (cancelled) return;
         if (err instanceof RoomConnectError) exit(roomErrorText(err.kind));
-        else if (err instanceof ApiError) exit(err.status === 401 ? roomErrorText('unauthorized') : '無法建立房間，請稍後再試');
-        else exit(roomErrorText('network'));
+        else if (err instanceof ApiError) {
+          if (err.status === 401) exit(roomErrorText('unauthorized'));
+          else if (err.status === 429) exit('建立房間太頻繁（10 分鐘內最多 5 次），請稍後再試');
+          else exit('無法建立房間，請稍後再試');
+        } else exit(roomErrorText('network'));
       }
     })();
 

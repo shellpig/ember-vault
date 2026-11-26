@@ -1,4 +1,4 @@
-import { IDENTITY_HEADER, type VerifiedIdentity } from '../../../../shared/room';
+import { IDENTITY_HEADER, RESUME_HEADER, RESUME_TOKEN_PATTERN, type VerifiedIdentity } from '../../../../shared/room';
 import { getAuthedAccount } from '../../../_lib/auth';
 import { getCharacterRow } from '../../../_lib/characters';
 import type { Env } from '../../../_lib/env';
@@ -39,7 +39,10 @@ export const onRequestGet: PagesFunction<Env, 'code'> = async ({ request, env, p
   for (const key of [...headers.keys()]) if (key.toLowerCase().startsWith('x-ev-')) headers.delete(key);
   headers.set(IDENTITY_HEADER, encodeURIComponent(JSON.stringify(identity)));
 
+  // P7: the host page's resume token (query `resume`) travels as its own header; the DO treats it as an extra check only
   const url = new URL(request.url);
+  const resume = url.searchParams.get('resume') ?? '';
+  if (RESUME_TOKEN_PATTERN.test(resume)) headers.set(RESUME_HEADER, resume);
   url.search = '';
   return roomStub(env, code).fetch(new Request(url.toString(), { method: 'GET', headers }));
 };

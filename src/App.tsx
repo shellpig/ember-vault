@@ -38,7 +38,19 @@ import { TradeModal } from './components/TradeModal';
 import { CharacterSelectScreen, LobbyScreen, LoginScreen } from './components/AccountScreens';
 import { RoomLobbyScreen, type RoomEntry, type RoomGameStart } from './components/RoomScreens';
 import type { RoomClient } from './net/roomClient';
-import type { ServerMessage, TradeDoneMsg, TradeEndReason, TradeSideView } from '../shared/room';
+import {
+  CLOSE_RATE_LIMITED,
+  CLOSE_REPLACED,
+  CLOSE_ROOM_CLOSED,
+  CLOSE_TOO_BIG,
+  HOST_RECONNECT_WINDOW_MS,
+  MEMBER_RECONNECT_WINDOW_MS,
+  type ServerMessage,
+  type TradeDoneMsg,
+  type TradeEndReason,
+  type TradeSideView,
+  type WelcomeMsg,
+} from '../shared/room';
 import { TRADE_REQUEST_TTL_MS, type TradeErrorCode } from '../shared/trade';
 import { ApiError, api, saveToLoadout } from './api';
 import { SaveManager, SaveStatus } from './saveManager';
@@ -294,6 +306,16 @@ export default function App() {
     tradeRef.current = next;
     setTradeState(next);
   }, []);
+  /**
+   * P7 link state of a room game: 'self' = my connection dropped and is being re-established, 'host' = the host's did
+   * (members wait for it), 'ok' otherwise. The epoch bumps after every successful re-join so per-connection state
+   * (the town flag the Room DO keeps for trades) is sent again.
+   */
+  const [link, setLinkState] = useState<'ok' | 'self' | 'host'>('ok');
+  const [linkEpoch, setLinkEpoch] = useState(0);
+  const reconnectingRef = useRef(false);
+  const reconnectFlushRef = useRef<Promise<void>>(Promise.resolve());
+  const roomGameStartRef = useRef<(info: RoomGameStart) => void>(() => undefined);
   const screenRef = useRef<Screen>('boot');
   screenRef.current = screen;
 
@@ -608,6 +630,8 @@ export default function App() {
     setChatOpen(false);
     setChatDraft('');
     setInRoomGame(false);
+    reconnectingRef.current = false;
+    setLinkState('ok');
     tradeRef.current = null;
     setTradeState(null);
     engineRef.current?.setTradeLock(false);
@@ -863,10 +887,86 @@ export default function App() {
   // Tell the Room DO whether this hero is in town (trades need both sides there); leaving town ends a trade
   useEffect(() => {
     if (inRoomGame && screen === 'playing') mpClientRef.current?.sendTownState(hud.inTown);
-  }, [inRoomGame, screen, hud.inTown]);
+  }, [inRoomGame, screen, hud.inTown, linkEpoch]);
   useEffect(() => {
     if (!hud.inTown && tradeRef.current) cancelTradeRef.current();
   }, [hud.inTown]);
+
+  // --- P7 reconnect ------------------------------------------------------------------------------------------
+  /**
+   * The room socket dropped unexpectedly (not a leave, not roomClosed / replaced / a rate-limit close). Freeze the game, show
+   * the overlay and re-join with backoff. A member comes back as a mid-game joiner (see the `welcome` handler below); the
+   * host takes its room back in place when it is quick enough (server grace window + resume token).
+   */
+  const beginReconnect = useCallback(
+    async (client: RoomClient, isHost: boolean) => {
+      if (reconnectingRef.current || mpClientRef.current !== client || mpEndingRef.current) return;
+      reconnectingRef.current = true;
+      setLinkState('self');
+      engineRef.current?.mpSetPaused(true);
+      // An open trade is cancelled by the server when the socket dropped; drop the local lock too
+      if (tradeRef.current) releaseTrade();
+      // A member re-joins with a fresh copy of its character: get what is local into the cloud first (never waiting long)
+      const mgr = saveMgrRef.current;
+      reconnectFlushRef.current =
+        !isHost && mgr
+          ? Promise.race([mgr.flush(), new Promise<void>((r) => window.setTimeout(r, 4000))])
+          : Promise.resolve();
+      const ok = await client.reconnect(isHost ? HOST_RECONNECT_WINDOW_MS : MEMBER_RECONNECT_WINDOW_MS);
+      if (!ok && mpClientRef.current === client && reconnectingRef.current) {
+        reconnectingRef.current = false;
+        await endRoomGameRef.current('與房間的連線已中斷，無法重新連線');
+      }
+    },
+    [releaseTrade]
+  );
+  const beginReconnectRef = useRef(beginReconnect);
+  beginReconnectRef.current = beginReconnect;
+
+  /** The server answered the re-join (`welcome`). */
+  const onReconnectWelcome = useCallback(async (client: RoomClient, msg: WelcomeMsg) => {
+    if (!reconnectingRef.current || mpClientRef.current !== client) return;
+    const fail = async (notice: string) => {
+      reconnectingRef.current = false;
+      await endRoomGameRef.current(notice);
+    };
+    if (msg.isHost) {
+      if (!msg.resumed) {
+        await fail('與房間的連線已中斷，無法恢復房主身分');
+        return;
+      }
+      engineRef.current?.mpHostResume(msg.members);
+      reconnectingRef.current = false;
+      setLinkState('ok');
+      setLinkEpoch((n) => n + 1);
+      return;
+    }
+    const host = msg.members.find((m) => m.isHost);
+    const id = saveMgrRef.current?.characterId ?? activeSaveRef.current?.id;
+    if (!msg.started || !host || !id) {
+      await fail('與房間的連線已中斷，無法重新加入');
+      return;
+    }
+    await reconnectFlushRef.current;
+    let fresh: CharacterSave | null = null;
+    try {
+      fresh = await api.getCharacter(id);
+    } catch {
+      fresh = null;
+    }
+    if (mpEndingRef.current || mpClientRef.current !== client || !reconnectingRef.current) return;
+    if (!fresh) {
+      await fail('與房間的連線已中斷，無法同步存檔');
+      return;
+    }
+    // The cloud copy is the truth (loot picked up since the last save is lost, spec 8.3); the join below makes a new SaveManager from it
+    activeSaveRef.current = fresh;
+    setActiveSave(fresh);
+    reconnectingRef.current = false;
+    setLinkState('ok');
+    roomGameStartRef.current({ client, selfId: msg.playerId, hostId: host.playerId, isHost: false, members: msg.members, late: true });
+    setLinkEpoch((n) => n + 1);
+  }, []);
 
   /** The host pressed start: the room connection now carries the game (P5-B). */
   const handleRoomGameStart = useCallback(
@@ -890,8 +990,13 @@ export default function App() {
       setSaveStatus('idle');
       info.client.setHandlers({
         onLatency: () => undefined,
-        onClose: ({ wasRequested }) => {
-          if (!wasRequested) void endRoomGameRef.current('與房間的連線已中斷');
+        onClose: ({ code, wasRequested }) => {
+          if (wasRequested || mpEndingRef.current) return;
+          if (code === CLOSE_ROOM_CLOSED || code === CLOSE_REPLACED || code === CLOSE_RATE_LIMITED || code === CLOSE_TOO_BIG) {
+            void endRoomGameRef.current('與房間的連線已中斷');
+            return;
+          }
+          void beginReconnectRef.current(info.client, info.isHost);
         },
         onMessage: (msg: ServerMessage) => {
           switch (msg.type) {
@@ -909,6 +1014,16 @@ export default function App() {
               break;
             case 'memberLeft':
               engineRef.current?.mpOnMemberLeft(msg.playerId);
+              break;
+            case 'welcome':
+              void onReconnectWelcome(info.client, msg);
+              break;
+            case 'hostState':
+              // The host's link dropped (members wait for it inside the server's grace window) or is back
+              if (!reconnectingRef.current) {
+                setLinkState(msg.state === 'reconnecting' ? 'host' : 'ok');
+                engineRef.current?.mpSetPaused(msg.state === 'reconnecting');
+              }
               break;
             case 'roomClosed':
               void endRoomGameRef.current(msg.reason === 'host_left' ? '房主已離開，房間已關閉' : '房間已因閒置而關閉');
@@ -939,6 +1054,7 @@ export default function App() {
           send: (kind, payload, to) => info.client.sendRelay(kind, payload, to),
           onNotice: showToast,
           sendTownPos: (p) => info.client.sendTownPos(p),
+          late: info.late,
         },
         save.class_id as HeroClassId,
         saveToLoadout(save)
@@ -946,8 +1062,9 @@ export default function App() {
       setRoomEntry(null);
       setScreen('playing');
     },
-    [showToast]
+    [showToast, onReconnectWelcome]
   );
+  roomGameStartRef.current = handleRoomGameStart;
 
   const logout = useCallback(async () => {
     try {
@@ -1057,6 +1174,18 @@ export default function App() {
         <div className="pointer-events-none absolute inset-0 z-[41] flex items-center justify-center">
           <div data-testid="mp-wait" className="font-display text-lg tracking-[0.2em] text-[#e7cf93] animate-pulse">
             {hud.mpWait}
+          </div>
+        </div>
+      )}
+
+      {/* P7: the room link is down (mine or the host's) */}
+      {inRoomGame && screen === 'playing' && link !== 'ok' && (
+        <div className="pointer-events-none absolute top-16 left-0 right-0 z-[45] flex justify-center">
+          <div
+            data-testid="mp-reconnecting"
+            className="font-display text-sm tracking-[0.2em] text-[#ffe7a8] bg-[#07080d]/85 border border-[#8f7440] px-5 py-2 animate-pulse"
+          >
+            {link === 'self' ? '重新連線中…' : '房主重新連線中…'}
           </div>
         </div>
       )}

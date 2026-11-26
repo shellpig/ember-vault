@@ -4,7 +4,7 @@ import { DungeonAudio } from './audio';
 import { Hero, STASH_CAP } from './hero';
 import type { CharacterLoadout } from './hero';
 import type { AngelBuff } from './relics';
-import type { RoomMember } from '../../shared/room';
+import { ROOM_MAX_PLAYERS, type RoomMember } from '../../shared/room';
 import type {
   CommandPayload,
   DoorSnap,
@@ -46,7 +46,9 @@ import {
   INPUT_KEEPALIVE_MS,
   INPUT_MAX_HZ,
   INPUT_STALE_MS,
+  INTERP_DELAY_MAX_MS,
   INTERP_DELAY_MS,
+  INTERP_JITTER_K,
   KEY_A,
   KEY_D,
   KEY_F,
@@ -56,6 +58,7 @@ import {
   MAX_EVENTS_PER_SNAPSHOT,
   RETURN_WAIT_MS,
   SNAPSHOT_HZ,
+  TOWN_INTERP_DELAY_MAX_MS,
   TOWN_INTERP_DELAY_MS,
   TOWN_POS_HZ,
   q100,
@@ -177,6 +180,8 @@ export interface MpConfig {
   onNotice: (msg: string) => void;
   /** P5-C: broadcasts this hero's town position straight to everybody else (not through the host). */
   sendTownPos: (p: { x: number; z: number; f: number; a: 0 | 1 | 2 }) => void;
+  /** P7: this client joins a game that is already running (the host puts it in town / at the entrance, no start loadout wait). */
+  late?: boolean;
 }
 
 /** One teammate's town position stream (P5-C). Positions are stamped with the local receive time. */
@@ -185,6 +190,10 @@ interface MpTownPeer {
   /** A position is known and the teammate is still in town (cleared when the host says they left). */
   has: boolean;
   speed: number;
+  lastAt?: number;
+  lastMoving?: boolean;
+  /** P7: smoothed deviation (ms) of the arrival gaps of its moving 5 Hz stream from 200 ms; drives the adaptive delay. */
+  jitter?: number;
 }
 
 
@@ -227,6 +236,10 @@ interface MpGuestState {
   /** A floor is built and snapshots may be applied. */
   built: boolean;
   spikeOffset?: number;
+  /** P7 adaptive interpolation: RFC 3550 style jitter (ms) of the snapshot transit time, and the delay derived from it. */
+  jitter: number;
+  interpDelay: number;
+  lastTransit: number;
 }
 
 interface MpHostState {
@@ -237,6 +250,8 @@ interface MpHostState {
   actions: Map<string, number[]>;
   cmds: Array<{ from: string; cmd: CommandPayload }>;
   handbacks: Array<{ from: string; hb: HandbackPayload }>;
+  /** P7: loadouts of members that joined after the start, waiting to be given a hero. */
+  joiners: Array<{ from: string; p: LoadoutPayload }>;
   sendAcc: number;
   sentEnemies: Map<number, string>;
   sentProj: Map<ProjectileEntity, number>;
@@ -250,6 +265,8 @@ interface MpHostState {
   privAt: Map<string, number>;
   doorSig: string;
   worldSig: string;
+  /** P7: the host's link came back; send everybody a fresh `level` + party state from inside the (running) dungeon. */
+  resync?: boolean;
   tapped: boolean;
   /** Last party state message (sent only when it changes). */
   stSig: string;
@@ -273,6 +290,8 @@ interface MpState {
   holdText: string;
   holdKind: 'start' | 'level' | 'town' | null;
   holdSince: number;
+  /** P7: this client joined a running game. */
+  late: boolean;
   /** Town positions of the others + what I sent last (P5-C). */
   town: { peers: Map<string, MpTownPeer>; acc: number; last: { x: number; z: number; f: number; a: 0 | 1 | 2 } | null };
   sendTownPos: (p: { x: number; z: number; f: number; a: 0 | 1 | 2 }) => void;
@@ -930,6 +949,8 @@ export class EmbervaultEngine {
   private localHeroId = 'hero-0';
   /** Room game state (P5-B). Null = plain single player: every multiplayer path below is skipped. */
   private mp: MpState | null = null;
+  /** P7: the room link dropped; the simulation (host) / dungeon view (teammate) stands still until it is back. */
+  private mpPaused = false;
   /**
    * The hero ("actor") that the per-hero engine code currently operates on. All the combat / skill / relic /
    * pickup methods read their hero from here. Outside of a per-hero context it is always the local hero;
@@ -4287,7 +4308,7 @@ export class EmbervaultEngine {
         // Room game: the floor comes later (host: once every loadout is in; teammate: the host's level message)
         this.setupBots(null);
         this.hero.controlMode = 'manual';
-        this.mpHold('start', this.mp.role === 'host' ? '正在載入隊友的角色…' : '等待房主建立地城…');
+        this.mpHold('start', this.mp.role === 'host' ? '正在載入隊友的角色…' : this.mp.late ? '正在加入進行中的遊戲…' : '等待房主建立地城…');
         if (this.mp.role === 'host') this.mp.host!.waitStart = performance.now();
         return;
       }
@@ -9307,6 +9328,9 @@ export class EmbervaultEngine {
   }
 
   private update(dt: number): void {
+    // P7: while the room connection is being re-established the host freezes everything; a teammate freezes the dungeon view
+    // (their own town keeps running: it is local)
+    if (this.mpPaused && this.mp && (this.mp.role === 'host' || !this.inTown)) return;
     this.elapsed += dt;
     if (this.mp) this.mpPump(dt);
 
@@ -11768,6 +11792,7 @@ export class EmbervaultEngine {
       send: cfg.send,
       onNotice: cfg.onNotice,
       sendTownPos: cfg.sendTownPos,
+      late: cfg.late === true,
       hold: false,
       holdText: '',
       holdKind: null as MpState['holdKind'],
@@ -11790,6 +11815,7 @@ export class EmbervaultEngine {
           actions: new Map(),
           cmds: [],
           handbacks: [],
+          joiners: [],
           sendAcc: 0,
           sentEnemies: new Map(),
           sentProj: new Map(),
@@ -11846,6 +11872,9 @@ export class EmbervaultEngine {
       lastSnapAt: 0,
       depth: 0,
       built: false,
+      jitter: 0,
+      interpDelay: INTERP_DELAY_MS,
+      lastTransit: Number.NaN,
     };
   }
 
@@ -11858,6 +11887,7 @@ export class EmbervaultEngine {
     this.heroes = this.heroes.filter((h) => !h.isRemote);
     this.mpGuestClearEntities();
     this.mp = null;
+    this.mpPaused = false;
     this.localHeroId = 'hero-0';
     this.hero = this.heroes[0] ?? this.hero;
     this.hero.id = 'hero-0';
@@ -11878,12 +11908,35 @@ export class EmbervaultEngine {
     } else {
       if (from !== mp.hostId) return;
       if (kind === 's') {
+        this.mpMeasureJitter(payload as SnapshotPayload);
         mp.inbox.push({ kind: 's', payload });
         if (mp.inbox.length > 60) mp.inbox.splice(0, mp.inbox.length - 40);
       } else if (kind === 'level' || kind === 'tw' || kind === 'priv' || kind === 'abort' || kind === 'st' || kind === 'hbx') {
         mp.inbox.push({ kind: kind as GameKind, payload });
       }
     }
+  }
+
+  /**
+   * P7 adaptive interpolation: smoothed variation of the snapshot transit time (RFC 3550 style, measured on arrival, so
+   * it needs no extra messages). The remote entities are drawn `base + K * jitter` in the past, bounded.
+   */
+  private mpMeasureJitter(s: SnapshotPayload): void {
+    const g = this.mp?.guest;
+    if (!g || typeof s.ts !== 'number') return;
+    const transit = performance.now() - s.ts;
+    if (Number.isFinite(g.lastTransit)) {
+      const d = Math.min(400, Math.abs(transit - g.lastTransit));
+      g.jitter += (d - g.jitter) / 16;
+    }
+    g.lastTransit = transit;
+    const target = Math.min(INTERP_DELAY_MAX_MS, INTERP_DELAY_MS + INTERP_JITTER_K * g.jitter);
+    g.interpDelay += (target - g.interpDelay) * 0.1;
+  }
+
+  /** P7: freeze / unfreeze this engine while the room connection is re-established (see `update`). */
+  public mpSetPaused(paused: boolean): void {
+    this.mpPaused = paused && this.mp !== null;
   }
 
   public mpOnMemberJoined(m: RoomMember): void {
@@ -11900,6 +11953,7 @@ export class EmbervaultEngine {
     const h = this.heroById(playerId);
     if (mp.role === 'host') {
       mp.host!.pending.delete(playerId);
+      mp.host!.joiners = mp.host!.joiners.filter((j) => j.from !== playerId);
       mp.host!.inputs.delete(playerId);
       mp.host!.actions.delete(playerId);
       mp.host!.privSig.delete(playerId);
@@ -11975,6 +12029,12 @@ export class EmbervaultEngine {
 
   private mpNameOf(id: string): string {
     return this.mp?.members.find((m) => m.playerId === id)?.name ?? '隊友';
+  }
+
+  /** P7: class of a member that joined mid-game (its rig must match; a puppet made from a snapshot has no roster entry). */
+  private mpClassOf(id: string): HeroClassId {
+    const cls = this.mp?.members.find((m) => m.playerId === id)?.classId;
+    return cls && cls in HERO_CLASSES ? (cls as HeroClassId) : 'warrior';
   }
 
   /** Per-frame work that must run for every frame, whatever state the fade is in (message inbox, host launch). */
@@ -12096,6 +12156,7 @@ export class EmbervaultEngine {
     const host = mp.host!;
     if (kind === 'loadout') {
       host.pending.set(from, payload as LoadoutPayload);
+      if (host.launched) host.joiners.push({ from, p: payload as LoadoutPayload }); // mid-game join: handled inside the simulation step
       return;
     }
     const h = this.heroById(from);
@@ -12136,6 +12197,83 @@ export class EmbervaultEngine {
         host.privSig.delete(from);
       }
     }
+  }
+
+  /**
+   * P7 mid-game join: a member that arrived after the start sent its loadout. It gets a hero here and always spawns in town
+   * (it walks through a teammate's portal like anyone coming back). If there is no way into the floor at all (every hero is
+   * in the dungeon and nobody has a portal open) it is put at the floor entrance (room 0) at once with the same hand-off a
+   * town gate would do. Monsters already spawned keep their HP; the party size is read again when the next floor is built.
+   */
+  private mpHostAddJoiner(from: string, p: LoadoutPayload): void {
+    const mp = this.mp!;
+    const host = mp.host!;
+    const member = mp.members.find((m) => m.playerId === from);
+    if (!member) return; // not (or no longer) in the room
+    const old = this.heroById(from);
+    if (old) {
+      // The same player came back before the room noticed the old connection was gone: start over, like a fresh join
+      if (!old.isRemote) return;
+      host.inputs.delete(from);
+      host.actions.delete(from);
+      host.privSig.delete(from);
+      host.cmds = host.cmds.filter((c) => c.from !== from);
+      host.handbacks = host.handbacks.filter((c) => c.from !== from);
+      this.mpRemoveHero(old);
+    }
+    if (this.heroes.length >= ROOM_MAX_PLAYERS) return;
+    const h = this.mpCreateHero(from, member.name, (p.classId as HeroClassId) ?? 'warrior', p.loadout, p.angel ?? null);
+    h.inTown = true;
+    h.rig.root.visible = false;
+    const nobodyInTown = !this.heroes.some((x) => x !== h && x.inTown);
+    if (this.mpDoors().length === 0 && nobodyInTown && !this.inTown) {
+      this.mpHostOnHandback(from, {
+        door: 'entrance',
+        classId: h.classId,
+        loadout: { ...p.loadout, stash: [] },
+        angel: p.angel ?? null,
+        hp: h.getEffectiveMaxHp(),
+        shield: h.getEffectiveMaxShield(),
+      });
+    } else {
+      const payload: TownPayload = { priv: this.mpPrivOf(h), hp: h.hp, sh: h.shield, st: this.mpPartyPayload() };
+      mp.send('tw', payload, from);
+    }
+    this.mpHostSendParty(true);
+    this.emitHud();
+  }
+
+  private mpHostDrainJoiners(): void {
+    const host = this.mp!.host!;
+    if (host.joiners.length === 0) return;
+    const list = host.joiners;
+    host.joiners = [];
+    for (const j of list) this.mpHostAddJoiner(j.from, j.p);
+  }
+
+  /**
+   * P7: the host's room connection came back inside the grace window (same page, same resume token). Heroes of members that
+   * left meanwhile are dropped (their `memberLeft` went nowhere), then everybody gets the floor / party state again.
+   */
+  public mpHostResume(members: RoomMember[]): void {
+    const mp = this.mp;
+    if (!mp || mp.role !== 'host') return;
+    const ids = new Set(members.map((m) => m.playerId));
+    for (const m of [...mp.members]) if (!ids.has(m.playerId)) this.mpOnMemberLeft(m.playerId);
+    for (const h of [...this.heroes]) if (h.isRemote && !ids.has(h.id)) this.mpOnMemberLeft(h.id);
+    for (const m of members) this.mpOnMemberJoined(m);
+    mp.host!.resync = true;
+    this.mpPaused = false;
+  }
+
+  /** P7: runs inside the dungeon simulation (also the background one) after `mpHostResume`: every teammate in the floor gets a fresh `level`. */
+  private mpHostResyncNow(): void {
+    const host = this.mp!.host!;
+    host.resync = false;
+    for (const h of this.heroes) if (h.isRemote && !h.inTown) this.mpHostSendLevelTo(h.id, false);
+    host.privSig.clear();
+    this.mpHostSendParty(true);
+    this.mpHostFlushPrivate(true);
   }
 
   /** Applies the teammates' latest inputs to their heroes (before the hero loop of the dungeon in progress). */
@@ -12196,6 +12334,8 @@ export class EmbervaultEngine {
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
     host.frozenFlushed = false; // the dungeon is running again
+    if (host.resync) this.mpHostResyncNow();
+    this.mpHostDrainJoiners();
     if (host.cmds.length > 0) {
       const cmds = host.cmds;
       host.cmds = [];
@@ -12231,13 +12371,20 @@ export class EmbervaultEngine {
     const mp = this.mp;
     if (!mp || mp.role !== 'host' || !mp.host!.launched) return;
     const host = mp.host!;
-    const h: PartyStatePayload['h'] = this.heroes.map((x) => [x.id, x.isDead ? 2 : x.inTown ? 1 : 0]);
-    const dr = this.mpDoors();
-    const sig = JSON.stringify([this.depth, h, dr]);
+    const st = this.mpPartyPayload();
+    const sig = JSON.stringify([st.d, st.h, st.dr]);
     if (!force && sig === host.stSig) return;
     host.stSig = sig;
     if (!this.heroes.some((x) => x.isRemote)) return;
-    mp.send('st', { d: this.depth, h, dr } as PartyStatePayload);
+    mp.send('st', st);
+  }
+
+  private mpPartyPayload(): PartyStatePayload {
+    return {
+      d: this.depth,
+      h: this.heroes.map((x) => [x.id, x.isDead ? 2 : x.inTown ? 1 : 0]),
+      dr: this.mpDoors(),
+    };
   }
 
   /**
@@ -12260,6 +12407,14 @@ export class EmbervaultEngine {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
+    if (host.resync) {
+      // Nobody is in the (frozen) floor: only the party state and the downed teammates' last snapshot go out again
+      host.resync = false;
+      host.frozenFlushed = false;
+      host.privSig.clear();
+      this.mpHostSendParty(true);
+    }
+    this.mpHostDrainJoiners();
     if (host.handbacks.length > 0 && this.transitionState === 'none') {
       // Teammates walking back through a town gate while the floor is frozen: they do not wait for the host (P5-C)
       const hbs = host.handbacks;
@@ -12992,7 +13147,7 @@ export class EmbervaultEngine {
         continue;
       }
       let h = this.heroById(id);
-      if (!h) h = this.mpCreateHero(id, this.mpNameOf(id), 'warrior', null, null);
+      if (!h) h = this.mpCreateHero(id, this.mpNameOf(id), this.mpClassOf(id), null, null);
       h.inTown = (flags & HF_TOWN) !== 0;
       const dead = (flags & HF_DEAD) !== 0;
       if (dead !== h.isDead) {
@@ -13016,7 +13171,7 @@ export class EmbervaultEngine {
         h.z = e[2] / 100;
       }
       hb.buf.push({ t: s.ts, x: e[1] / 100, z: e[2] / 100, f: e[3] / 100 });
-      if (hb.buf.length > 6) hb.buf.shift();
+      if (hb.buf.length > 8) hb.buf.shift();
     }
 
     // Monsters
@@ -13026,7 +13181,7 @@ export class EmbervaultEngine {
         const p = g.enemies.get(en[0]);
         if (!p) continue;
         p.buf.push({ t: s.ts, x: en[1] / 100, z: en[2] / 100, f: en[3] / 100 });
-        if (p.buf.length > 5) p.buf.shift();
+        if (p.buf.length > 8) p.buf.shift();
         const prevHp = p.e.hp;
         p.e.hp = en[4];
         const flags = en[5];
@@ -13506,7 +13661,7 @@ export class EmbervaultEngine {
     }
     this.mpGuestSendInput(now);
     // The others
-    const renderT = now - (Number.isFinite(mp.clockOff) ? mp.clockOff : 0) - INTERP_DELAY_MS;
+    const renderT = now - (Number.isFinite(mp.clockOff) ? mp.clockOff : 0) - g.interpDelay;
     const tmp = { x: 0, z: 0, f: 0 };
     for (const h of this.heroes) {
       if (!h.isRemote) continue;
@@ -13626,7 +13781,7 @@ export class EmbervaultEngine {
     const mp = this.mp!;
     const g = mp.guest;
     this.mpGuestCheckBreaks();
-    const renderT = performance.now() - (Number.isFinite(mp.clockOff) ? mp.clockOff : 0) - INTERP_DELAY_MS;
+    const renderT = performance.now() - (Number.isFinite(mp.clockOff) ? mp.clockOff : 0) - g.interpDelay;
     const tmp = { x: 0, z: 0, f: 0 };
     for (const p of g.enemies.values()) {
       const e = p.e;
@@ -13759,7 +13914,15 @@ export class EmbervaultEngine {
       peer.buf = []; // (re)appeared: no sliding in from wherever they were before
       peer.speed = 0;
     }
-    peer.buf.push({ t: performance.now(), x: p.x / 100, z: p.z / 100, f: p.f / 100 });
+    // P7: the gaps of a moving peer's 5 Hz stream feed the adaptive delay (stops / restarts are not jitter)
+    const arrived = performance.now();
+    if (peer.lastMoving && p.a === 1 && peer.lastAt !== undefined && arrived - peer.lastAt < 600) {
+      const jitter = peer.jitter ?? 0;
+      peer.jitter = jitter + (Math.min(300, Math.abs(arrived - peer.lastAt - 1000 / TOWN_POS_HZ)) - jitter) / 8;
+    }
+    peer.lastAt = arrived;
+    peer.lastMoving = p.a === 1;
+    peer.buf.push({ t: arrived, x: p.x / 100, z: p.z / 100, f: p.f / 100 });
     if (peer.buf.length > 8) peer.buf.shift();
     peer.has = true;
   }
@@ -13794,12 +13957,13 @@ export class EmbervaultEngine {
   /** Draws the teammates that are in town right now (host: their town is their own machine's; guest: same). */
   private mpTownRemotes(dt: number): void {
     const mp = this.mp!;
-    const renderT = performance.now() - TOWN_INTERP_DELAY_MS;
     const tmp = { x: 0, z: 0, f: 0 };
     for (const h of this.heroes) {
       if (!h.isRemote) continue;
       const peer = mp.town.peers.get(h.id);
       const state = this.mpHeroState(h);
+      const delay = Math.min(TOWN_INTERP_DELAY_MAX_MS, TOWN_INTERP_DELAY_MS + INTERP_JITTER_K * (peer?.jitter ?? 0));
+      const renderT = performance.now() - delay;
       if (state !== 1 || !peer || !peer.has || !this.mpSample(peer.buf, renderT, tmp)) {
         h.rig.root.visible = false;
         continue;
@@ -13845,6 +14009,12 @@ export class EmbervaultEngine {
     for (const [id, st] of p.h) {
       g.partyState.set(id, st);
       if (id === mp.selfId) continue;
+      // P7: a mid-game joiner (or somebody who joined after me) is not in any `level` roster yet: make its puppet from the room's member list
+      if (!this.heroById(id) && mp.members.some((m) => m.playerId === id)) {
+        const nh = this.mpCreateHero(id, this.mpNameOf(id), this.mpClassOf(id), null, null);
+        nh.inTown = st === 1;
+        nh.rig.root.visible = false;
+      }
       if (st !== 1) {
         const peer = mp.town.peers.get(id);
         if (peer) peer.has = false;
@@ -13897,6 +14067,12 @@ export class EmbervaultEngine {
     this.applyCtx(this.blankCtx());
     this.setViewGroups(true);
     this.buildTown();
+    // P7: a mid-game joiner learns the floor depth, the doors and who is where from the same message
+    if (tw.st) {
+      this.depth = tw.st.d;
+      g.depth = tw.st.d;
+      this.mpGuestApplyParty(tw.st);
+    }
     this.requestSave('town');
     this.emitHud();
   }

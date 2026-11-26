@@ -13,8 +13,12 @@ export const SNAPSHOT_HZ = 15;
 export const INPUT_MAX_HZ = 20;
 /** A teammate whose input did not change still sends one message this often (loss guard + movement echo). */
 export const INPUT_KEEPALIVE_MS = 1000;
-/** Remote entities are drawn this far in the past so there are always two snapshots to blend between. */
+/** Remote entities are drawn this far in the past so there are always two snapshots to blend between (P7: lower bound, grows with jitter). */
 export const INTERP_DELAY_MS = 110;
+/** P7: adaptive interpolation delay = base + INTERP_JITTER_K * measured arrival jitter, clamped to [base, max]. */
+export const INTERP_DELAY_MAX_MS = 220;
+export const INTERP_JITTER_K = 2.5;
+export const TOWN_INTERP_DELAY_MAX_MS = 420;
 /** Host stops moving a teammate whose input stream went silent for this long. */
 export const INPUT_STALE_MS = 3000;
 /** Host waits this long for the teammates' loadouts after the start. */
@@ -239,6 +243,8 @@ export interface PartyStatePayload {
 
 export interface TownPayload {
   priv: PrivatePayload;
+  /** P7: sent to a mid-game joiner so its town knows the floor depth, doors and who is where (it never saw a `level`). */
+  st?: PartyStatePayload;
   /** The hero's HP / shield when leaving the dungeon. */
   hp: number;
   sh: number;

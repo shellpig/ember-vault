@@ -159,9 +159,9 @@
   - `POST /api/rooms { characterId }`：需登入；確認角色屬於本帳號；產生 6 碼房號（拒絕取樣，字元表 `ABCDEFGHJKMNPQRSTUVWXYZ23456789`）；呼叫 DO `/init` 記錄房主 accountId 與建立時間；碼已被使用（409）就重試，最多 6 次。回傳 `{ code }`。
   - `GET /api/rooms/:code/ws?characterId=...`：需登入；Origin 檢查比照 `_middleware.ts`（帶 Origin 時必須同源，`DEV_AUTH=1` 時略過）；驗證角色屬於本帳號並讀出角色摘要（名稱、職業、`max_depth`）；把驗證過的身分放進內部 header `x-ev-identity`，用 `ROOM.idFromName(code)` 的 stub 轉給 DO。Pages 轉送前會丟掉瀏覽器的 cookie 與所有 `x-ev-*` header，**DO 不信任任何來自瀏覽器的身分欄位**。
   - 沒有 `Upgrade: websocket` 的 GET 是「試跑」：做同樣的檢查但不建立連線，回 200／401／403／404／409，讓前端顯示明確的繁中錯誤（失敗的 WebSocket 握手拿不到 HTTP 狀態碼）。
-  - 錯誤碼：未登入 401；角色不屬於本帳號或不存在 403；房號格式錯誤或房間不存在 404；滿 4 人 409；同一帳號重複加入 → **取代舊連線**（沿用原 playerId，舊連線收到 `replaced`）。
+  - 錯誤碼：未登入 401；角色不屬於本帳號或不存在 403；房號格式錯誤或房間不存在 404；滿 4 人 409（P7 起不再有「遊戲已開始」409）；同一帳號重複加入 → **取代舊連線**（沿用原 playerId，舊連線收到 `replaced`）。
 - **Hibernation**：`ctx.acceptWebSocket`、`webSocketMessage/Close/Error`、成員資訊用 `serializeAttachment` 存在每條連線上；房間 meta（房主 accountId、建立時間）存在 DO storage。保活用 `setWebSocketAutoResponse`（文字 `ping` → `pong`，不喚醒 DO、不計請求）。
-- **房間生命週期**：非房主只能加入「房主已連線」的房間；房主斷線或離開 → 廣播 `roomClosed`、關閉全部連線、`deleteAll()` 清掉狀態（房號可再使用）。建立後 2 分鐘房主沒連上（或連線全消失）→ alarm 清除。
+- **房間生命週期**：非房主只能加入「房主已連線」的房間；房主離開、或**大廳階段**房主斷線 → 廣播 `roomClosed`、關閉全部連線、`deleteAll()` 清掉狀態（房號可再使用）。**P7：遊戲進行中**房主的連線意外斷掉不再立刻關房，而是進入 15 秒寬限期（見 §5.1.4）；同一個房主頁面在期限內回來可保留房主權威，否則才 `roomClosed`。已開始的房間也接受加入（上限仍是 4 人，見 §5.1.4）。建立後 2 分鐘房主沒連上（或連線全消失）→ alarm 清除。
 - **限制**：單則訊息 4096 字元（超過 close 1009）；每連線 token bucket（突發 20、每秒補 5，超過 close 1008）；二進位或非 JSON 訊息斷線；聊天 200 字、控制字元轉空白；`from`／`name` 一律由伺服器蓋章。
 
 ### 5.1.2 P5-B 實際協定（已實作）
@@ -223,6 +223,31 @@ Room DO 不懂遊戲內容，只做轉發（`relay`）＋把房間標記為「�
 
 **遊戲中聊天與成員面板**：沿用 P5-A 的 `chat`（伺服器蓋章 from／name）。Enter 開啟輸入框（輸入時英雄停止移動，`setInputLocked`）、Enter 送出、Esc 取消；訊息顯示 7 秒後淡出。右上角「隊伍」小面板列出所有人與狀態（地城／城鎮／倒地），城鎮與地城都看得到。
 
+### 5.1.4 P7 實際協定（已實作，待驗收）：中途加入、重連與打磨
+
+**中途加入。** DO 不再因 `meta.started` 拒絕加入（移除 409 `game_started`）；已開始的房間只要「房主在線且人數 < 4」就收人，`welcome.started = true`。大廳畫面收到 `started` 的 `welcome`（非房主）就略過房間大廳，直接把連線交給遊戲（`RoomGameStart.late`）。加入者的引擎照一般隊友起手（`mpStart`，`late` 只改等待文字），送出一次 `loadout`（無倉庫）：
+
+- 房主引擎（遊戲已 `launched`）把 `loadout` 排進 `host.joiners`，在下一次模擬步驟（`mpHostPost`／凍結時 `mpHostFrozenTick`，背景地城也算）由 `mpHostAddJoiner` 建立英雄（`inTown = true`）。同一玩家 id 已有英雄（舊連線尚未被房間發現就重連）→ 先移除舊英雄再建新的。
+- **預設出生在城鎮**：房主回一則 `tw`（`TownPayload`，新增選用欄位 `st` = 當下的隊伍狀態：層數、門、誰在哪裡），加入者據此建城鎮、套用深度與門清單，並用成員清單補建隊友模型；之後走既有的城鎮傳送門選擇器（沒有門時選項本來就是「第 N 層入口」）。
+- **沒有門可走**（目前這層沒有任何傳送門、沒有任何英雄在城鎮、房主在地城）→ 房主直接以合成的 `handback`（`door: 'entrance'`）走既有的 `mpHostOnHandback`：英雄放到本層 room 0，並送該加入者 `level`（含其 `priv`），與城鎮門走出來完全相同。
+- 難度縮放沿用規則：人數 `n` 在下一次建層時重算（`heroes.length`）；已生成的怪物血量不變。房主之後廣播 `st`（強制一次）。快照裡的隊友若沒有名冊，職業取自房間成員清單（修正中途加入者模型一律是戰士的問題）。
+- 新增訊息量：每個加入者一次性的 `loadout`、`tw`／`level`、一則 `st`。沒有新的週期性訊息。
+
+**成員自動重連。** 客戶端在非主動離開、非 `roomClosed`／`replaced`／1008／1009 的 close 後呼叫 `RoomClient.reconnect()`：退避 1、2、4、8、8… 秒（各加 0–250 ms 抖動），總窗口 30 秒（`MEMBER_RECONNECT_WINDOW_MS`），`unauthorized`／`forbidden`／`invalid_code` 立即放棄。期間顯示「重新連線中…」（遊戲凍結地城視角，`mpSetPaused`）、開啟中的交易在本機解鎖（DO 因斷線已取消）。重連成功後先 `flush`（最多 4 秒）再 `GET /api/characters/:id` 取得最新存檔（`base_version` 因此是當前版本；409 仍會暫停存檔），用它建新的 `SaveManager`，再當作中途加入者重新 `mpStart`。上次存檔後撿的東西會遺失（§8.3 已接受）。失敗 → 既有的 `endRoomGame`（存檔、回大廳並顯示提示）。房主端把成員斷線照舊視為離開（移除英雄、「XXX 已離開」），重連顯示為一次新的加入。
+
+**房主 15 秒寬限與接管。** 每個 `RoomClient`（頁面、每場遊戲）產生隨機 `resumeToken`（32 hex），每次加入帶在查詢參數 `resume`；Pages 驗格式後放進內部 header `x-ev-resume`（和 `x-ev-identity` 一樣先清掉瀏覽器送的 `x-ev-*`）。DO 只在房主帳號加入時把它記進 `meta.hostToken`。**它是額外檢查，不是身分**：身分永遠只來自 `x-ev-identity`。
+
+- 遊戲進行中房主 socket 斷掉、且 `meta.hostToken` 存在 → 不關房：`meta.hostGoneUntil = now + 15 s`（`HOST_GRACE_MS`）寫進 storage、`setAlarm(hostGoneUntil)`、廣播新的 `hostState { state: 'reconnecting', graceMs }`。成員凍結地城視角（城鎮照常）。寬限期內其他人加入回 404（房主不在）。大廳階段或沒有 token（舊客戶端）→ 照舊立刻關房。
+- 房主帳號在寬限期內以**相同 token** 加入 → 清除 `hostGoneUntil` 與 alarm，`welcome.resumed = true`（成員清單為當下的）、廣播 `hostState: ok`；不廣播 `memberJoined`。房主客戶端呼叫 `mpHostResume(members)`：移除寬限期間離開的隊友英雄，然後在下一個模擬步驟對地城裡的每個隊友重送 `level`（完整快照）、強制 `st` 與私有狀態（背景地城、凍結樓層也各有對應路徑）。房主在斷線期間整個引擎凍結（`mpSetPaused`），所以隊友不會在沒有回應的狀態下被怪物打。
+- token 不符／沒有 token（重新整理頁面）／超時（alarm 觸發 `host_left`）→ `closeRoom('host_left')`，成員存檔並回大廳。房主退避窗口為 14 秒（`HOST_RECONNECT_WINDOW_MS`）。房主遷移仍在範圍外（§10）。
+- Hibernation：寬限狀態在 DO storage 的 `meta`（`hostToken`、`hostGoneUntil`），alarm 喚醒後從 storage 還原，不依賴記憶體。
+
+**自適應插值延遲。** 不新增任何訊息。接收端在 `s` 到達時以 RFC 3550 方式量測快照傳輸時間變化（`|Δ(收到時間 − 房主 ts)|`，上限 400 ms，EWMA 1/16），地城插值延遲 = `clamp(110 + 2.5 × jitter, 110, 220)` ms（再以 0.1 平滑逼近）。城鎮每位隊友以 5 Hz 移動串流的到達間隔偏離 200 ms 的量為 jitter，延遲 = `clamp(260 + 2.5 × jitter, 260, 420)` ms。位置緩衝加大（英雄／怪物 8 筆）以容納 220 ms。既有的本機預測與 `echoT` 校正不變。常數在 `shared/game.ts`（`INTERP_DELAY_MAX_MS`、`INTERP_JITTER_K`、`TOWN_INTERP_DELAY_MAX_MS`）。
+
+**建房限流。** `POST /api/rooms` 每帳號 10 分鐘內最多 5 次（`ROOM_CREATE_LIMIT`），超過回 **429** `{ error: 'room_create_limited' }`，大廳顯示「建立房間太頻繁…」。以 D1 表 `room_creates (id, account_id, created_at)` + `(account_id, created_at)` 索引實作（migration `0002_room_creates.sql`）；只計成功建立的房間，每次寫入時順便刪除窗口外的舊列。D1 查詢失敗時記錄 log 並放行（不因限流表故障擋住開房）。
+
+**限制。** 中途加入者出生在城鎮或入口，所以重連後上次存檔以來的戰利品會遺失；房主重新整理頁面無法接管（關房）；寬限期間成員被凍結，不能在地城行動。
+
 ### 5.2 訊息（JSON，日後可換 binary）
 
 | 方向 | type | 內容 |
@@ -264,6 +289,7 @@ Room DO 不懂遊戲內容，只做轉發（`relay`）＋把房間標記為「�
 - 新玩家一律出生在**城鎮**，從城鎮傳送門選隊友的門進入。
 - 如果沒有任何門可走（全員都在地城、沒人開門），改為出生在**該層入口（room 0）**。
 - 斷線重連 = 同一個角色再 `join` 一次，走同一套流程。
+- P7 已實作，實際協定見 §5.1.4。
 
 ---
 
@@ -428,7 +454,7 @@ CREATE TABLE trades (
 | **P5-B 同步遊戲（已完成）** | 房主開始遊戲、快照 / 輸入（`relay`）、插值與預測、各自 loot、各自傳送門、難度縮放接上房間人數、最小版城鎮交接（回城 / 回來）、房主 / 隊友斷線處理 | 4 個瀏覽器分頁能一起打地城（實測見 §5.2.1；**Room Worker 要重新部署**，見 `docs/p5-setup.md`） |
 | **P5-C 城鎮與位置同步（已完成）** | 城鎮內互相看到彼此（`townPos`，由 DO 直接廣播）、全員回城時地城凍結的連線版（任何人都可先回地城、房主背景重建）、等待畫面與 10 秒逾時、成員面板、遊戲中聊天、隊友木箱本機預測 | 多人進出城鎮與地城流程完整（實測見 §5.1.3、§5.2.1；**Room Worker 要重新部署**，見 `docs/p5-setup.md`） |
 | **P6 交易（已實作，待驗收）** | 城鎮交易 UI、Room DO 仲裁（Room Worker 綁 D1）、D1 batch 原子寫入、`save_version`（見 §7.1） | 交易後雙方存檔正確，斷線不能刷物品（**Room Worker 要重新部署**，見 `docs/p5-setup.md`） |
-| **P7 中途加入／重連＋打磨** | 進行中加入、斷線重連、延遲補償調整 | 中途加入可直接進地城 |
+| **P7 中途加入／重連＋打磨（已實作，待驗收）** | 進行中加入、成員自動重連、房主 15 秒寬限與接管、自適應插值延遲、建房限流（見 §5.1.4；**Pages 與 Room Worker 都要部署，並先跑 D1 migration `0002`**，見 `docs/p5-setup.md`） | 中途加入可直接進地城 |
 
 ---
 

@@ -37,6 +37,20 @@ export const KEEPALIVE_INTERVAL_MS = 30_000;
 /** A room nobody is connected to is deleted after this long. */
 export const ROOM_IDLE_TTL_MS = 2 * 60 * 1000;
 
+/** P7: after the host's socket drops in a running game the room stays alive this long for the same page to resume. */
+export const HOST_GRACE_MS = 15_000;
+/** P7: a member whose socket dropped retries the join for this long (backoff 1 s, 2 s, 4 s, 8 s, 8 s ...). */
+export const MEMBER_RECONNECT_WINDOW_MS = 30_000;
+/** P7: the host must be back before the grace window ends (the DO closes the room at HOST_GRACE_MS). */
+export const HOST_RECONNECT_WINDOW_MS = HOST_GRACE_MS - 1000;
+export const RECONNECT_BASE_DELAY_MS = 1000;
+export const RECONNECT_MAX_DELAY_MS = 8000;
+/** P7: per-page random token the host's browser sends on every join; the DO accepts a host resume only with the same one. */
+export const RESUME_HEADER = 'x-ev-resume';
+export const RESUME_TOKEN_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
+/** P7: at most this many `POST /api/rooms` per account in the window (D1 table `room_creates`). */
+export const ROOM_CREATE_LIMIT = { max: 5, windowMs: 10 * 60 * 1000 } as const;
+
 /** Custom WebSocket close codes (4000-4999 are free for applications). */
 export const CLOSE_REPLACED = 4001; // same account joined again from another tab
 export const CLOSE_ROOM_CLOSED = 4002; // host left
@@ -147,8 +161,10 @@ export interface WelcomeMsg {
   playerId: string;
   isHost: boolean;
   members: RoomMember[];
-  /** True once the host pressed start (only reachable by a reconnect of an existing member). */
+  /** True once the host pressed start. P7: a joiner (new or reconnecting) that sees this goes straight into the game. */
   started?: boolean;
+  /** P7: the host's page reconnected inside the grace window and keeps its authority (it re-announces the floor). */
+  resumed?: boolean;
 }
 /** The host started the game: every member leaves the lobby and loads the dungeon. */
 export interface GameStartedMsg {
@@ -165,6 +181,15 @@ export interface MemberLeftMsg {
 export interface RoomClosedMsg {
   type: 'roomClosed';
   reason: 'host_left' | 'idle';
+}
+/**
+ * P7: the host's connection dropped (`reconnecting`, the room waits `graceMs`) or is back (`ok`). Members freeze their
+ * dungeon view meanwhile; if the host does not come back the room closes with `roomClosed`.
+ */
+export interface HostStateMsg {
+  type: 'hostState';
+  state: 'reconnecting' | 'ok';
+  graceMs?: number;
 }
 export interface ChatMsg {
   type: 'chat';
@@ -274,6 +299,7 @@ export type ServerMessage =
   | ChatMsg
   | PongMsg
   | ReplacedMsg
+  | HostStateMsg
   | GameStartedMsg
   | RelayMsg
   | TownPosMsg
@@ -302,4 +328,6 @@ export type RoomErrorCode =
   | 'room_not_found'
   | 'room_full'
   | 'game_started'
-  | 'bad_request';
+  | 'bad_request'
+  /** P7: HTTP 429 of `POST /api/rooms` (ROOM_CREATE_LIMIT). */
+  | 'room_create_limited';
