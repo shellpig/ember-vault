@@ -102,6 +102,8 @@ const INITIAL_HUD: HudState = {
   controlMode: 'auto',
   soundOn: false,
   dashReady: true,
+  pommelCooldown: 0,
+  pommelMaxCooldown: 8,
   fadeOpacity: 1,
   aiStatus: 'Exploring Chambers',
   boss: null,
@@ -365,6 +367,8 @@ export default function App() {
         return 'text-[#ff9442] text-sm font-bold tracking-wide';
       case 'relicGreen':
         return 'text-[#52f295] text-sm font-bold tracking-wide';
+      case 'stun':
+        return 'text-[#ffe45e] text-xs font-extrabold tracking-wide';
       default:
         return 'text-[#f5f3ec] text-xs font-bold';
     }
@@ -857,6 +861,52 @@ export default function App() {
               </button>
             </div>
 
+            {/* Pommel Strike Stun Skill (Right-Click, 8s CD) */}
+            {(() => {
+              const cd = hud.pommelCooldown;
+              const maxCd = Math.max(0.1, hud.pommelMaxCooldown);
+              const isReady = cd <= 0.02;
+              const progressPct = isReady
+                ? 100
+                : Math.max(0, Math.min(100, ((maxCd - cd) / maxCd) * 100));
+              return (
+                <button
+                  type="button"
+                  onClick={() => engineRef.current?.triggerPommelStrike()}
+                  title="滑鼠右鍵施放 · 劍柄敲擊 360° 衝擊波：50% 傷害並中斷攻擊/施法（小怪暈 2.5s / 菁英 1.5s / BOSS 0.8s · CD 8s）"
+                  className={`relative overflow-hidden flex items-center gap-1.5 px-2.5 py-1.5 border text-xs font-hud transition-colors cursor-pointer whitespace-nowrap shrink-0 tabular-nums ${
+                    isReady
+                      ? 'border-[#e6be63] bg-[#241c0f] text-[#fff0bf] hover:border-[#ffe28a] hover:bg-[#302412] shadow-[0_0_12px_rgba(230,190,99,0.28)]'
+                      : 'border-[#3d382e] bg-[#13151d] text-[#8d92a2]'
+                  }`}
+                >
+                  {!isReady && (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-y-0 left-0 bg-[#8f7440]/28 transition-[width] duration-75"
+                      style={{ width: `${progressPct}%` }}
+                    />
+                  )}
+                  <Sparkles
+                    className={`relative z-10 w-3.5 h-3.5 ${
+                      isReady ? 'text-[#ffe066]' : 'text-[#707585]'
+                    }`}
+                  />
+                  <span className="relative z-10 px-1 py-0.5 bg-[#0c0e14]/80 border border-[#5c4c2f]/80 text-[10px] leading-none text-[#d9c28a]">
+                    右鍵
+                  </span>
+                  <span className="relative z-10 font-semibold">劍柄震擊</span>
+                  <span
+                    className={`relative z-10 text-[11px] font-bold min-w-[2.4rem] text-right ${
+                      isReady ? 'text-[#ffe066]' : 'text-[#c9b78a]'
+                    }`}
+                  >
+                    {isReady ? '就緒' : `${cd.toFixed(1)}s`}
+                  </span>
+                </button>
+              );
+            })()}
+
             {/* Open Relic Equipment Vault */}
             <button
               type="button"
@@ -896,7 +946,9 @@ export default function App() {
             <div className="hidden xl:flex items-center gap-2 pl-2 border-l border-[#3a3428] text-[11px] font-hud text-[#9096a8] whitespace-nowrap shrink-0">
               <span>WASD Move</span>
               <span aria-hidden="true">·</span>
-              <span>Space/Click Slash</span>
+              <span>Click Slash</span>
+              <span aria-hidden="true">·</span>
+              <span>Right-Click 震擊</span>
               <span aria-hidden="true">·</span>
               <span>Shift Dash</span>
               <span aria-hidden="true">·</span>

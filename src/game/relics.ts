@@ -1059,13 +1059,14 @@ export function rollRelicDrops(
   depth: number,
   source: RelicDropSource,
   dropRatePct: number,
-  allocId: () => number
+  allocId: () => number,
+  extraDropMult = 1
 ): RelicItem[] {
-  const dropMult = 1 + Math.max(0, dropRatePct) / 100;
+  const dropMult = (1 + Math.max(0, dropRatePct) / 100) * extraDropMult;
   const results: RelicItem[] = [];
 
   if (source === 'crate') {
-    const chance = Math.min(0.24 / 3, (0.045 / 3) * dropMult);
+    const chance = Math.min((0.24 / 3) * extraDropMult, (0.045 / 3) * dropMult);
     if (Math.random() < chance) {
       results.push(generateRelic(depth, 'crate', allocId()));
     }
@@ -1073,7 +1074,7 @@ export function rollRelicDrops(
   }
 
   if (source === 'mob') {
-    const chance = Math.min(0.28 / 3, (0.055 / 3) * dropMult);
+    const chance = Math.min((0.28 / 3) * extraDropMult, (0.055 / 3) * dropMult);
     if (Math.random() < chance) {
       results.push(generateRelic(depth, 'mob', allocId()));
     }
@@ -1083,14 +1084,20 @@ export function rollRelicDrops(
   if (source === 'elite') {
     // Guaranteed at least 1 relic from elites (unchanged)
     results.push(generateRelic(depth, 'elite', allocId()));
-    // Depth-scaling chance for a 2nd relic (1/3 base & cap)
-    const secondChance = Math.min(0.82 / 3, ((0.16 + depth * 0.025) / 3) * dropMult);
+    // Depth-scaling chance for a 2nd relic (1/3 base & cap, scaled multiplicatively by extraDropMult)
+    const secondChance = Math.min(
+      (0.82 / 3) * extraDropMult,
+      ((0.16 + depth * 0.025) / 3) * dropMult
+    );
     if (Math.random() < secondChance) {
       results.push(generateRelic(depth, 'elite', allocId()));
     }
-    // Deep floor bonus chance for a 3rd relic (1/3 base & cap)
+    // Deep floor bonus chance for a 3rd relic (1/3 base & cap, scaled multiplicatively by extraDropMult)
     if (depth >= 12) {
-      const thirdChance = Math.min(0.4 / 3, (((depth - 10) * 0.015) / 3) * dropMult);
+      const thirdChance = Math.min(
+        (0.4 / 3) * extraDropMult,
+        (((depth - 10) * 0.015) / 3) * dropMult
+      );
       if (Math.random() < thirdChance) {
         results.push(generateRelic(depth, 'elite', allocId()));
       }
@@ -1100,12 +1107,18 @@ export function rollRelicDrops(
 
   // Boss: Guaranteed 1 relic (unchanged) + 1/3 depth-scaling chance for 2nd & 3rd
   results.push(generateRelic(depth, 'boss', allocId()));
-  const secondChance = Math.min(0.95 / 3, ((0.45 + depth * 0.03) / 3) * dropMult);
+  const secondChance = Math.min(
+    (0.95 / 3) * extraDropMult,
+    ((0.45 + depth * 0.03) / 3) * dropMult
+  );
   if (Math.random() < secondChance) {
     results.push(generateRelic(depth, 'boss', allocId()));
   }
   if (depth >= 10) {
-    const thirdChance = Math.min(0.65 / 3, ((0.12 + (depth - 9) * 0.022) / 3) * dropMult);
+    const thirdChance = Math.min(
+      (0.65 / 3) * extraDropMult,
+      ((0.12 + (depth - 9) * 0.022) / 3) * dropMult
+    );
     if (Math.random() < thirdChance) {
       results.push(generateRelic(depth, 'boss', allocId()));
     }

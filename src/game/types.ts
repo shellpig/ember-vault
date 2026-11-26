@@ -155,7 +155,8 @@ export interface FloatingLabelData {
     | 'relicBlue'
     | 'relicYellow'
     | 'relicOrange'
-    | 'relicGreen';
+    | 'relicGreen'
+    | 'stun';
 }
 
 export interface BannerEvent {
@@ -241,6 +242,8 @@ export interface HudState {
   controlMode: 'auto' | 'manual';
   soundOn: boolean;
   dashReady: boolean;
+  pommelCooldown: number;
+  pommelMaxCooldown: number;
   fadeOpacity: number;
   aiStatus: string;
   boss: BossHudInfo | null;

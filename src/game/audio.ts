@@ -279,6 +279,62 @@ export class DungeonAudio {
     src.start(now, 0.4, 0.18);
   }
 
+  public playPommelStrike(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+
+    // 1. Heavy blunt pommel thud / low shockwave punch
+    const subOsc = this.ctx.createOscillator();
+    subOsc.type = 'sine';
+    subOsc.frequency.setValueAtTime(165, now);
+    subOsc.frequency.exponentialRampToValueAtTime(44, now + 0.22);
+
+    const subGain = this.ctx.createGain();
+    subGain.gain.setValueAtTime(0.36, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+
+    subOsc.connect(subGain);
+    subGain.connect(this.masterGain);
+    subOsc.start(now);
+    subOsc.stop(now + 0.26);
+
+    // 2. Metallic hilt knock transient
+    const knockOsc = this.ctx.createOscillator();
+    knockOsc.type = 'triangle';
+    knockOsc.frequency.setValueAtTime(520, now);
+    knockOsc.frequency.exponentialRampToValueAtTime(175, now + 0.085);
+
+    const knockGain = this.ctx.createGain();
+    knockGain.gain.setValueAtTime(0.24, now);
+    knockGain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
+
+    knockOsc.connect(knockGain);
+    knockGain.connect(this.masterGain);
+    knockOsc.start(now);
+    knockOsc.stop(now + 0.1);
+
+    // 3. Compact radial air shockwave whoosh
+    if (this.noiseBuffer) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(680, now);
+      filter.frequency.exponentialRampToValueAtTime(180, now + 0.19);
+      filter.Q.value = 1.2;
+
+      const nGain = this.ctx.createGain();
+      nGain.gain.setValueAtTime(0.26, now);
+      nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+      src.connect(filter);
+      filter.connect(nGain);
+      nGain.connect(this.masterGain);
+      src.start(now, 0.12, 0.22);
+    }
+  }
+
   public playCoin(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

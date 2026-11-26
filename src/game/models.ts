@@ -10,6 +10,7 @@ export interface HeroRig {
   rightLeg: THREE.Object3D;
   leftArm: THREE.Object3D;
   rightArm: THREE.Object3D;
+  swordGroup: THREE.Object3D;
   cape: THREE.Object3D;
   lanternCore: THREE.Mesh;
   lanternPivot: THREE.Object3D;
@@ -25,6 +26,8 @@ export interface EnemyRig {
   weaponArm?: THREE.Object3D;
   coreMesh?: THREE.Mesh;
   auraRing?: THREE.Mesh;
+  nameTag?: THREE.Sprite;
+  stunStars?: THREE.Group;
   flashMaterials: THREE.MeshStandardMaterial[];
 }
 
@@ -279,6 +282,7 @@ export function createHeroModel(shadowMap: THREE.Texture): HeroRig {
     rightLeg,
     leftArm,
     rightArm,
+    swordGroup,
     cape,
     lanternCore,
     lanternPivot,
@@ -2609,6 +2613,7 @@ export function createRuneWell(
   root: THREE.Group;
   crystal: THREE.Mesh;
   decal: THREE.Mesh;
+  pool: THREE.Mesh;
   halo: THREE.Sprite;
 } {
   const root = new THREE.Group();
@@ -2674,7 +2679,7 @@ export function createRuneWell(
   halo.position.y = 0.78;
   root.add(halo);
 
-  return { root, crystal, decal, halo };
+  return { root, crystal, decal, pool, halo };
 }
 
 export function createCrateProp(
@@ -3273,15 +3278,132 @@ export function createProjectileMesh(kind: ProjectileKind): THREE.Group {
   return g;
 }
 
-export function applyEliteVisuals(rig: EnemyRig): void {
-  rig.body.scale.multiplyScalar(1.32);
+export function createEliteNameSprite(label: string, isSpecial = false): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 460;
+  canvas.height = 104;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const displayLabel = isSpecial ? `★ ${label}` : label;
+    // Measure text so plate hugs the Chinese name cleanly at 1.2x scale
+    ctx.font = '700 38px "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif';
+    const textWidth = Math.min(404, Math.ceil(ctx.measureText(displayLabel).width));
+    const padX = 28;
+    const boxW = Math.min(450, Math.max(180, textWidth + padX * 2));
+    const boxH = 66;
+    const bx = Math.round((canvas.width - boxW) / 2);
+    const by = Math.round((canvas.height - boxH) / 2);
+
+    // Dark obsidian backing plate (warmer crimson-obsidian tint for special named elites)
+    ctx.fillStyle = isSpecial ? 'rgba(24, 10, 14, 0.88)' : 'rgba(10, 12, 18, 0.84)';
+    ctx.fillRect(bx, by, boxW, boxH);
+
+    // Crisp gilded border (amber-orange flare for special elites, classic gold for regular elites)
+    ctx.strokeStyle = isSpecial ? 'rgba(255, 158, 64, 0.96)' : 'rgba(245, 198, 78, 0.92)';
+    ctx.lineWidth = 3.5;
+    ctx.strokeRect(bx + 1.75, by + 1.75, boxW - 3.5, boxH - 3.5);
+
+    // Inner hairline accent
+    ctx.strokeStyle = isSpecial ? 'rgba(255, 212, 130, 0.42)' : 'rgba(255, 232, 150, 0.28)';
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(bx + 6, by + 6, boxW - 12, boxH - 12);
+
+    // Crisp text with strong drop shadow
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+    ctx.shadowBlur = 5;
+    ctx.shadowOffsetY = 2;
+    ctx.fillStyle = isSpecial ? '#ffd17a' : '#ffe58a';
+    ctx.fillText(displayLabel, canvas.width / 2, canvas.height / 2 + 1, 404);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(mat);
+  // 1.2x larger than previous (2.35, 0.55) -> scaled cleanly to canvas aspect ratio (460x104)
+  sprite.scale.set(2.92, 0.66, 1);
+  sprite.position.y = 2.66;
+  sprite.renderOrder = 14;
+  return sprite;
+}
+
+export function createStunStars(): THREE.Group {
+  const group = new THREE.Group();
+  // Slight tilt so orbiting stars read cleanly from isometric camera
+  group.rotation.x = 0.22;
+
+  const starMat = new THREE.MeshBasicMaterial({
+    color: 0xffe44d,
+    transparent: true,
+    opacity: 0.96,
+  });
+  const coreMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+  });
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffd24d,
+    transparent: true,
+    opacity: 0.42,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  // Subtle orbiting halo ring
+  const halo = new THREE.Mesh(new THREE.RingGeometry(0.32, 0.36, 20), ringMat);
+  halo.rotation.x = -Math.PI / 2;
+  group.add(halo);
+
+  // 4 orbiting golden 4-point star crystals
+  const starCount = 4;
+  const radius = 0.35;
+  const starGeoA = new THREE.OctahedronGeometry(0.085, 0);
+  const starGeoB = new THREE.BoxGeometry(0.15, 0.036, 0.036);
+  const starGeoC = new THREE.BoxGeometry(0.036, 0.036, 0.15);
+
+  for (let i = 0; i < starCount; i++) {
+    const angle = (i / starCount) * Math.PI * 2;
+    const starPivot = new THREE.Group();
+    starPivot.position.set(
+      Math.cos(angle) * radius,
+      Math.sin(angle * 2) * 0.04,
+      Math.sin(angle) * radius
+    );
+
+    const gem = new THREE.Mesh(starGeoA, i % 2 === 0 ? starMat : coreMat);
+    gem.scale.set(0.7, 1.15, 0.7);
+    const barX = new THREE.Mesh(starGeoB, starMat);
+    const barZ = new THREE.Mesh(starGeoC, starMat);
+    starPivot.add(gem, barX, barZ);
+    group.add(starPivot);
+  }
+
+  return group;
+}
+
+export function applyEliteVisuals(
+  rig: EnemyRig,
+  label?: string,
+  isSpecial = false
+): void {
+  rig.body.scale.multiplyScalar(isSpecial ? 1.38 : 1.32);
 
   const auraRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.58, 0.76, 20),
+    new THREE.RingGeometry(0.58, 0.78, 20),
     new THREE.MeshBasicMaterial({
-      color: 0xffb830,
+      color: isSpecial ? 0xff7e2e : 0xffb830,
       transparent: true,
-      opacity: 0.68,
+      opacity: isSpecial ? 0.78 : 0.68,
       side: THREE.DoubleSide,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
@@ -3292,12 +3414,11 @@ export function applyEliteVisuals(rig: EnemyRig): void {
   rig.root.add(auraRing);
   rig.auraRing = auraRing;
 
-  const crest = new THREE.Mesh(
-    new THREE.OctahedronGeometry(0.14, 0),
-    new THREE.MeshBasicMaterial({ color: 0xffe066 })
-  );
-  crest.position.y = 1.95;
-  rig.root.add(crest);
+  if (label) {
+    const nameTag = createEliteNameSprite(label, isSpecial);
+    rig.root.add(nameTag);
+    rig.nameTag = nameTag;
+  }
 }
 
 export interface RelicLootRig {

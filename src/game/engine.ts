@@ -36,6 +36,7 @@ import {
   createWallTorch,
   createLockedGate,
   createSpikeTrap,
+  createStunStars,
 } from './models';
 import {
   RelicDropSource,
@@ -107,6 +108,47 @@ const DUNGEON_BOSS_ROTATION: FloorBossKind[] = [
 const CAVERN_BOSS_ROTATION: FloorBossKind[] = ['boss_crystal_wyrm', 'boss_fungal_king'];
 const FLESH_BOSS_ROTATION: FloorBossKind[] = ['boss_leviathan_heart', 'boss_abyssal_brain'];
 const ALIEN_BOSS_ROTATION: FloorBossKind[] = ['boss_mothership_ai', 'boss_xeno_commander'];
+
+const SPECIAL_ELITE_NAMES: string[] = [
+  // 帥氣／酷炫風格
+  '深淵斬魂者',
+  '赤炎破軍',
+  '虛空行刑官',
+  '黑耀暴君',
+  '冥府審判長',
+  '星辰吞噬者',
+  '血月狂戰神',
+  '永夜收割者',
+  '雷霆碎骨王',
+  '霜寒絕影',
+  '蒼穹破滅者',
+  '煉獄督軍',
+  '末日先鋒',
+  '孤狼劍聖',
+  '幽冥霸主',
+  '燼火魔王',
+  '暗星領主',
+  '鋼鐵巨煞',
+  // 搞笑／惡搞風格
+  '剛加班完的班長',
+  '愛吃宵夜的阿肥',
+  '忘了帶鑰匙的守衛',
+  '隔壁棚走錯路的王',
+  '其實很怕黑的阿強',
+  '地城房東收租中',
+  '剛睡醒脾氣很差',
+  '全勤獎落空怨念體',
+  '減肥永遠明天的霸王',
+  '鍵盤戰神本尊',
+  '還沒喝咖啡的暴君',
+  '這層的地下里長伯',
+  '踩到樂高的怒吼者',
+  '月底吃土的貴族',
+  '自稱主角的配角',
+  '滑倒三次的戰神',
+  '沒開冷氣很暴躁',
+  '忘記存檔的勇者',
+];
 
 function getBossForDepth(depth: number, theme: TerrainTheme): FloorBossKind {
   const bossIdx = Math.max(0, Math.floor(depth / 5) - 1);
@@ -346,6 +388,7 @@ interface EnemyEntity {
   speed: number;
   attackCooldown: number;
   windupTimer: number;
+  stunTimer: number;
   hitFlash: number;
   hopPhase: number;
   facing: number;
@@ -353,6 +396,8 @@ interface EnemyEntity {
   isBoss: boolean;
   isRanged: boolean;
   isElite: boolean;
+  isSpecialElite?: boolean;
+  customName?: string;
   damageMult: number;
   bossName?: string;
   bossTitle?: string;
@@ -429,6 +474,8 @@ interface SlashArc {
   life: number;
   maxLife: number;
   isCleave: boolean;
+  isShockwave?: boolean;
+  targetScale?: number;
 }
 
 interface AnimatedLightProp {
@@ -442,10 +489,23 @@ interface AnimatedLightProp {
   z: number;
   flame?: THREE.Object3D;
   crystal?: THREE.Object3D;
-  decal?: THREE.Object3D;
+  decal?: THREE.Mesh;
+  pool?: THREE.Mesh;
   halo?: THREE.Sprite;
   kind: 'torch' | 'brazier' | 'rune' | 'key' | 'gate' | 'stairs' | 'altar' | 'shop';
   used?: boolean;
+}
+
+interface WallOcclusionTile {
+  gx: number;
+  gz: number;
+  wx: number;
+  wz: number;
+  bucketIdx: number;
+  wallInstIdx: number;
+  capInstIdx: number;
+  rotY: number;
+  occluded: boolean;
 }
 
 interface SpikeInstance {
@@ -464,6 +524,7 @@ const _mat4 = new THREE.Matrix4();
 const _quat = new THREE.Quaternion();
 const _scale = new THREE.Vector3();
 const _pos = new THREE.Vector3();
+const _upAxis = new THREE.Vector3(0, 1, 0);
 const _color = new THREE.Color();
 
 export class EmbervaultEngine {
@@ -515,6 +576,15 @@ export class EmbervaultEngine {
   } | null = null;
   private gateRig: GateRig | null = null;
   private gateOpenProgress = 0;
+
+  // Dynamic 50% translucency for foreground walls occluding the hero
+  private readonly wallHeight = 2.65;
+  private wallOpaqueMeshes: THREE.InstancedMesh[] = [];
+  private wallFadeMeshes: THREE.InstancedMesh[] = [];
+  private capOpaqueMesh: THREE.InstancedMesh | null = null;
+  private capFadeMesh: THREE.InstancedMesh | null = null;
+  private wallTiles: WallOcclusionTile[] = [];
+  private wallOcclusionActive = false;
 
   // Pools
   private particles: Particle[] = [];
@@ -573,6 +643,9 @@ export class EmbervaultEngine {
   private footstepTimer = 0;
   private attackCooldown = 0;
   private attackAnim = 0;
+  private pommelCooldown = 0;
+  private readonly pommelMaxCooldown = 8.0;
+  private pommelAnim = 0;
   private comboStep = 0;
   private comboResetTimer = 0;
   private dashTimer = 0;
@@ -863,6 +936,9 @@ export class EmbervaultEngine {
           } else {
             obj.material.dispose();
           }
+        } else if (obj instanceof THREE.Sprite) {
+          obj.material.map?.dispose();
+          obj.material.dispose();
         }
       });
       while (group.children.length > 0) {
@@ -890,6 +966,12 @@ export class EmbervaultEngine {
     this.shopRig = null;
     this.gateRig = null;
     this.gateOpenProgress = 0;
+    this.wallOpaqueMeshes = [];
+    this.wallFadeMeshes = [];
+    this.capOpaqueMesh = null;
+    this.capFadeMesh = null;
+    this.wallTiles = [];
+    this.wallOcclusionActive = false;
     this.aiPath = [];
     this.aiCombatPath = [];
     this.aiStuckTimer = 0;
@@ -1030,10 +1112,11 @@ export class EmbervaultEngine {
       this.levelGroup.add(floorMesh);
     }
 
-    // 2. Instanced Thick Walls
-    const wallHeight = 2.65;
+    // 2. Instanced Thick Walls (+ 50% translucent foreground occlusion layer)
+    const wallHeight = this.wallHeight;
     const wallGeo = new THREE.BoxGeometry(TILE_SIZE, wallHeight, TILE_SIZE);
     const wallVariants = this.textures.wallVariants;
+    const maxFadeWalls = 48;
 
     // Cap top on walls for clean miniature cutaway silhouette
     const capGeo = new THREE.BoxGeometry(TILE_SIZE + 0.02, 0.14, TILE_SIZE + 0.02);
@@ -1052,12 +1135,28 @@ export class EmbervaultEngine {
     const capMesh = new THREE.InstancedMesh(capGeo, capMat, wallCoords.length);
     capMesh.frustumCulled = false;
 
+    const capFadeMat = capMat.clone();
+    capFadeMat.transparent = true;
+    capFadeMat.opacity = 0.5;
+    capFadeMat.depthWrite = true;
+    const capFadeMesh = new THREE.InstancedMesh(capGeo, capFadeMat, maxFadeWalls);
+    capFadeMesh.count = 0;
+    capFadeMesh.frustumCulled = false;
+    capFadeMesh.renderOrder = 5;
+
+    this.capOpaqueMesh = capMesh;
+    this.capFadeMesh = capFadeMesh;
+    this.wallOpaqueMeshes = [];
+    this.wallFadeMeshes = [];
+    this.wallTiles = [];
+
     if (wallVariants && wallVariants.length > 1) {
-      const wallBuckets: Array<Array<[number, number]>> = wallVariants.map(() => []);
+      const wallBuckets: Array<Array<{ gx: number; gz: number; capIdx: number }>> =
+        wallVariants.map(() => []);
       wallCoords.forEach((coord, i) => {
         const [gx, gz] = coord;
         const vIdx = Math.abs((gx * 37 + gz * 91) ^ (gx * gz)) % wallVariants.length;
-        wallBuckets[vIdx].push(coord);
+        wallBuckets[vIdx].push({ gx, gz, capIdx: i });
 
         _pos.set(gx * TILE_SIZE, wallHeight + 0.07, gz * TILE_SIZE);
         _quat.identity();
@@ -1066,8 +1165,9 @@ export class EmbervaultEngine {
         capMesh.setMatrixAt(i, _mat4);
       });
       const wallBumpMap = this.textures.wallBump;
-      wallBuckets.forEach((coords, vIdx) => {
-        if (coords.length === 0) return;
+      wallBuckets.forEach((entries, vIdx) => {
+        if (entries.length === 0) return;
+        const bucketIdx = this.wallOpaqueMeshes.length;
         const mat = new THREE.MeshStandardMaterial({
           map: wallVariants[vIdx],
           bumpMap: wallBumpMap,
@@ -1075,23 +1175,51 @@ export class EmbervaultEngine {
           roughness: 0.96,
           metalness: 0.04,
         });
-        const mesh = new THREE.InstancedMesh(wallGeo, mat, coords.length);
+        const mesh = new THREE.InstancedMesh(wallGeo, mat, entries.length);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.frustumCulled = false;
-        coords.forEach(([gx, gz], i) => {
-          _pos.set(gx * TILE_SIZE, wallHeight / 2, gz * TILE_SIZE);
+
+        const fadeMat = mat.clone();
+        fadeMat.transparent = true;
+        fadeMat.opacity = 0.5;
+        fadeMat.depthWrite = true;
+        const fadeMesh = new THREE.InstancedMesh(wallGeo, fadeMat, maxFadeWalls);
+        fadeMesh.count = 0;
+        fadeMesh.receiveShadow = true;
+        fadeMesh.frustumCulled = false;
+        fadeMesh.renderOrder = 6;
+
+        entries.forEach(({ gx, gz, capIdx }, i) => {
+          const wx = gx * TILE_SIZE;
+          const wz = gz * TILE_SIZE;
           const rotSteps = Math.abs(gx * 7 + gz * 11) & 3;
-          _quat.setFromAxisAngle(upAxis, rotSteps * (Math.PI / 2));
+          const rotY = rotSteps * (Math.PI / 2);
+          _pos.set(wx, wallHeight / 2, wz);
+          _quat.setFromAxisAngle(upAxis, rotY);
           _scale.set(1, 1, 1);
           _mat4.compose(_pos, _quat, _scale);
           mesh.setMatrixAt(i, _mat4);
+
+          this.wallTiles.push({
+            gx,
+            gz,
+            wx,
+            wz,
+            bucketIdx,
+            wallInstIdx: i,
+            capInstIdx: capIdx,
+            rotY,
+            occluded: false,
+          });
         });
         mesh.instanceMatrix.needsUpdate = true;
-        this.levelGroup.add(mesh);
+        this.wallOpaqueMeshes.push(mesh);
+        this.wallFadeMeshes.push(fadeMesh);
+        this.levelGroup.add(mesh, fadeMesh);
       });
       capMesh.instanceMatrix.needsUpdate = true;
-      this.levelGroup.add(capMesh);
+      this.levelGroup.add(capMesh, capFadeMesh);
     } else {
       const wallMat = new THREE.MeshStandardMaterial({
         map: this.textures.wallMap,
@@ -1107,20 +1235,46 @@ export class EmbervaultEngine {
       wallMesh.receiveShadow = true;
       wallMesh.frustumCulled = false;
 
+      const wallFadeMat = wallMat.clone();
+      wallFadeMat.transparent = true;
+      wallFadeMat.opacity = 0.5;
+      wallFadeMat.depthWrite = true;
+      const wallFadeMesh = new THREE.InstancedMesh(wallGeo, wallFadeMat, maxFadeWalls);
+      wallFadeMesh.count = 0;
+      wallFadeMesh.receiveShadow = true;
+      wallFadeMesh.frustumCulled = false;
+      wallFadeMesh.renderOrder = 6;
+
       wallCoords.forEach(([gx, gz], i) => {
-        _pos.set(gx * TILE_SIZE, wallHeight / 2, gz * TILE_SIZE);
+        const wx = gx * TILE_SIZE;
+        const wz = gz * TILE_SIZE;
+        _pos.set(wx, wallHeight / 2, wz);
         _quat.identity();
         _scale.set(1, 1, 1);
         _mat4.compose(_pos, _quat, _scale);
         wallMesh.setMatrixAt(i, _mat4);
 
-        _pos.set(gx * TILE_SIZE, wallHeight + 0.07, gz * TILE_SIZE);
+        _pos.set(wx, wallHeight + 0.07, wz);
         _mat4.compose(_pos, _quat, _scale);
         capMesh.setMatrixAt(i, _mat4);
+
+        this.wallTiles.push({
+          gx,
+          gz,
+          wx,
+          wz,
+          bucketIdx: 0,
+          wallInstIdx: i,
+          capInstIdx: i,
+          rotY: 0,
+          occluded: false,
+        });
       });
       wallMesh.instanceMatrix.needsUpdate = true;
       capMesh.instanceMatrix.needsUpdate = true;
-      this.levelGroup.add(wallMesh, capMesh);
+      this.wallOpaqueMeshes.push(wallMesh);
+      this.wallFadeMeshes.push(wallFadeMesh);
+      this.levelGroup.add(wallMesh, wallFadeMesh, capMesh, capFadeMesh);
     }
 
     // 3. Instanced Pillars (Stone Columns / Cavern Stalagmites / Organic Bone-Sinew Ribs / Sci-Fi Reactor Columns)
@@ -1260,6 +1414,7 @@ export class EmbervaultEngine {
           z,
           crystal: rw.crystal,
           decal: rw.decal,
+          pool: rw.pool,
           halo: rw.halo,
           kind: 'rune',
           used: false,
@@ -1441,6 +1596,7 @@ export class EmbervaultEngine {
     } else {
       this.pushBanner(`DEPTH ${depth}`, biome.name);
     }
+    this.updateWallOcclusion();
     this.emitHud();
     this.emitMinimap();
   }
@@ -1644,6 +1800,7 @@ export class EmbervaultEngine {
         speed: cfg.speed,
         attackCooldown: 0.75,
         windupTimer: 0,
+        stunTimer: 0,
         hitFlash: 0,
         hopPhase: 0,
         facing: 0,
@@ -1670,8 +1827,16 @@ export class EmbervaultEngine {
     }
 
     const eliteEligible = isElite && !isGuardianEnemy(kind);
+    const isSpecialElite = eliteEligible && Math.random() < 0.25;
+    let customName: string | undefined;
     if (eliteEligible) {
-      applyEliteVisuals(rig);
+      if (isSpecialElite) {
+        customName =
+          SPECIAL_ELITE_NAMES[Math.floor(Math.random() * SPECIAL_ELITE_NAMES.length)];
+        applyEliteVisuals(rig, customName, true);
+      } else {
+        applyEliteVisuals(rig, `菁英 ${this.getEnemyBaseLabel(kind)}`, false);
+      }
     }
 
     const depthScale = 1 + (this.depth - 1) * 0.22;
@@ -1691,7 +1856,8 @@ export class EmbervaultEngine {
       : isMageLikeRanged(kind)
       ? 19
       : 18; // ranged mobs have slightly less HP than melee mobs
-    const maxHp = Math.round(baseHp * depthScale) * (eliteEligible ? 4 : 1);
+    const eliteHpMult = eliteEligible ? (isSpecialElite ? 4 * 1.25 : 4) : 1;
+    const maxHp = Math.round(baseHp * depthScale * eliteHpMult);
     const speed =
       kind === 'wisp' ||
       kind === 'cavern_bat' ||
@@ -1724,6 +1890,7 @@ export class EmbervaultEngine {
       speed,
       attackCooldown: isRangedEnemy(kind) ? 0.8 + Math.random() * 0.5 : 0.4 + Math.random() * 0.5,
       windupTimer: 0,
+      stunTimer: 0,
       hitFlash: 0,
       hopPhase: Math.random() * Math.PI * 2,
       facing: Math.random() * Math.PI * 2,
@@ -1731,6 +1898,8 @@ export class EmbervaultEngine {
       isBoss: false,
       isRanged: isRangedEnemy(kind),
       isElite: eliteEligible,
+      isSpecialElite,
+      customName,
       damageMult: eliteEligible ? 1.5 : 1,
     });
   }
@@ -1825,13 +1994,21 @@ export class EmbervaultEngine {
     if (this.isDead) return;
     this.activateManualMode();
     if (e.button === 2) {
-      this.performDash();
+      this.performPommelStrike();
     } else if (e.button === 0) {
       this.performAttack();
     }
   };
 
   // Public UI Control Methods
+  public triggerPommelStrike(): void {
+    if (this.isDead) return;
+    if (!this.audio.isEnabled()) {
+      this.audio.unlockAndEnable();
+    }
+    this.performPommelStrike();
+  }
+
   public toggleSound(): boolean {
     const on = this.audio.toggle();
     this.emitHud();
@@ -1914,6 +2091,8 @@ export class EmbervaultEngine {
       this.dragonAuraTimer = 0;
       this.chronosUsedThisFloor = false;
       this.bloodLeechAccum = 0;
+      this.pommelCooldown = 0;
+      this.pommelAnim = 0;
       this.recomputeRelicStats(false);
       this.keysPressed.clear();
       this.heroRig.body.rotation.z = 0;
@@ -2701,6 +2880,230 @@ export class EmbervaultEngine {
     }
   }
 
+  private performPommelStrike(): void {
+    if (this.isDead || this.pommelCooldown > 0) return;
+
+    this.pommelCooldown = this.pommelMaxCooldown;
+    this.pommelAnim = 0.34;
+    this.attackAnim = 0;
+    this.attackCooldown = Math.max(this.attackCooldown, 0.28);
+
+    this.audio.playPommelStrike();
+    // Subtle full-screen impact shake
+    this.addScreenShake(0.24, 0.22);
+
+    // Compact 360-degree dual shockwave rings around the hero
+    const outerGeo = new THREE.RingGeometry(0.42, 0.62, 32);
+    const outerMat = new THREE.MeshBasicMaterial({
+      color: 0xffe484,
+      transparent: true,
+      opacity: 0.92,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const outerRing = new THREE.Mesh(outerGeo, outerMat);
+    outerRing.rotation.x = -Math.PI / 2;
+    outerRing.position.set(this.heroX, 0.22, this.heroZ);
+    this.scene.add(outerRing);
+    this.slashArcs.push({
+      mesh: outerRing,
+      life: 0,
+      maxLife: 0.28,
+      isCleave: false,
+      isShockwave: true,
+      targetScale: 4.35,
+    });
+
+    const innerGeo = new THREE.RingGeometry(0.18, 0.36, 24);
+    const innerMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const innerRing = new THREE.Mesh(innerGeo, innerMat);
+    innerRing.rotation.x = -Math.PI / 2;
+    innerRing.position.set(this.heroX, 0.26, this.heroZ);
+    this.scene.add(innerRing);
+    this.slashArcs.push({
+      mesh: innerRing,
+      life: 0,
+      maxLife: 0.2,
+      isCleave: false,
+      isShockwave: true,
+      targetScale: 4.1,
+    });
+
+    // Radial shockwave dust/gold impact sparks
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const spd = 4.6 + Math.random() * 2.4;
+      this.spawnParticle(
+        this.heroX + Math.cos(a) * 0.45,
+        0.35,
+        this.heroZ + Math.sin(a) * 0.45,
+        Math.cos(a) * spd,
+        1.1 + Math.random() * 1.4,
+        Math.sin(a) * spd,
+        i % 2 === 0 ? 0xffe45e : 0xf4f7ff,
+        0.95,
+        0.34,
+        5.5
+      );
+    }
+
+    // Same 360-degree radius as the 3rd-hit cleave (2.55 + target size margin)
+    const reach = 2.55;
+    const effMaxHp = this.getEffectiveMaxHp();
+    const avariceBonus = this.hasUnique('avarice_gold_atk')
+      ? Math.min(0.4, Math.floor(this.gold / 100) * 0.01)
+      : 0;
+    const titanFuryBonus =
+      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
+    const berserkerBonus = this.hasUnique('berserker_combo_ramp')
+      ? Math.min(0.25, this.floorKills * 0.01)
+      : 0;
+    const atkMult =
+      1 +
+      this.atkUpgrades * 0.1 +
+      this.relicStats.atkPct / 100 +
+      avariceBonus +
+      titanFuryBonus +
+      berserkerBonus;
+    const critChance = Math.min(
+      0.95,
+      0.11 + this.critUpgrades * 0.02 + this.relicStats.critPct / 100
+    );
+    const critMult = 1.35 + this.relicStats.critDmgPct / 100;
+    const knockMult = 1 + this.relicStats.dramaticKnockback / 100;
+
+    let landedHit = false;
+
+    for (const enemy of this.enemies) {
+      if (enemy.dead) continue;
+      const dx = enemy.x - this.heroX;
+      const dz = enemy.z - this.heroZ;
+      const dist = Math.hypot(dx, dz);
+      const effectiveReach = reach + (enemy.isBoss ? 0.5 : enemy.isElite ? 0.18 : 0);
+      if (dist > effectiveReach) continue;
+
+      // 50% of normal attack damage
+      const normalBase = 11 + Math.floor(Math.random() * 6);
+      const isCrit = Math.random() < critChance;
+      let mult = atkMult * 0.5 * (isCrit ? critMult : 1);
+      if (enemy.isBoss || enemy.isElite) {
+        mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
+      }
+      if (this.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
+        mult *= enemy.isBoss ? 1.25 : 1.5;
+      }
+
+      const dmg = Math.max(1, Math.round(normalBase * mult));
+      this.totalDamageDealt += dmg;
+      if (isCrit) this.critCount += 1;
+      this.aiLastCombatDamageTime = this.elapsed;
+
+      enemy.hp -= dmg;
+      enemy.hitFlash = 0.18;
+
+      // Interrupt active attacks / casts / boss windups
+      let interrupted = false;
+      if (enemy.isBoss && (enemy.bossState === 'windup' || enemy.bossState === 'strike')) {
+        enemy.bossState = 'chase';
+        enemy.bossStateTimer = 0;
+        enemy.bossHitApplied = false;
+        enemy.attackCooldown = Math.max(enemy.attackCooldown, 0.75);
+        if (enemy.telegraph) {
+          enemy.telegraph.group.visible = false;
+        }
+        interrupted = true;
+      } else if (enemy.isRanged && enemy.windupTimer > 0) {
+        enemy.windupTimer = 0;
+        enemy.attackCooldown = Math.max(enemy.attackCooldown, 0.85);
+        interrupted = true;
+      } else if (!enemy.isBoss) {
+        enemy.attackCooldown = Math.max(enemy.attackCooldown, 0.55);
+      }
+
+      // Stun duration: Normal 2.5s, Elite/Guardian 1.5s, Boss 0.8s
+      const stunDur = enemy.isBoss
+        ? 0.8
+        : enemy.isElite || isGuardianEnemy(enemy.kind)
+        ? 1.5
+        : 2.5;
+      enemy.stunTimer = Math.max(enemy.stunTimer, stunDur);
+
+      // Lazily attach orbiting 3D stun stars above enemy head
+      if (!enemy.rig.stunStars) {
+        const stars = createStunStars();
+        stars.position.y = enemy.isBoss
+          ? 3.15
+          : enemy.isElite
+          ? 2.02
+          : isGuardianEnemy(enemy.kind)
+          ? 2.05
+          : 1.72;
+        const starScale = enemy.isBoss ? 1.5 : enemy.isElite ? 1.12 : 0.94;
+        stars.scale.setScalar(starScale);
+        enemy.rig.root.add(stars);
+        enemy.rig.stunStars = stars;
+      }
+      enemy.rig.stunStars.visible = true;
+
+      // Crisp outward shockwave knockback
+      const nx = dist > 0.01 ? dx / dist : Math.sin(this.heroFacing);
+      const nz = dist > 0.01 ? dz / dist : Math.cos(this.heroFacing);
+      const knock = 4.6 * knockMult * (enemy.isBoss ? 0.18 : enemy.isElite ? 0.45 : 0.85);
+      enemy.vx += nx * knock;
+      enemy.vz += nz * knock;
+
+      this.emitFloatingText(
+        enemy.x,
+        enemy.isBoss ? 2.45 : enemy.isElite ? 2.15 : 1.65,
+        enemy.z,
+        interrupted ? `中斷! 暈眩 -${dmg}` : `暈眩 -${dmg}`,
+        'stun'
+      );
+
+      for (let i = 0; i < 6; i++) {
+        this.spawnParticle(
+          enemy.x,
+          enemy.isBoss ? 1.3 : 0.85,
+          enemy.z,
+          (Math.random() - 0.5) * 4.2 + nx * 1.6,
+          1.6 + Math.random() * 2.0,
+          (Math.random() - 0.5) * 4.2 + nz * 1.6,
+          i % 2 === 0 ? 0xffe44d : 0xffffff,
+          0.9,
+          0.36,
+          6.5
+        );
+      }
+
+      landedHit = true;
+      if (enemy.hp <= 0) {
+        this.killEnemy(enemy);
+      }
+    }
+
+    // Also shatter nearby breakables caught in shockwave
+    for (const br of this.breakables) {
+      if (br.broken) continue;
+      if (Math.hypot(br.x - this.heroX, br.z - this.heroZ) <= reach) {
+        this.breakProp(br);
+        landedHit = true;
+      }
+    }
+
+    if (landedHit) {
+      this.hitStopTimer = 0.04;
+    }
+    this.emitHud();
+  }
+
   private breakProp(br: BreakableEntity): void {
     br.broken = true;
     br.mesh.visible = false;
@@ -2954,10 +3357,18 @@ export class EmbervaultEngine {
       }
     }
 
-    // Loot drop (Elites drop 3x gold coins & 3x elixir drop chance + golden burst)
+    // Loot drop (Elites drop 3x gold coins & 3x elixir drop chance + golden burst; Special Named Elites scale all drops x1.2)
     if (enemy.isElite) {
       this.addScreenShake(0.26, 0.2);
-      this.emitFloatingText(enemy.x, 2.05, enemy.z, 'ELITE SLAIN · 3x LOOT', 'key');
+      this.emitFloatingText(
+        enemy.x,
+        2.1,
+        enemy.z,
+        enemy.isSpecialElite && enemy.customName
+          ? `★ ${enemy.customName} 討伐 · 掉落×1.2`
+          : 'ELITE SLAIN · 3x LOOT',
+        enemy.isSpecialElite ? 'relicOrange' : 'key'
+      );
       for (let i = 0; i < 22; i++) {
         const a = (i / 22) * Math.PI * 2;
         const spd = 2.0 + Math.random() * 3.8;
@@ -2992,11 +3403,15 @@ export class EmbervaultEngine {
       this.emitFloatingText(enemy.x, 1.9, enemy.z, msg, 'info');
     }
 
+    const specialDropMult = enemy.isSpecialElite ? 1.2 : 1;
     const extraCoins =
       (this.hasSet4pc('syndicate') ? 1 : 0) +
       (this.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0) +
       (enemy.isElite && this.hasUnique('starforged_treasure_sense') && Math.random() < 0.25 ? 2 : 0);
-    const coinDrops = (isGuardianEnemy(enemy.kind) ? 3 : enemy.isElite ? 3 : 1) + extraCoins;
+    const rawCoinDrops =
+      ((isGuardianEnemy(enemy.kind) ? 3 : enemy.isElite ? 3 : 1) + extraCoins) * specialDropMult;
+    const coinDrops =
+      Math.floor(rawCoinDrops) + (Math.random() < rawCoinDrops - Math.floor(rawCoinDrops) ? 1 : 0);
     for (let i = 0; i < coinDrops; i++) {
       this.spawnLoot(
         enemy.x + (Math.random() - 0.5) * (enemy.isElite ? 0.85 : 0.5),
@@ -3006,22 +3421,33 @@ export class EmbervaultEngine {
     }
     const dropMult = 1 + this.relicStats.dropRatePct / 100;
     const basePotionChance = isGuardianEnemy(enemy.kind) ? 0.5 : enemy.isElite ? 0.36 : 0.12;
-    if (Math.random() < Math.min(0.85, basePotionChance * dropMult)) {
+    if (Math.random() < Math.min(0.95, basePotionChance * dropMult * specialDropMult)) {
       this.spawnLoot(enemy.x, enemy.z, 'potion');
     }
 
-    // Relic drop rolls (Elites guaranteed >= 1, normal mobs low chance)
-    this.spawnRelicDrops(enemy.x, enemy.z, enemy.isElite ? 'elite' : 'mob');
+    // Relic drop rolls (Elites guaranteed >= 1, Special Named Elites scale drop rate x1.2)
+    this.spawnRelicDrops(
+      enemy.x,
+      enemy.z,
+      enemy.isElite ? 'elite' : 'mob',
+      specialDropMult
+    );
 
     this.emitHud();
   }
 
-  private spawnRelicDrops(x: number, z: number, source: RelicDropSource): void {
+  private spawnRelicDrops(
+    x: number,
+    z: number,
+    source: RelicDropSource,
+    extraDropMult = 1
+  ): void {
     const dropped = rollRelicDrops(
       this.depth,
       source,
       this.relicStats.dropRatePct,
-      () => this.nextId++
+      () => this.nextId++,
+      extraDropMult
     );
     // Base angle points away from the hero so dropped relics pop outward instead of instantly landing on the player
     const awayAngle = Math.atan2(z - this.heroZ, x - this.heroX);
@@ -3131,83 +3557,65 @@ export class EmbervaultEngine {
     });
   }
 
+  private getEnemyBaseLabel(kind: EnemyKind): string {
+    switch (kind) {
+      case 'skeleton':
+        return '骷髏戰士';
+      case 'slime':
+        return '地城史萊姆';
+      case 'wisp':
+        return '餘燼幽火';
+      case 'archer':
+        return '暗影弓箭手';
+      case 'mage':
+        return '秘法術士';
+      case 'guardian':
+        return '地穴守衛';
+      case 'cavern_beetle':
+        return '晶殼甲蟲';
+      case 'cavern_golem':
+        return '岩晶魔像';
+      case 'cavern_bat':
+        return '洞穴蝠魔';
+      case 'cavern_spitter':
+        return '晶刺蜥蜴';
+      case 'cavern_shaman':
+        return '螢菇薩滿';
+      case 'cavern_warden':
+        return '礦窟守望者';
+      case 'flesh_cell':
+        return '吞噬細胞';
+      case 'flesh_tendril':
+        return '噬肉觸手怪';
+      case 'flesh_parasite':
+        return '深紫寄生蟲';
+      case 'flesh_spiner':
+        return '骨刺射手';
+      case 'flesh_eye':
+        return '魔眼凝視者';
+      case 'flesh_brute':
+        return '骨甲肉魔';
+      case 'alien_trooper':
+        return '星艦突擊兵';
+      case 'alien_probe':
+        return '警戒偵查球';
+      case 'alien_saucer':
+        return '幽浮偵察碟';
+      case 'alien_gunner':
+        return '外星電漿射手';
+      case 'alien_psion':
+        return '星靈念力師';
+      case 'alien_mech':
+        return '重裝防衛機甲';
+      default:
+        return '地穴守衛';
+    }
+  }
+
   private getEnemyLabel(e: EnemyEntity): string {
     if (e.isBoss) return e.bossName ?? '地城頭目';
-    let base = '地穴守衛';
-    switch (e.kind) {
-      case 'skeleton':
-        base = '骷髏戰士';
-        break;
-      case 'slime':
-        base = '地城史萊姆';
-        break;
-      case 'wisp':
-        base = '餘燼幽火';
-        break;
-      case 'archer':
-        base = '暗影弓箭手';
-        break;
-      case 'mage':
-        base = '秘法術士';
-        break;
-      case 'guardian':
-        base = '地穴守衛';
-        break;
-      case 'cavern_beetle':
-        base = '晶殼甲蟲';
-        break;
-      case 'cavern_golem':
-        base = '岩晶魔像';
-        break;
-      case 'cavern_bat':
-        base = '洞穴蝠魔';
-        break;
-      case 'cavern_spitter':
-        base = '晶刺蜥蜴';
-        break;
-      case 'cavern_shaman':
-        base = '螢菇薩滿';
-        break;
-      case 'cavern_warden':
-        base = '礦窟守望者';
-        break;
-      case 'flesh_cell':
-        base = '吞噬細胞';
-        break;
-      case 'flesh_tendril':
-        base = '噬肉觸手怪';
-        break;
-      case 'flesh_parasite':
-        base = '深紫寄生蟲';
-        break;
-      case 'flesh_spiner':
-        base = '骨刺射手';
-        break;
-      case 'flesh_eye':
-        base = '魔眼凝視者';
-        break;
-      case 'flesh_brute':
-        base = '骨甲肉魔';
-        break;
-      case 'alien_trooper':
-        base = '星艦突擊兵';
-        break;
-      case 'alien_probe':
-        base = '警戒偵查球';
-        break;
-      case 'alien_saucer':
-        base = '幽浮偵察碟';
-        break;
-      case 'alien_gunner':
-        base = '外星電漿射手';
-        break;
-      case 'alien_psion':
-        base = '星靈念力師';
-        break;
-      case 'alien_mech':
-        base = '重裝防衛機甲';
-        break;
-    }
+    if (e.customName) return e.customName;
+    const base = this.getEnemyBaseLabel(e.kind);
     return e.isElite ? `菁英 ${base}` : base;
   }
 
@@ -3538,6 +3946,8 @@ export class EmbervaultEngine {
       controlMode: this.controlMode,
       soundOn: this.audio.isEnabled(),
       dashReady: this.dashCooldown <= 0,
+      pommelCooldown: this.pommelCooldown,
+      pommelMaxCooldown: this.pommelMaxCooldown,
       fadeOpacity: this.fadeOpacity,
       aiStatus: this.aiStatus,
       boss: activeBoss
@@ -4250,6 +4660,40 @@ export class EmbervaultEngine {
         0.42
       );
 
+      // Auto AI casts Pommel Strike when off CD to interrupt windups or stun nearby foes
+      if (this.pommelCooldown <= 0) {
+        let inShockRange = 0;
+        let hasPriorityInterrupt = false;
+        let hasUnstunnedElite = false;
+        for (const e of this.enemies) {
+          if (e.dead) continue;
+          const ed = Math.hypot(e.x - this.heroX, e.z - this.heroZ);
+          const eReach = 2.55 + (e.isBoss ? 0.5 : e.isElite ? 0.18 : 0);
+          if (ed <= eReach) {
+            if (e.isBoss && e.bossState === 'windup') {
+              hasPriorityInterrupt = true;
+            } else if (e.isRanged && e.windupTimer > 0) {
+              hasPriorityInterrupt = true;
+            }
+            if (e.stunTimer <= 0.1) {
+              inShockRange += 1;
+              if (e.isElite || e.isBoss || isGuardianEnemy(e.kind)) {
+                hasUnstunnedElite = true;
+              }
+            }
+          }
+        }
+        if (
+          hasPriorityInterrupt ||
+          hasUnstunnedElite ||
+          inShockRange >= 2 ||
+          (nearestEnemyDist <= 2.2 && nearestEnemy.stunTimer <= 0.1 && clearLOS)
+        ) {
+          this.heroFacing = Math.atan2(dx, dz);
+          this.performPommelStrike();
+        }
+      }
+
       const attackRange = nearestEnemy.isBoss ? 2.25 : 1.85;
       if (nearestEnemyDist <= attackRange && clearLOS) {
         this.heroFacing = Math.atan2(dx, dz);
@@ -4728,6 +5172,8 @@ export class EmbervaultEngine {
     // Cooldowns & Relic Timers
     this.attackCooldown = Math.max(0, this.attackCooldown - dt);
     this.attackAnim = Math.max(0, this.attackAnim - dt);
+    this.pommelCooldown = Math.max(0, this.pommelCooldown - dt);
+    this.pommelAnim = Math.max(0, this.pommelAnim - dt);
     this.comboResetTimer = Math.max(0, this.comboResetTimer - dt);
     this.dashCooldown = Math.max(0, this.dashCooldown - dt);
     this.heroInvuln = Math.max(0, this.heroInvuln - dt);
@@ -4858,12 +5304,32 @@ export class EmbervaultEngine {
     this.heroRig.cape.rotation.x = 0.14 + (speedMag > 0.1 ? 0.22 : 0) + Math.sin(this.elapsed * 3.5) * 0.05;
     this.heroRig.lanternPivot.rotation.z = Math.sin(this.elapsed * 4.2 + this.walkCycle * 0.5) * 0.16;
 
-    // Sword swing arm animation
-    if (this.attackAnim > 0) {
+    // Sword swing / Pommel Strike arm & hilt animation
+    if (this.pommelAnim > 0) {
+      const p = 1 - this.pommelAnim / 0.34;
+      // Reverse sword grip so pommel/hilt juts forward & slams down with a crisp torque twist
+      this.heroRig.swordGroup.rotation.x = -Math.PI * 0.56;
+      const slamCurve = Math.sin(p * Math.PI);
+      this.heroRig.rightArm.rotation.x = -1.35 + slamCurve * 1.15;
+      this.heroRig.rightArm.rotation.y = -0.35 + p * 1.35;
+      this.heroRig.body.rotation.y = this.heroFacing + slamCurve * 0.72;
+    } else if (this.attackAnim > 0) {
       const p = 1 - this.attackAnim / 0.28;
+      this.heroRig.swordGroup.rotation.x = THREE.MathUtils.damp(
+        this.heroRig.swordGroup.rotation.x,
+        Math.PI * 0.42,
+        22,
+        dt
+      );
       this.heroRig.rightArm.rotation.x = -1.6 + p * 2.4;
       this.heroRig.rightArm.rotation.y = -0.7 + p * 1.6;
     } else {
+      this.heroRig.swordGroup.rotation.x = THREE.MathUtils.damp(
+        this.heroRig.swordGroup.rotation.x,
+        Math.PI * 0.42,
+        16,
+        dt
+      );
       this.heroRig.rightArm.rotation.x = THREE.MathUtils.damp(this.heroRig.rightArm.rotation.x, -stride * 0.4, 12, dt);
       this.heroRig.rightArm.rotation.y = THREE.MathUtils.damp(this.heroRig.rightArm.rotation.y, 0, 12, dt);
     }
@@ -4931,8 +5397,9 @@ export class EmbervaultEngine {
     // 6. Update Loot Drops
     this.updateLoot(dt);
 
-    // 7. Update Animated Light Props, Rune Wells & Spike Traps
+    // 7. Update Animated Light Props, Rune Wells, Spike Traps & Wall Occlusion Fade
     this.updateEnvironment(dt);
+    this.updateWallOcclusion();
 
     // 8. Update Pooled Particles & Sword Slash Arcs
     this.updateParticles(dt);
@@ -4967,9 +5434,10 @@ export class EmbervaultEngine {
       this.scene.fog.far = viewDist + 26.0;
     }
 
-    // Periodic HUD / Minimap refresh
+    // Periodic HUD / Minimap refresh (faster while Pommel Strike CD is ticking)
     this.hudSyncTimer += dt;
-    if (this.hudSyncTimer > 0.25) {
+    const hudInterval = this.pommelCooldown > 0 ? 0.1 : 0.25;
+    if (this.hudSyncTimer > hudInterval) {
       this.hudSyncTimer = 0;
       this.emitHud();
     }
@@ -5889,6 +6357,41 @@ export class EmbervaultEngine {
 
       e.attackCooldown = Math.max(0, e.attackCooldown - dt);
       e.hitFlash = Math.max(0, e.hitFlash - dt);
+      e.stunTimer = Math.max(0, e.stunTimer - dt);
+
+      if (e.rig.stunStars) {
+        e.rig.stunStars.visible = e.stunTimer > 0;
+        if (e.stunTimer > 0) {
+          e.rig.stunStars.rotation.y += dt * 5.8;
+          e.rig.stunStars.rotation.z = Math.sin(this.elapsed * 7 + e.id) * 0.14;
+        }
+      }
+
+      if (e.stunTimer > 0) {
+        // Stunned: only slide from remaining knockback, sway dizzily, cannot move/attack/cast
+        const stunnedPos = this.moveWithSlide(e.x, e.z, e.vx * dt, e.vz * dt, e.isBoss ? 0.72 : 0.38);
+        e.x = stunnedPos.x;
+        e.z = stunnedPos.z;
+        e.vx *= Math.exp(-9 * dt);
+        e.vz *= Math.exp(-9 * dt);
+        e.rig.root.position.set(e.x, 0, e.z);
+        e.rig.body.rotation.z = Math.sin(this.elapsed * 18 + e.id) * 0.12;
+        if (e.rig.auraRing) {
+          e.rig.auraRing.rotation.z += dt * 1.4;
+        }
+        for (const m of e.rig.flashMaterials) {
+          if (e.hitFlash > 0) {
+            m.emissive.setHex(0xffffff);
+            m.emissiveIntensity = 0.85;
+          } else {
+            m.emissive.setHex(0xffd24d);
+            m.emissiveIntensity = 0.16;
+          }
+        }
+        continue;
+      } else if (e.rig.body.rotation.z !== 0) {
+        e.rig.body.rotation.z = 0;
+      }
 
       const dx = this.heroX - e.x;
       const dz = this.heroZ - e.z;
@@ -5970,7 +6473,7 @@ export class EmbervaultEngine {
         e.rig.body.position.y = bounce * 0.42;
         const stretch = 1 + bounce * 0.18;
         const squash = 1 / Math.sqrt(stretch);
-        const baseScale = e.isElite ? 1.32 : 1;
+        const baseScale = e.isSpecialElite ? 1.38 : e.isElite ? 1.32 : 1;
         e.rig.body.scale.set(squash * baseScale, stretch * baseScale, squash * baseScale);
         if (e.rig.coreMesh) {
           e.rig.coreMesh.rotation.y += dt * 2.5;
@@ -6220,21 +6723,29 @@ export class EmbervaultEngine {
         }
       } else if (lp.kind === 'rune') {
         const pulse = Math.sin(this.elapsed * 3.0 + lp.phase) * 4.0;
-        intensity = (lp.used ? 28 : lp.baseIntensity) + pulse;
+        intensity = lp.used
+          ? lp.baseIntensity * 0.5 + pulse * 0.5
+          : lp.baseIntensity + pulse;
         if (lp.crystal) {
-          lp.crystal.rotation.y += dt * 1.6;
-          lp.crystal.position.y = 0.78 + Math.sin(this.elapsed * 2.6 + lp.phase) * 0.14;
+          lp.crystal.visible = !lp.used;
+          if (!lp.used) {
+            lp.crystal.rotation.y += dt * 1.6;
+            lp.crystal.position.y = 0.78 + Math.sin(this.elapsed * 2.6 + lp.phase) * 0.14;
+          }
         }
         if (lp.decal) {
-          lp.decal.rotation.z += dt * 0.35;
+          lp.decal.rotation.z += dt * (lp.used ? 0.16 : 0.35);
         }
         if (lp.halo) {
-          const hs = 1.12 + Math.sin(this.elapsed * 3.0 + lp.phase) * 0.16;
-          lp.halo.scale.set(hs, hs, 1);
-          if (lp.crystal) lp.halo.position.y = lp.crystal.position.y;
+          lp.halo.visible = !lp.used;
+          if (!lp.used) {
+            const hs = 1.12 + Math.sin(this.elapsed * 3.0 + lp.phase) * 0.16;
+            lp.halo.scale.set(hs, hs, 1);
+            if (lp.crystal) lp.halo.position.y = lp.crystal.position.y;
+          }
         }
         // Gently rising cool arcane sparks from the magic circle
-        if (Math.random() < dt * 4.2) {
+        if (Math.random() < dt * (lp.used ? 1.1 : 4.2)) {
           const a = Math.random() * Math.PI * 2;
           const r = 0.3 + Math.random() * 0.9;
           this.spawnParticle(
@@ -6245,7 +6756,7 @@ export class EmbervaultEngine {
             1.1 + Math.random() * 0.9,
             0,
             lp.color,
-            0.68,
+            lp.used ? 0.48 : 0.68,
             0.95,
             -0.15
           );
@@ -6253,6 +6764,29 @@ export class EmbervaultEngine {
         const effMax = this.getEffectiveMaxHp();
         if (!lp.used && dist < 1.1 && this.hp < effMax) {
           lp.used = true;
+          if (lp.crystal) lp.crystal.visible = false;
+          if (lp.halo) lp.halo.visible = false;
+          if (lp.decal) {
+            (lp.decal.material as THREE.MeshBasicMaterial).opacity = 0.46;
+          }
+          if (lp.pool) {
+            (lp.pool.material as THREE.MeshBasicMaterial).opacity = 0.12;
+          }
+          for (let i = 0; i < 14; i++) {
+            const a = (i / 14) * Math.PI * 2;
+            this.spawnParticle(
+              lp.x + Math.cos(a) * 0.2,
+              0.78,
+              lp.z + Math.sin(a) * 0.2,
+              Math.cos(a) * 2.2,
+              1.6 + Math.random() * 1.4,
+              Math.sin(a) * 2.2,
+              lp.color,
+              0.85,
+              0.55,
+              1.5
+            );
+          }
           this.hp = Math.min(effMax, this.hp + 20);
           this.audio.playPotion();
           this.emitFloatingText(lp.x, 1.7, lp.z, 'SANCTUM +20 HP', 'info');
@@ -6343,6 +6877,129 @@ export class EmbervaultEngine {
     }
   }
 
+  private updateWallOcclusion(): void {
+    if (this.wallTiles.length === 0 || !this.capOpaqueMesh || !this.capFadeMesh) return;
+
+    // 1. Check with slight hysteresis whether any foreground wall is currently blocking the hero
+    let hasBlocker = false;
+    const fwdMin = this.wallOcclusionActive ? 0.05 : 0.2;
+    const fwdMax = this.wallOcclusionActive ? 4.0 : 3.65;
+    const sideMax = this.wallOcclusionActive ? 2.15 : 1.88;
+
+    for (let i = 0; i < this.wallTiles.length; i++) {
+      const t = this.wallTiles[i];
+      const dx = t.wx - this.heroX;
+      const dz = t.wz - this.heroZ;
+      const fwd = (dx + dz) * 0.70710678;
+      if (fwd <= fwdMin || fwd >= fwdMax) continue;
+      const side = Math.abs(dx - dz) * 0.70710678;
+      if (side < sideMax) {
+        hasBlocker = true;
+        break;
+      }
+    }
+    this.wallOcclusionActive = hasBlocker;
+
+    // 2. When occluded, ALWAYS fade the nearest 4 foreground wall tiles (with slight distance hysteresis to prevent wobble)
+    const desiredOccluded = new Set<WallOcclusionTile>();
+    if (hasBlocker) {
+      const candidates: Array<{ tile: WallOcclusionTile; score: number }> = [];
+      for (let i = 0; i < this.wallTiles.length; i++) {
+        const t = this.wallTiles[i];
+        const dx = t.wx - this.heroX;
+        const dz = t.wz - this.heroZ;
+        const fwd = (dx + dz) * 0.70710678;
+        if (fwd <= -0.35 || fwd >= 6.4) continue;
+        const side = Math.abs(dx - dz) * 0.70710678;
+        if (side >= 5.0) continue;
+        // Stickiness bonus (-0.28) keeps the 4-tile window steady while walking
+        const score = Math.hypot(dx, dz) - (t.occluded ? 0.28 : 0);
+        candidates.push({ tile: t, score });
+      }
+      candidates.sort((a, b) => a.score - b.score);
+      const count = Math.min(4, candidates.length);
+      for (let i = 0; i < count; i++) {
+        desiredOccluded.add(candidates[i].tile);
+      }
+    }
+
+    let changed = false;
+    for (let i = 0; i < this.wallTiles.length; i++) {
+      const t = this.wallTiles[i];
+      const shouldOcclude = desiredOccluded.has(t);
+      if (shouldOcclude !== t.occluded) {
+        t.occluded = shouldOcclude;
+        changed = true;
+
+        const opaqueWall = this.wallOpaqueMeshes[t.bucketIdx];
+        if (shouldOcclude) {
+          _pos.set(t.wx, -100, t.wz);
+          _quat.identity();
+          _scale.set(0, 0, 0);
+          _mat4.compose(_pos, _quat, _scale);
+          opaqueWall.setMatrixAt(t.wallInstIdx, _mat4);
+          this.capOpaqueMesh.setMatrixAt(t.capInstIdx, _mat4);
+        } else {
+          _pos.set(t.wx, this.wallHeight / 2, t.wz);
+          _quat.setFromAxisAngle(_upAxis, t.rotY);
+          _scale.set(1, 1, 1);
+          _mat4.compose(_pos, _quat, _scale);
+          opaqueWall.setMatrixAt(t.wallInstIdx, _mat4);
+
+          _pos.set(t.wx, this.wallHeight + 0.07, t.wz);
+          _quat.identity();
+          _mat4.compose(_pos, _quat, _scale);
+          this.capOpaqueMesh.setMatrixAt(t.capInstIdx, _mat4);
+        }
+        opaqueWall.instanceMatrix.needsUpdate = true;
+        this.capOpaqueMesh.instanceMatrix.needsUpdate = true;
+      }
+    }
+
+    if (!changed) return;
+
+    // Collect currently occluded wall tiles and sort front-to-back so depthWrite avoids double-blending
+    const occludedList: WallOcclusionTile[] = [];
+    for (let i = 0; i < this.wallTiles.length; i++) {
+      if (this.wallTiles[i].occluded) occludedList.push(this.wallTiles[i]);
+    }
+    occludedList.sort((a, b) => b.gx + b.gz - (a.gx + a.gz));
+
+    const bucketCounts = new Array<number>(this.wallFadeMeshes.length).fill(0);
+    let capCount = 0;
+    const maxCap = this.capFadeMesh.instanceMatrix.count;
+
+    for (let i = 0; i < occludedList.length; i++) {
+      const t = occludedList[i];
+      const fadeWall = this.wallFadeMeshes[t.bucketIdx];
+      const maxWall = fadeWall.instanceMatrix.count;
+
+      if (bucketCounts[t.bucketIdx] < maxWall) {
+        _pos.set(t.wx, this.wallHeight / 2, t.wz);
+        _quat.setFromAxisAngle(_upAxis, t.rotY);
+        _scale.set(1, 1, 1);
+        _mat4.compose(_pos, _quat, _scale);
+        fadeWall.setMatrixAt(bucketCounts[t.bucketIdx]++, _mat4);
+      }
+
+      if (capCount < maxCap) {
+        _pos.set(t.wx, this.wallHeight + 0.07, t.wz);
+        _quat.identity();
+        _scale.set(1, 1, 1);
+        _mat4.compose(_pos, _quat, _scale);
+        this.capFadeMesh.setMatrixAt(capCount++, _mat4);
+      }
+    }
+
+    this.capFadeMesh.count = capCount;
+    this.capFadeMesh.instanceMatrix.needsUpdate = true;
+
+    for (let b = 0; b < this.wallFadeMeshes.length; b++) {
+      this.wallFadeMeshes[b].count = bucketCounts[b];
+      this.wallFadeMeshes[b].instanceMatrix.needsUpdate = true;
+    }
+  }
+
   private updateParticles(dt: number): void {
     for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
@@ -6377,9 +7034,15 @@ export class EmbervaultEngine {
         continue;
       }
       const mat = s.mesh.material as THREE.MeshBasicMaterial;
-      mat.opacity = (1 - t) * 0.9;
-      s.mesh.scale.setScalar(1 + t * (s.isCleave ? 0.35 : 0.22));
-      s.mesh.rotation.z += dt * (s.isCleave ? 12 : 8);
+      if (s.isShockwave) {
+        const easeOut = 1 - Math.pow(1 - t, 2.2);
+        mat.opacity = (1 - t) * 0.88;
+        s.mesh.scale.setScalar(0.8 + easeOut * ((s.targetScale ?? 4.2) - 0.8));
+      } else {
+        mat.opacity = (1 - t) * 0.9;
+        s.mesh.scale.setScalar(1 + t * (s.isCleave ? 0.35 : 0.22));
+        s.mesh.rotation.z += dt * (s.isCleave ? 12 : 8);
+      }
     }
   }
 
