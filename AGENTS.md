@@ -2,7 +2,7 @@
 
 # Embervault
 
-一款支援 **1–4 人合作**的 3D 等角視角（Isometric）程序化地城探索動作 RPG。具備動態提燈陰影、自動探索／戰鬥 AI 與無縫手動接管切換、雙職業（燈守戰士／冰雪法師）、40 層四大區域地城、遺物與套裝系統、城鎮倉庫與雲端存檔。
+一款支援 **1–4 人合作**的 3D 等角視角（Isometric）程序化地城探索動作 RPG。具備動態提燈陰影、自動探索／戰鬥 AI 與無縫手動接管切換、三職業（燈守戰士／冰雪法師／亞馬遜獵人）、40 層四大區域地城、遺物與套裝系統、城鎮倉庫與雲端存檔。
 
 - **類型**：3D 等角視角動作地城探索（Action Dungeon Crawler / Roguelite Co-op）
 - **一句話**：提燈深入 40 層程序化地城——隨時在自動巡航與手動操作間切換，單刷或最多 4 人協力開荒
@@ -23,6 +23,7 @@
 **Layer 2 — 按任務讀對應段落（勿整份讀，見下方查閱規則）：**
 - `docs/multiplayer-spec.md` — 多人連線、帳號存檔、死亡／傳送門、難度縮放、房間架構、交易與 P1～P7 分階段規格的單一來源
 - `docs/mage-spec.md` — 冰雪法師職業機制、技能、護盾與遺物特例規格
+- `docs/hunter-spec.md` — 亞馬遜獵人弓箭普攻、戰寵、升級與遺物特例規格
 - `docs/p1-setup.md` — Google 登入、D1 migration、Pages 設定與本機開發指南
 - `docs/p5-setup.md` — Room Worker / Durable Object 部署順序、本機三開開發、多開發帳號與流量預算
 - `migrations/0001_init.sql` — D1 資料表 schema（`accounts`、`sessions`、`characters`、`trades`）
@@ -66,6 +67,7 @@ Report to user: current progress, and any issues with their scope of impact.
 |---|---|---|
 | `docs/multiplayer-spec.md` | 章節號 `## 0.`～`## 10.` 或階段名 `P5-B` | `rg -n '^#{2,3} ' docs/multiplayer-spec.md` |
 | `docs/mage-spec.md` | 機制章節 `## 0.`～`## 8.` | `rg -n '^## ' docs/mage-spec.md` |
+| `docs/hunter-spec.md` | 機制章節 `## 1.`～`## 7.` | `rg -n '^#{2,3} ' docs/hunter-spec.md` |
 | `docs/p1-setup.md` | 設定與行為小節 | `rg -n '^#{2,3} ' docs/p1-setup.md` |
 | `docs/p5-setup.md` | 部署、本機開發、流量預算、已知限制 | `rg -n '^#{2,3} ' docs/p5-setup.md` |
 
@@ -78,6 +80,7 @@ Report to user: current progress, and any issues with their scope of impact.
 | **`PROJECT_BRIEF.md`** | 全案目前進度、指令速查與文件索引 | P1～P7 狀態與近期動態 |
 | **`docs/multiplayer-spec.md`** | 多人連線、帳號存檔、死亡／傳送門、縮放、交易與分階段設計 | 房主權威架構、DO 流量預算、§10 待決項 |
 | **`docs/mage-spec.md`** | 冰雪法師玩法規則與設計說明 | 冰尖彈循環、Frost Nova、護盾回充規則 |
+| **`docs/hunter-spec.md`** | 亞馬遜獵人玩法規則與設計說明 | 獵手箭矢、戰寵召喚／強化與生命週期 |
 | **`src/game/classes.ts`** | **所有職業遊戲數值的單一來源** | `HERO_CLASSES`、`FROST_MAGE` 係數與升級上限 |
 | **`shared/character.ts`、`shared/room.ts`、`shared/game.ts`** | **前後端與 DO 共用型別、上限與訊息協定** | 角色／背包／倉庫上限、房間與遊戲同步訊息型別、速率／大小上限與錯誤碼 |
 | **`docs/p1-setup.md`、`docs/p5-setup.md`** | 雲端設定、部署順序與本機開發步驟 | D1 migration、`deploy:room`、`DEV_AUTH` |
@@ -118,7 +121,7 @@ Report to user: current progress, and any issues with their scope of impact.
    - **倉庫不上網**：最多 200 件遺物的 `stash` 不經由遊戲同步訊息傳送，永遠留在擁有者端並由擁有者自行存檔。
 5. **Cloudflare 免費方案流量預算**：Durable Object 傳入 WebSocket 訊息以 20:1 計費（送出與 auto-response 保活不計費）。多人同步須遵守：**成員輸入有變化才送（上限 20 Hz、靜止 1 Hz keepalive）、房主增量快照上限 15 Hz、城鎮 `townPos` 有移動才送（上限 5 Hz）並由 DO 直接扇出不經房主**（P5-B 實測 4 人房約 3,900 次請求／小時），避免超量。
 6. **部署相依提醒**：只要改動 `workers/room/**` 或 `shared/room.ts`，必須在部署 Pages 之前或同時執行 `npm run deploy:room` 更新 Room Worker，Pages 部署不會自動更新 Worker。
-7. **規格與實作同步**：數值、協定或行為若與 `docs/multiplayer-spec.md`、`docs/mage-spec.md` 出現變動，於同次交付同步更新對應段落與 `PROJECT_BRIEF.md`。
+7. **規格與實作同步**：數值、協定或行為若與 `docs/multiplayer-spec.md`、`docs/mage-spec.md`、`docs/hunter-spec.md` 出現變動，於同次交付同步更新對應段落與 `PROJECT_BRIEF.md`。
 
 ---
 

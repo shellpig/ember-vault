@@ -4,7 +4,7 @@
 
 最後更新：2026-11-26
 
-> **當前進度**：單人完整玩法（雙職業、40 層四大區域、遺物與套裝、城鎮與倉庫、倒地與傳送門、多英雄引擎與本機 bot 隊友）以及 **Cloudflare 帳號存檔（P1）**、**倉庫（P2）**、**死亡與傳送門改版（P3）**、**多英雄與城鎮場景分離（P4-A／P4-B／P4-C）**、**多人房間基礎設施（P5-A）**、**多人地城即時同步（P5-B）**、**城鎮同步與多人進出流程（P5-C）** 皆已完成並合併至 `main`（`a0da27a`），Room Worker 也已部署更新至 P5-C 版本。目前 1–4 人可完整開房協力打地城、在城鎮互看模型與名牌、全員回城後任一人先行解凍回地城、使用隊伍面板與遊戲內聊天；遊戲開始後鎖房（尚未開放中途加入與自動重連）。**下一步：P6 城鎮交易（城鎮同房玩家交易 UI、Room DO 仲裁、D1 batch 原子寫入與 `save_version` 防刷裝）。**
+> **當前進度**：單人完整玩法（三職業、40 層四大區域、遺物與套裝、城鎮與倉庫、倒地與傳送門、多英雄引擎與本機 bot 隊友）以及 **Cloudflare 帳號存檔（P1）**、**倉庫（P2）**、**死亡與傳送門改版（P3）**、**多英雄與城鎮場景分離（P4-A／P4-B／P4-C）**、**多人房間基礎設施（P5-A）**、**多人地城即時同步（P5-B）**、**城鎮同步與多人進出流程（P5-C）** 皆已完成並合併至 `main`（`a0da27a`），Room Worker 也已部署更新至 P5-C 版本。目前 1–4 人可完整開房協力打地城、在城鎮互看模型與名牌、全員回城後任一人先行解凍回地城、使用隊伍面板與遊戲內聊天；遊戲開始後鎖房（尚未開放中途加入與自動重連）。路線圖外另新增第三職業**亞馬遜獵人**（`8520060`，弓箭普攻、隨機戰寵與多人戰寵同步）與戰士／法師祭壇升級平衡（`3ff73a3`、`cdb7369`）。**下一步：P6 城鎮交易（城鎮同房玩家交易 UI、Room DO 仲裁、D1 batch 原子寫入與 `save_version` 防刷裝）。**
 
 ---
 
@@ -16,7 +16,7 @@
 - **後端與資料層**：Cloudflare Pages Functions（`functions/`）+ Cloudflare D1 SQLite（`migrations/0001_init.sql`）+ Google Identity Services ID Token 登入（`jose` 驗證、HttpOnly cookie `ev_session`）
 - **多人房間架構**：獨立私有 Worker `ember-vault-room`（`workers/room/`）內的 SQLite Durable Object `Room`（WebSocket Hibernation API），透過 Pages `ROOM` binding 代理；採**房主權威**模式（房主跑地城模擬、其他人送輸入收快照；城鎮各客戶端本機模擬；單人模式完全不開房、不連 DO）
 - **核心玩法內容**：
-  - **雙職業**：燈守戰士（近戰三段連斬、劍柄重擊暈眩、衝刺、護甲）與冰雪法師（三發循環冰尖彈含緩速／爆炸、冰霜新星、閃現、自動回充護盾），第三格預留。
+  - **三職業**：燈守戰士（近戰三段連斬、劍柄重擊暈眩、衝刺、護甲）、冰雪法師（三發循環冰尖彈含緩速／爆炸、冰霜新星、閃現、自動回充護盾）與亞馬遜獵人（高射速單體弓箭、天生 20% 爆擊與 1.2 倍移速、疾步、右鍵召喚／強化隨機戰寵熊／陸行鳥／狼）；祭壇升級三職業皆為總計 60 次。
   - **40 層四大區域**：石造地城（1–10）、地下洞窟（11–20）、巨獸體內（21–30）、外星飛船（31–40），各具地形主題、敵人族群、菁英與 Boss。
   - **跨局進度**：每帳號最多 8 角色，雲端保留金幣、金幣升級、最高到達層數（`max_depth`）、藥水、裝備中遺物（4 格）、背包（30 格）與城鎮倉庫（200 格）。
 
@@ -27,6 +27,7 @@
 ├── docs/
 │   ├── multiplayer-spec.md       # 多人連線 × 帳號存檔規格書（P1～P7 單一來源）
 │   ├── mage-spec.md              # 冰雪法師規格書
+│   ├── hunter-spec.md            # 亞馬遜獵人規格書（弓箭、戰寵、升級、遺物特例）
 │   ├── p1-setup.md               # P1 Google OAuth、D1 與本機開發設定指南
 │   └── p5-setup.md               # P5-A Room Worker 部署、本機三開與流量預算指南
 ├── migrations/
@@ -115,6 +116,7 @@ npm run deploy:room
 | [`PROJECT_BRIEF.md`](PROJECT_BRIEF.md)（本檔） | 進度快照、命令速查與文件導覽 | 新 session 開場必讀 |
 | [`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) | 多人連線、帳號存檔、死亡／傳送門、縮放、交易、P1～P7 路線圖與 §10 待決項 | 實作或討論 P5-B～P7 或共用規則時按章節查閱 |
 | [`docs/mage-spec.md`](docs/mage-spec.md) | 冰雪法師完整規格（攻擊循環、技能、護盾、升級、遺物） | 修改法師機制、平衡或遺物互動時查閱 |
+| [`docs/hunter-spec.md`](docs/hunter-spec.md) | 亞馬遜獵人完整規格（弓箭普攻、疾步、戰寵召喚／強化與生命週期、升級、遺物特例、HUD 與多人同步） | 修改獵人或戰寵機制、平衡或遺物互動時查閱 |
 | [`docs/p1-setup.md`](docs/p1-setup.md) | Google OAuth、D1 建立與 migration、Pages 設定與本機開發 | 設定環境、除錯登入／存檔 API 時查閱 |
 | [`docs/p5-setup.md`](docs/p5-setup.md) | Room Worker 部署順序、本機三開開發、多開發帳號與 DO 免費額度估算 | 設定／部署房間後端或設計 P5-B 流量上限時查閱 |
 
@@ -122,6 +124,8 @@ npm run deploy:room
 
 ## 近期動態與下一步
 
+- **亞馬遜獵人（`8520060`，直接提交 `main`）**：新增第三職業 `hunter`。遠程單體弓箭普攻（基礎間隔 0.28 s、無三段循環）、天生 20% 爆擊、1.2 倍移速、Shift 疾步；右鍵召喚隨機戰寵（熊／陸行鳥／狼，血量比照同層菁英、脫戰回血、換層跟隨、回城收起），已有戰寵時改為 5 秒強化並回 50% 血。祭壇升級 `hp`／`atk`／`atkSpeed`／`crit` 共 60 次（`shared/character.ts` 新增 `atkSpeed` 欄位，舊存檔讀取時補 0）；左上角戰寵 HUD；多人以 `SnapshotPayload.pets` 同步戰寵，未改 Room DO 與 `shared/room.ts`，不需重新部署 Room Worker，但需部署 Pages 後端才接受建立獵人角色。規格見 [`docs/hunter-spec.md`](docs/hunter-spec.md)。
+- **平衡調整（`3ff73a3`、`cdb7369`）**：戰士藥水回復 1.5 倍、菁英攻速 1.25 倍與攻擊距離 1.4 倍、菁英掉寶文字更清楚；戰士與冰雪法師祭壇升級對齊為總計 60 次（攻擊 20、爆擊 15、戰士 HP 20×12）。
 - **P5-C（PR #9，`a0da27a`）**：完成城鎮位置同步與多人進出流程。Room DO 新增 `townPos` 直接廣播給其他成員（不經房主，省一半傳入計費），客戶端 5 Hz 有移動才送、接收端以 260 ms 插值畫出城鎮內隊友模型與名牌；新增房主 `st` 隊伍狀態同步、凍結前補送最後快照／私有狀態（`mpHostFreezeFlush`）；地城凍結時任一隊友回地城不再卡等房主，房主於背景重建該層（`mpHostRebuildAway`）；補上進地城等待畫面與 10 秒逾時取消（`hbc`/`hbx`）、修正 `leaveTownScene` 誤拉隊友問題、加入隊友木箱本機視覺預測、右上角隊伍狀態面板與遊戲內 Enter 聊天。Room Worker 已部署更新。
 - **P5-B（PR #8，`9585c7a`）**：完成多人地城即時同步。新增 `shared/game.ts` 定義量化（×100）JSON 遊戲訊息協定（`loadout`、`abort`、`level`、`s`、`priv`、`in`、`cmd`、`tw`、`handback`）；Room DO 實作 `startGame`／`gameStarted` 開局鎖房（新加入者 409）並開啟 `relay` 轉發與分角色大小（32 KB）／token bucket 上限；引擎新增房主模式與隊友遠端模式（種子地城、15 Hz 增量快照、110 ms 插值、本地移動預測與 `echoT` 校正、冰錐命中怪物視覺同步、城鎮最小交接，倉庫不上網）；headless Chrome 4 人實測約 3,900 次 DO 請求／小時。
 - **P5-A（PR #7，`01883f5`）**：完成多人房間基礎設施。建立獨立 Worker `ember-vault-room` 與 SQLite Durable Object `Room`（WebSocket Hibernation、`setWebSocketAutoResponse` 保活、房主斷線即關房）；Pages Functions 實作 `POST /api/rooms` 與 `/api/rooms/:code/ws` 驗證代理；前端完成大廳、房間大廳（成員、職業、層數、RTT 延遲、聊天）與 `dev1`～`dev8` 多開發帳號登入。
