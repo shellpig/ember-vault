@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { DungeonAudio } from './audio';
-import type { CharacterUpgrades } from '../../shared/character';
+import { Hero, STASH_CAP } from './hero';
+import type { CharacterLoadout } from './hero';
 import {
   TILE_SIZE,
   findGridPath,
@@ -17,7 +18,6 @@ import {
   BossTelegraphRig,
   EnemyRig,
   GateRig,
-  HeroRig,
   RelicLootRig,
   SpikeTrapRig,
   StashChestRig,
@@ -54,13 +54,8 @@ import {
   createStunStars,
 } from './models';
 import {
-  AngelBuff,
   RelicDropSource,
   RelicItem,
-  RelicSetId,
-  RelicSummaryStats,
-  UniqueEffectId,
-  computeRelicSummary,
   evaluateRelicLoadoutScore,
   getRarityColorHex,
   rollAngelBlessing,
@@ -73,8 +68,6 @@ import {
   HeroClassId,
   UpgradeKind,
   UpgradeOptionView,
-  getShieldSpeedFactor,
-  splitRelicMaxHpForMage,
 } from './classes';
 import {
   BannerEvent,
@@ -91,21 +84,8 @@ import {
   TileType,
 } from './types';
 
-/** Persistent per-character state the engine can load from / export to a cloud save. */
-export interface CharacterLoadout {
-  gold: number;
-  /** Highest depth ever reached; a loaded run starts on this floor. */
-  maxDepth: number;
-  potions: number;
-  upgrades: CharacterUpgrades;
-  equipped: RelicItem[];
-  bag: RelicItem[];
-  /** Town stash (up to STASH_CAP relics). */
-  stash: RelicItem[];
-}
-
-/** Stash capacity (mirrors MAX_STASH in shared/character.ts). */
-export const STASH_CAP = 200;
+export type { CharacterLoadout } from './hero';
+export { STASH_CAP } from './hero';
 
 /** Result of moving a relic between the bag and the stash. */
 export type StashMoveResult =
@@ -669,9 +649,17 @@ export class EmbervaultEngine {
   private dynamicGroup = new THREE.Group();
   private debrisGroup = new THREE.Group();
 
+  /**
+   * The hero this engine simulates. P4-A keeps exactly one; P4-B turns this into `heroes[]`.
+   * The camera, HUD and keyboard / pointer input are bound to the local hero only.
+   */
+  private hero: Hero = new Hero('hero-0');
+  /** The hero the camera, HUD and input follow (always `hero` until P4-B introduces teammates). */
+  private get localHero(): Hero {
+    return this.hero;
+  }
+
   // Persistent lights & hero
-  private heroRig!: HeroRig;
-  private heroSetAura!: ReturnType<typeof createHeroSetAura>;
   private heroLight!: THREE.PointLight;
   private heroFloorGlow!: THREE.Mesh;
   private propLightPool: THREE.PointLight[] = [];
@@ -710,15 +698,10 @@ export class EmbervaultEngine {
   private savedDungeon: SavedDungeonSnapshot | null = null;
   /** Town-side gate (walk in to return to the dungeon). */
   private townGatePos: { x: number; z: number } | null = null;
-  /**
-   * The hero's own dungeon portal (spec §3.1): opened by a normal town return or when the hero is downed.
-   * A new portal replaces the old one; it is cleared on every floor change. Becomes `hero.portal` in P4.
-   */
-  private heroPortal: { x: number; z: number; depth: number } | null = null;
   private angelPos: { x: number; z: number } | null = null;
   private angelRig: AngelRig | null = null;
+  /** Visual of the local hero's portal (`hero.portal` holds its data; becomes per-hero in P4-B). */
   private townPortalRig: TownPortalRig | null = null;
-  private angelBuff: AngelBuff | null = null;
   private portalSafePos: { x: number; z: number } | null = null;
   private extraTextures: THREE.Texture[] = [];
 
@@ -736,109 +719,22 @@ export class EmbervaultEngine {
   private slashArcs: SlashArc[] = [];
   private particleGeo = new THREE.BoxGeometry(0.11, 0.11, 0.11);
 
-  // Game & Hero State (HP scaled 10x: 60 start, 300 cap)
+  // Game state shared by everyone in the run (per-hero state lives in `hero`, see hero.ts)
   private depth = 1;
-  private hp = 60;
-  private maxHp = 60;
-  private readonly maxHpCap = 300;
-  private hpUpgrades = 0;
-  private atkUpgrades = 0;
-  private armorUpgrades = 0;
-  private readonly maxArmorUpgrades = 5;
-  private critUpgrades = 0;
-  private readonly maxCritUpgrades = 10;
-  private autoNextUpgrade: UpgradeKind = 'hp';
-
-  // Hero Class (warrior / frost_mage)
-  private heroClass: HeroClassId = 'warrior';
-  // Frost Mage shield & upgrades
-  private shield = 0;
-  private baseMaxShield = 0;
-  private hpShieldUpgrades = 0;
-  private shieldSpeedUpgrades = 0;
-  /** Seconds since the hero last took damage (drives shield regen delay). */
-  private timeSinceDamaged = 999;
-  /** Frost Mage ice spike cycle index: 0, 1, 2 (2 = empowered). Never resets on idle. */
-  private mageShotIndex = 0;
   private queuedRestartClass: HeroClassId | null = null;
   private queuedRestartLoadout: CharacterLoadout | null = null;
   /** True while a cloud-saved character is loaded (enables save checkpoints). */
   private persistRun = false;
   /** Suppresses save checkpoints while a run is being (re)built from a save. */
   private loadingRun = false;
-  /** Highest depth reached by the loaded character (persisted as max_depth). */
-  private maxDepthReached = 1;
   private heroProjectiles: HeroProjectileEntity[] = [];
-  /** Last non-zero movement direction (used by Blink). */
-  /** This frame's movement input (zero when idle). Blink uses it before falling back to facing. */
-  private moveInputX = 0;
-  private moveInputZ = 0;
-  /** Mage auto-pilot is waiting for the shield to refill (set below 60%, cleared when full). */
-  private aiMageRecharging = false;
-  /** Left mouse button held over the game canvas (hold-to-attack). */
-  private leftMouseHeld = false;
-  private pointerClientX = 0;
-  private pointerClientY = 0;
-  /** True when the last hit was fully absorbed by the shield (blue hit flash instead of red). */
-  private heroHitShieldOnly = false;
-  private autoUpgradeCooldown = 0;
-  private potions = 3;
   private hasKey = false;
   private doorUnlocked = false;
-  private gold = 0;
-  private totalGoldEarned = 0;
-  private kills = 0;
-  private normalKills = 0;
-  private eliteKills = 0;
-  private bossKills = 0;
-  private potionsUsed = 0;
-  private totalDamageDealt = 0;
-  private critCount = 0;
   private runElapsedSec = 0;
-  private slainBy = '地城陷阱';
-  private isDead = false;
 
-  // Relic Equipment & Bag System
-  private equippedRelics: RelicItem[] = [];
-  private relicBag: RelicItem[] = [];
-  private readonly relicBagCap = 30;
-  /** Town stash contents (oldest deposit first). Persisted with the character. */
-  private stash: RelicItem[] = [];
-  private stashOpen = false;
+  // Town stash chest (the stash contents themselves belong to the hero)
   private stashPos: { x: number; z: number } | null = null;
   private stashRig: StashChestRig | null = null;
-  private discoveredRelicIds = new Set<string>();
-  private relicStats: RelicSummaryStats = computeRelicSummary([]);
-  private phantomCritTimer = 0;
-  private alchemistShieldTimer = 0;
-  private dragonAuraTimer = 0;
-  private chronosUsedThisFloor = false;
-  private bloodLeechAccum = 0;
-  private floorKills = 0;
-  private catPawHitCounter = 0;
-
-  private heroX = 0;
-  private heroZ = 0;
-  private heroVx = 0;
-  private heroVz = 0;
-  private heroFacing = 0;
-  private walkCycle = 0;
-  private footstepTimer = 0;
-  private attackCooldown = 0;
-  private attackAnim = 0;
-  private pommelCooldown = 0;
-  /** Right-click class skill max cooldown (Pommel Strike 8s / Frost Nova 10s). */
-  private pommelMaxCooldown = 8.0;
-  private pommelAnim = 0;
-  private comboStep = 0;
-  private comboResetTimer = 0;
-  private dashTimer = 0;
-  private dashCooldown = 0;
-  private dashDirX = 0;
-  private dashDirZ = 1;
-  private heroInvuln = 0;
-  private heroHitFlash = 0;
-  private emberSpawnTimer = 0;
 
   // Camera & Juice
   private camZoom = 1.0;
@@ -848,30 +744,6 @@ export class EmbervaultEngine {
   private fadeOpacity = 1.0;
   private transitionState: 'none' | 'fadeOut' | 'fadeIn' = 'fadeIn';
   private pendingTransitionAction: (() => void) | null = null;
-
-  // Control & AI
-  private controlMode: 'auto' | 'manual' = 'auto';
-  private keysPressed = new Set<string>();
-  private aiPath: Array<{ gx: number; gz: number }> = [];
-  private aiRepathTimer = 0;
-  private aiCombatPath: Array<{ gx: number; gz: number }> = [];
-  private aiCombatRepathTimer = 0;
-  private aiLastCheckX = 0;
-  private aiLastCheckZ = 0;
-  private aiStuckTimer = 0;
-  private aiStuckCount = 0;
-  private aiForcePathTimer = 0;
-  private aiStrafeSign = 1;
-  private aiStatus = 'Exploring Catacombs';
-  private aiLastCombatDamageTime = -10;
-  private aiProgressAnchorX = 0;
-  private aiProgressAnchorZ = 0;
-  private aiNoProgressTimer = 0;
-  private aiUnstuckTimer = 0;
-  private aiUnstuckPath: Array<{ gx: number; gz: number }> = [];
-  private aiCurrentTargetId: number | null = null;
-  private aiUnstuckAttempts = 0;
-  private aiSkipEnemyUntil = new Map<number, number>();
 
   // Loop & Bookkeeping
   private frameId = 0;
@@ -989,10 +861,10 @@ export class EmbervaultEngine {
     this.sharedShadowMap = new THREE.CanvasTexture(sc);
 
     // Hero & bright flickering handheld Lantern light
-    this.heroRig = createHeroModel(this.sharedShadowMap);
-    this.heroSetAura = createHeroSetAura();
-    this.heroRig.root.add(this.heroSetAura.group);
-    this.scene.add(this.heroRig.root);
+    this.hero.rig = createHeroModel(this.sharedShadowMap);
+    this.hero.setAura = createHeroSetAura();
+    this.hero.rig.root.add(this.hero.setAura.group);
+    this.scene.add(this.hero.rig.root);
 
     this.heroLight = new THREE.PointLight(0xffaa44, 56, 11.2, 2.05);
     this.heroLight.position.set(0, 1.85, 0);
@@ -1161,25 +1033,25 @@ export class EmbervaultEngine {
     this.angelPos = null;
     this.stashPos = null;
     this.stashRig = null;
-    this.stashOpen = false;
+    this.hero.stashOpen = false;
     this.wallOpaqueMeshes = [];
     this.wallFadeMeshes = [];
     this.capOpaqueMesh = null;
     this.capFadeMesh = null;
     this.wallTiles = [];
     this.wallOcclusionActive = false;
-    this.aiPath = [];
-    this.aiCombatPath = [];
-    this.aiStuckTimer = 0;
-    this.aiStuckCount = 0;
-    this.aiNoProgressTimer = 0;
-    this.aiUnstuckTimer = 0;
-    this.aiUnstuckPath = [];
-    this.aiCurrentTargetId = null;
-    this.aiUnstuckAttempts = 0;
-    this.aiSkipEnemyUntil.clear();
-    this.aiLastCombatDamageTime = -10;
-    this.autoUpgradeCooldown = 0;
+    this.hero.ai.path = [];
+    this.hero.ai.combatPath = [];
+    this.hero.ai.stuckTimer = 0;
+    this.hero.ai.stuckCount = 0;
+    this.hero.ai.noProgressTimer = 0;
+    this.hero.ai.unstuckTimer = 0;
+    this.hero.ai.unstuckPath = [];
+    this.hero.ai.currentTargetId = null;
+    this.hero.ai.unstuckAttempts = 0;
+    this.hero.ai.skipEnemyUntil.clear();
+    this.hero.ai.lastCombatDamageTime = -10;
+    this.hero.ai.upgradeCooldown = 0;
   }
 
   private buildLevel(
@@ -1189,15 +1061,15 @@ export class EmbervaultEngine {
     this.clearLevel();
     this.inTown = false;
     this.depth = depth;
-    if (depth > this.maxDepthReached) this.maxDepthReached = depth;
+    if (depth > this.hero.maxDepthReached) this.hero.maxDepthReached = depth;
     if (!options?.savedSnapshot) this.requestSave('floor');
 
     let buffExpired = false;
-    if (options?.tickBuffFloor && this.angelBuff) {
-      this.angelBuff.floorsLeft -= 1;
-      if (this.angelBuff.floorsLeft <= 0) {
-        this.angelBuff = null;
-        this.recomputeRelicStats(true);
+    if (options?.tickBuffFloor && this.hero.angelBuff) {
+      this.hero.angelBuff.floorsLeft -= 1;
+      if (this.hero.angelBuff.floorsLeft <= 0) {
+        this.hero.angelBuff = null;
+        this.hero.recomputeRelicStats(true);
         buffExpired = true;
       }
     }
@@ -1206,14 +1078,14 @@ export class EmbervaultEngine {
     if (snap) {
       this.hasKey = snap.hasKey;
       this.doorUnlocked = snap.doorUnlocked;
-      this.chronosUsedThisFloor = snap.chronosUsedThisFloor;
-      this.floorKills = snap.floorKills;
+      this.hero.chronosUsedThisFloor = snap.chronosUsedThisFloor;
+      this.hero.floorKills = snap.floorKills;
       this.dungeon = snap.dungeon;
     } else {
       this.hasKey = false;
       this.doorUnlocked = false;
-      this.chronosUsedThisFloor = false;
-      this.floorKills = 0;
+      this.hero.chronosUsedThisFloor = false;
+      this.hero.floorKills = 0;
       this.dungeon = generateDungeon(depth);
     }
     const biome = this.dungeon.biome;
@@ -1228,7 +1100,7 @@ export class EmbervaultEngine {
     this.rimLight.color.setHex(isAlienDeck ? 0xd8f3ff : 0x6c8cc4);
     this.rimLight.intensity = isAlienDeck ? 0.62 : 0.09;
     this.scene.environmentIntensity = isAlienDeck ? 0.45 : 0.07;
-    this.heroLight.color.setHex(this.isMage() ? 0x9fe6ff : biome.torchColor);
+    this.heroLight.color.setHex(this.hero.isMage() ? 0x9fe6ff : biome.torchColor);
 
     this.textures = createDungeonTextures(
       biome,
@@ -1798,30 +1670,30 @@ export class EmbervaultEngine {
     const spawnW = snap
       ? { x: snap.returnX, z: snap.returnZ }
       : gridToWorld(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
-    this.heroX = spawnW.x;
-    this.heroZ = spawnW.z;
-    this.aiProgressAnchorX = this.heroX;
-    this.aiProgressAnchorZ = this.heroZ;
-    this.heroVx = 0;
-    this.heroVz = 0;
-    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
-    this.heroLight.position.set(this.heroX, 2.0, this.heroZ);
+    this.hero.x = spawnW.x;
+    this.hero.z = spawnW.z;
+    this.hero.ai.progressAnchorX = this.hero.x;
+    this.hero.ai.progressAnchorZ = this.hero.z;
+    this.hero.vx = 0;
+    this.hero.vz = 0;
+    this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
+    this.heroLight.position.set(this.hero.x, 2.0, this.hero.z);
 
     // Floor change clears the hero's portal; returning through it re-places the landmark at the exact spot
-    this.heroPortal = null;
+    this.hero.portal = null;
     if (snap) this.placeHeroPortal(snap.returnX, snap.returnZ, snap.depth);
 
     // Snap camera immediately to new floor spawn
     const camOffset = 14.5 * this.camZoom;
-    this.camera.position.set(this.heroX + camOffset, camOffset * 1.16, this.heroZ + camOffset);
-    _camTarget.set(this.heroX, 0.7, this.heroZ);
+    this.camera.position.set(this.hero.x + camOffset, camOffset * 1.16, this.hero.z + camOffset);
+    _camTarget.set(this.hero.x, 0.7, this.hero.z);
     this.camera.lookAt(_camTarget);
 
     // 9. Spawn Enemies across non-start rooms (protect Town Portal safe zone when returning)
     this.portalSafePos = snap ? { x: snap.returnX, z: snap.returnZ } : null;
     this.spawnEnemies();
     this.portalSafePos = null;
-    const spawnG = worldToGrid(this.heroX, this.heroZ);
+    const spawnG = worldToGrid(this.hero.x, this.hero.z);
     this.markExplored(spawnG.gx, spawnG.gz);
 
     if (!this.isSoftwareGl && depth === 1 && !snap) {
@@ -1829,7 +1701,7 @@ export class EmbervaultEngine {
     }
 
     if (buffExpired) {
-      this.emitFloatingText(this.heroX, 2.25, this.heroZ, '天使祝福已消散', 'info');
+      this.emitFloatingText(this.hero.x, 2.25, this.hero.z, '天使祝福已消散', 'info');
     }
 
     if (snap) {
@@ -2263,18 +2135,18 @@ export class EmbervaultEngine {
 
     // 10. Place Hero in front of Central Well facing the Angel & Buildings
     const heroStart = gridToWorld(15, 15);
-    this.heroX = heroStart.x;
-    this.heroZ = heroStart.z;
-    this.heroVx = 0;
-    this.heroVz = 0;
-    this.heroFacing = -Math.PI * 0.75;
-    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
-    this.heroRig.body.rotation.y = this.heroFacing;
-    this.heroLight.position.set(this.heroX, 2.0, this.heroZ);
+    this.hero.x = heroStart.x;
+    this.hero.z = heroStart.z;
+    this.hero.vx = 0;
+    this.hero.vz = 0;
+    this.hero.facing = -Math.PI * 0.75;
+    this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
+    this.hero.rig.body.rotation.y = this.hero.facing;
+    this.heroLight.position.set(this.hero.x, 2.0, this.hero.z);
 
     const camOffset = 14.5 * this.camZoom;
-    this.camera.position.set(this.heroX + camOffset, camOffset * 1.16, this.heroZ + camOffset);
-    _camTarget.set(this.heroX, 0.7, this.heroZ);
+    this.camera.position.set(this.hero.x + camOffset, camOffset * 1.16, this.hero.z + camOffset);
+    _camTarget.set(this.hero.x, 0.7, this.hero.z);
     this.camera.lookAt(_camTarget);
 
     this.pushBanner('庇護小鎮', '左側補給藥水與祭壇強化、向天使祈福，或走入右側傳送門返回地下城');
@@ -2739,7 +2611,7 @@ export class EmbervaultEngine {
     if (!this.audio.isEnabled()) {
       this.audio.unlockAndEnable();
     }
-    this.controlMode = 'manual';
+    this.hero.controlMode = 'manual';
     this.emitHud();
   }
 
@@ -2749,17 +2621,17 @@ export class EmbervaultEngine {
   public setInputLocked(locked: boolean): void {
     this.inputLocked = locked;
     if (locked) {
-      this.keysPressed.clear();
-      this.leftMouseHeld = false;
+      this.hero.input.keys.clear();
+      this.hero.input.leftMouseHeld = false;
     }
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
-    if (this.isDead || this.inputLocked) return;
+    if (this.hero.isDead || this.inputLocked) return;
     const tag = (e.target as HTMLElement | null)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     // Stash window open: the hero stays put (the window handles Esc / F itself).
-    if (this.stashOpen) return;
+    if (this.hero.stashOpen) return;
     const code = e.code;
 
     // Hotkey F: interact with the town stash chest
@@ -2805,7 +2677,7 @@ export class EmbervaultEngine {
       ].includes(code)
     ) {
       e.preventDefault();
-      this.keysPressed.add(code);
+      this.hero.input.keys.add(code);
       if (this.inTown) {
         if (!this.audio.isEnabled()) {
           this.audio.unlockAndEnable();
@@ -2816,7 +2688,7 @@ export class EmbervaultEngine {
 
       if (code === 'Space' && !this.inTown) {
         // Space auto-turns toward the nearest enemy (both classes) before attacking
-        if (this.attackCooldown <= 0) this.autoFaceNearestEnemy();
+        if (this.hero.attackCooldown <= 0) this.autoFaceNearestEnemy();
         this.performAttack();
       } else if (code === 'ShiftLeft' || code === 'ShiftRight') {
         this.performDash();
@@ -2827,61 +2699,61 @@ export class EmbervaultEngine {
   };
 
   private handleKeyUp = (e: KeyboardEvent): void => {
-    this.keysPressed.delete(e.code);
+    this.hero.input.keys.delete(e.code);
   };
 
   private handlePointerDown = (e: PointerEvent): void => {
-    if (this.isDead || this.inTown || this.inputLocked) return;
+    if (this.hero.isDead || this.inTown || this.inputLocked) return;
     this.activateManualMode();
     if (e.button === 2) {
       this.performPommelStrike();
     } else if (e.button === 0) {
       // Left mouse held = keep attacking toward the cursor (both classes); see updateHeldAttack
-      this.leftMouseHeld = true;
-      this.pointerClientX = e.clientX;
-      this.pointerClientY = e.clientY;
+      this.hero.input.leftMouseHeld = true;
+      this.hero.input.pointerClientX = e.clientX;
+      this.hero.input.pointerClientY = e.clientY;
       this.updateHeldAttack();
     }
   };
 
   private handlePointerMove = (e: PointerEvent): void => {
-    this.pointerClientX = e.clientX;
-    this.pointerClientY = e.clientY;
+    this.hero.input.pointerClientX = e.clientX;
+    this.hero.input.pointerClientY = e.clientY;
   };
 
   private handlePointerUp = (e: PointerEvent): void => {
-    if (e.button === 0) this.leftMouseHeld = false;
+    if (e.button === 0) this.hero.input.leftMouseHeld = false;
   };
 
   private handleWindowBlur = (): void => {
-    this.leftMouseHeld = false;
+    this.hero.input.leftMouseHeld = false;
   };
 
   /** Turns the hero toward the cursor. Returns false if the cursor can't be projected. */
   private faceCursor(): boolean {
-    const target = this.screenToGround(this.pointerClientX, this.pointerClientY);
+    const target = this.screenToGround(this.hero.input.pointerClientX, this.hero.input.pointerClientY);
     if (!target) return false;
-    const ax = target.x - this.heroX;
-    const az = target.z - this.heroZ;
+    const ax = target.x - this.hero.x;
+    const az = target.z - this.hero.z;
     if (Math.hypot(ax, az) < 0.05) return true;
-    this.heroFacing = Math.atan2(ax, az);
-    this.heroRig.body.rotation.y = this.heroFacing;
+    this.hero.facing = Math.atan2(ax, az);
+    this.hero.rig.body.rotation.y = this.hero.facing;
     return true;
   }
 
   /** While the left mouse button is held in manual mode: face the cursor and attack whenever ready. */
   private updateHeldAttack(): void {
-    if (!this.leftMouseHeld) return;
-    if (this.isDead || this.inTown || this.controlMode !== 'manual' || this.transitionState !== 'none') {
+    if (!this.hero.input.leftMouseHeld) return;
+    if (this.hero.isDead || this.inTown || this.hero.controlMode !== 'manual' || this.transitionState !== 'none') {
       return;
     }
     this.faceCursor();
-    if (this.attackCooldown <= 0) this.performAttack();
+    if (this.hero.attackCooldown <= 0) this.performAttack();
   }
 
   // Public UI Control Methods
   public triggerPommelStrike(): void {
-    if (this.isDead) return;
+    if (this.hero.isDead) return;
     if (!this.audio.isEnabled()) {
       this.audio.unlockAndEnable();
     }
@@ -2895,26 +2767,26 @@ export class EmbervaultEngine {
   }
 
   public setControlMode(mode: 'auto' | 'manual'): void {
-    this.controlMode = mode;
-    this.aiPath = [];
-    this.aiCombatPath = [];
-    this.aiUnstuckPath = [];
-    this.aiUnstuckTimer = 0;
-    this.aiNoProgressTimer = 0;
-    this.aiUnstuckAttempts = 0;
-    this.aiProgressAnchorX = this.heroX;
-    this.aiProgressAnchorZ = this.heroZ;
+    this.hero.controlMode = mode;
+    this.hero.ai.path = [];
+    this.hero.ai.combatPath = [];
+    this.hero.ai.unstuckPath = [];
+    this.hero.ai.unstuckTimer = 0;
+    this.hero.ai.noProgressTimer = 0;
+    this.hero.ai.unstuckAttempts = 0;
+    this.hero.ai.progressAnchorX = this.hero.x;
+    this.hero.ai.progressAnchorZ = this.hero.z;
     this.emitHud();
   }
 
   public triggerManualPotion(): void {
-    if (this.isDead) return;
+    if (this.hero.isDead) return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.usePotion();
   }
 
   public triggerNewDungeon(): void {
-    if (this.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
@@ -2923,17 +2795,17 @@ export class EmbervaultEngine {
   }
 
   private triggerSkipFloorCheat(): void {
-    if (this.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (this.audio.isEnabled()) {
       this.audio.playDescend();
     }
     const nextDepth = this.depth + 1;
     const bonusGold = nextDepth * 100;
     this.beginTransition(() => {
-      this.gold += bonusGold;
-      this.totalGoldEarned += bonusGold;
+      this.hero.gold += bonusGold;
+      this.hero.totalGoldEarned += bonusGold;
       this.buildLevel(nextDepth, { tickBuffFloor: true });
-      this.emitFloatingText(this.heroX, 2.0, this.heroZ, `+${bonusGold} G`, 'gold');
+      this.emitFloatingText(this.hero.x, 2.0, this.hero.z, `+${bonusGold} G`, 'gold');
     });
   }
 
@@ -2959,8 +2831,8 @@ export class EmbervaultEngine {
       dungeon: this.dungeon,
       hasKey: this.hasKey,
       doorUnlocked: this.doorUnlocked,
-      chronosUsedThisFloor: this.chronosUsedThisFloor,
-      floorKills: this.floorKills,
+      chronosUsedThisFloor: this.hero.chronosUsedThisFloor,
+      floorKills: this.hero.floorKills,
       returnX: portal.x,
       returnZ: portal.z,
       usedRuneKeys,
@@ -2991,7 +2863,7 @@ export class EmbervaultEngine {
     portal.root.rotation.y = Math.PI / 4;
     this.levelGroup.add(portal.root);
     this.townPortalRig = portal;
-    this.heroPortal = { x, z, depth };
+    this.hero.portal = { x, z, depth };
     this.lightProps.push({
       color: 0x35a8db,
       baseIntensity: 21,
@@ -3010,18 +2882,18 @@ export class EmbervaultEngine {
    * (`depth * 10`, floored at 0 gold), refill HP/shield and go through the portal opened at the downed spot.
    */
   public confirmDeathReturn(): void {
-    if (!this.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (!this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
-    const portal = this.heroPortal ?? { x: this.heroX, z: this.heroZ, depth: this.depth };
-    this.heroPortal = portal;
+    const portal = this.hero.portal ?? { x: this.hero.x, z: this.hero.z, depth: this.depth };
+    this.hero.portal = portal;
     const cost = this.getTownReturnCost();
-    this.gold = Math.max(0, this.gold - cost);
+    this.hero.gold = Math.max(0, this.hero.gold - cost);
     this.savedDungeon = this.snapshotDungeon(portal);
     this.audio.playPortal();
-    this.keysPressed.clear();
+    this.hero.input.keys.clear();
     this.beginTransition(() => {
-      this.isDead = false;
-      this.restoreHeroAfterDowned();
+      this.hero.isDead = false;
+      this.hero.restoreAfterDowned();
       this.buildTown();
       this.requestSave('town');
     });
@@ -3032,21 +2904,12 @@ export class EmbervaultEngine {
    * Nothing calls this yet: P4 (heroes[] + rescue by a teammate) will.
    */
   public reviveHero(): void {
-    if (!this.isDead || this.transitionState !== 'none') return;
-    this.isDead = false;
-    this.restoreHeroAfterDowned();
-    this.heroInvuln = 1.5;
-    this.emitFloatingText(this.heroX, 2.1, this.heroZ, '被救起！', 'heal');
+    if (!this.hero.isDead || this.transitionState !== 'none') return;
+    this.hero.isDead = false;
+    this.hero.restoreAfterDowned();
+    this.hero.invuln = 1.5;
+    this.emitFloatingText(this.hero.x, 2.1, this.hero.z, '被救起！', 'heal');
     this.emitHud();
-  }
-
-  private restoreHeroAfterDowned(): void {
-    this.hp = this.getEffectiveMaxHp();
-    this.shield = this.getEffectiveMaxShield();
-    this.heroRig.body.rotation.z = 0;
-    this.heroRig.body.position.y = 0;
-    this.heroVx = 0;
-    this.heroVz = 0;
   }
 
   public getTownReturnCost(): number {
@@ -3054,30 +2917,30 @@ export class EmbervaultEngine {
   }
 
   public returnToTown(): void {
-    if (this.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
 
     const cost = this.getTownReturnCost();
-    const spent = Math.min(this.gold, cost);
-    this.gold = Math.max(0, this.gold - cost);
+    const spent = Math.min(this.hero.gold, cost);
+    this.hero.gold = Math.max(0, this.hero.gold - cost);
 
     // A normal return opens a fresh portal under the hero (replacing any older one)
-    this.heroPortal = { x: this.heroX, z: this.heroZ, depth: this.depth };
-    this.savedDungeon = this.snapshotDungeon(this.heroPortal);
+    this.hero.portal = { x: this.hero.x, z: this.hero.z, depth: this.depth };
+    this.savedDungeon = this.snapshotDungeon(this.hero.portal);
 
     // Spawn instantaneous glowing portal at current spot before fading into Sanctuary Town
     if (this.textures) {
       const departPortal = createTownPortal(this.textures.glowMap);
-      departPortal.root.position.set(this.heroX, 0, this.heroZ);
+      departPortal.root.position.set(this.hero.x, 0, this.hero.z);
       departPortal.root.rotation.y = Math.PI / 4;
       this.dynamicGroup.add(departPortal.root);
     }
     for (let i = 0; i < 20; i++) {
       const a = (i / 20) * Math.PI * 2;
       this.spawnParticle(
-        this.heroX + Math.cos(a) * 0.35,
+        this.hero.x + Math.cos(a) * 0.35,
         0.7,
-        this.heroZ + Math.sin(a) * 0.35,
+        this.hero.z + Math.sin(a) * 0.35,
         Math.cos(a) * 2.4,
         2.2 + Math.random() * 1.4,
         Math.sin(a) * 2.4,
@@ -3090,13 +2953,13 @@ export class EmbervaultEngine {
 
     this.audio.playPortal();
     this.emitFloatingText(
-      this.heroX,
+      this.hero.x,
       2.1,
-      this.heroZ,
+      this.hero.z,
       spent > 0 ? `回城鎮 -${spent}G` : '回城鎮',
       'info'
     );
-    this.keysPressed.clear();
+    this.hero.input.keys.clear();
     this.emitHud();
 
     this.beginTransition(() => {
@@ -3106,19 +2969,19 @@ export class EmbervaultEngine {
   }
 
   public returnToDungeon(): void {
-    if (this.isDead || !this.inTown || !this.savedDungeon || this.transitionState !== 'none') {
+    if (this.hero.isDead || !this.inTown || !this.savedDungeon || this.transitionState !== 'none') {
       return;
     }
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playPortal();
-    this.keysPressed.clear();
+    this.hero.input.keys.clear();
 
     for (let i = 0; i < 20; i++) {
       const a = (i / 20) * Math.PI * 2;
       this.spawnParticle(
-        this.heroX + Math.cos(a) * 0.35,
+        this.hero.x + Math.cos(a) * 0.35,
         0.7,
-        this.heroZ + Math.sin(a) * 0.35,
+        this.hero.z + Math.sin(a) * 0.35,
         Math.cos(a) * 2.2,
         2.2 + Math.random() * 1.2,
         Math.sin(a) * 2.2,
@@ -3138,14 +3001,14 @@ export class EmbervaultEngine {
   }
 
   public requestAngelBlessing(): boolean {
-    if (this.isDead || !this.inTown || !this.isHeroNearAngel() || this.angelBuff) {
+    if (this.hero.isDead || !this.inTown || !this.isHeroNearAngel() || this.hero.angelBuff) {
       return false;
     }
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
 
     const buff = rollAngelBlessing(this.depth);
-    this.angelBuff = buff;
-    this.recomputeRelicStats(true);
+    this.hero.angelBuff = buff;
+    this.hero.recomputeRelicStats(true);
     this.audio.playAngelBlessing();
 
     const tone: FloatingLabelData['tone'] =
@@ -3154,10 +3017,10 @@ export class EmbervaultEngine {
         : buff.rarity === 'yellow'
         ? 'relicYellow'
         : 'relicBlue';
-    this.emitFloatingText(this.heroX, 2.25, this.heroZ, `獲得祝福：${buff.name}`, tone);
+    this.emitFloatingText(this.hero.x, 2.25, this.hero.z, `獲得祝福：${buff.name}`, tone);
 
-    const ax = this.angelPos?.x ?? this.heroX;
-    const az = this.angelPos?.z ?? this.heroZ;
+    const ax = this.angelPos?.x ?? this.hero.x;
+    const az = this.angelPos?.z ?? this.hero.z;
     for (let i = 0; i < 24; i++) {
       const a = (i / 24) * Math.PI * 2;
       this.spawnParticle(
@@ -3179,54 +3042,34 @@ export class EmbervaultEngine {
   }
 
   public getHeroClass(): HeroClassId {
-    return this.heroClass;
+    return this.hero.classId;
   }
 
   /** Swap the hero 3D rig to match the given class (no-op if already matching). */
   private applyHeroClassRig(classId: HeroClassId): void {
-    if (!this.heroRig || !this.sharedShadowMap) return;
+    if (!this.hero.rig || !this.sharedShadowMap) return;
     const wantMage = classId === 'frost_mage';
-    const isMageRig = Boolean(this.heroRig.root.userData.isFrostMage);
+    const isMageRig = Boolean(this.hero.rig.root.userData.isFrostMage);
     if (wantMage === isMageRig) return;
-    this.heroRig.root.remove(this.heroSetAura.group);
-    this.scene.remove(this.heroRig.root);
-    this.heroRig.root.traverse((obj) => {
+    this.hero.rig.root.remove(this.hero.setAura.group);
+    this.scene.remove(this.hero.rig.root);
+    this.hero.rig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
         obj.geometry.dispose();
         if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
         else obj.material.dispose();
       }
     });
-    this.heroRig = wantMage
+    this.hero.rig = wantMage
       ? createFrostMageModel(this.sharedShadowMap)
       : createHeroModel(this.sharedShadowMap);
-    this.heroRig.root.userData.isFrostMage = wantMage;
+    this.hero.rig.root.userData.isFrostMage = wantMage;
     if (this.heroLight) {
       this.heroLight.color.setHex(wantMage ? 0x9fe6ff : this.dungeon?.biome.torchColor ?? 0xffaa44);
     }
-    this.heroRig.root.add(this.heroSetAura.group);
-    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
-    this.scene.add(this.heroRig.root);
-  }
-
-  /** Resets class-dependent base stats (HP, shield, upgrades, skill cooldown). */
-  private applyHeroClassStats(classId: HeroClassId): void {
-    const def = HERO_CLASSES[classId];
-    this.heroClass = classId;
-    this.maxHp = def.baseHp;
-    this.hp = def.baseHp;
-    this.baseMaxShield = def.baseShield;
-    this.shield = def.baseShield;
-    this.hpUpgrades = 0;
-    this.atkUpgrades = 0;
-    this.armorUpgrades = 0;
-    this.critUpgrades = 0;
-    this.hpShieldUpgrades = 0;
-    this.shieldSpeedUpgrades = 0;
-    this.timeSinceDamaged = 999;
-    this.mageShotIndex = 0;
-    this.autoNextUpgrade = classId === 'frost_mage' ? 'hp_shield' : 'hp';
-    this.pommelMaxCooldown = def.skillCooldown;
+    this.hero.rig.root.add(this.hero.setAura.group);
+    this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
+    this.scene.add(this.hero.rig.root);
   }
 
   /**
@@ -3235,7 +3078,7 @@ export class EmbervaultEngine {
    * relics, gold, potions are restored, derived stats are recomputed and the run starts on `maxDepth`.
    */
   public restartRun(classId?: HeroClassId, loadout?: CharacterLoadout): void {
-    const nextClass: HeroClassId = classId ?? this.heroClass;
+    const nextClass: HeroClassId = classId ?? this.hero.classId;
     if (this.transitionState !== 'none') {
       // A fade is in progress (e.g. the initial fade-in): run the restart as soon as it ends.
       this.queuedRestartClass = nextClass;
@@ -3247,121 +3090,40 @@ export class EmbervaultEngine {
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
-      this.isDead = false;
+      this.hero.resetForNewRun();
       this.inTown = false;
       this.savedDungeon = null;
-      this.heroPortal = null;
-      this.angelBuff = null;
       this.portalSafePos = null;
       this.loadingRun = true;
       this.persistRun = Boolean(loadout);
-      this.applyHeroClassStats(nextClass);
+      this.hero.applyClassStats(nextClass);
       this.applyHeroClassRig(nextClass);
-      this.attackCooldown = 0;
-      this.dashCooldown = 0;
-      this.dashTimer = 0;
-      this.heroInvuln = 0;
-      this.catPawHitCounter = 0;
-      this.comboStep = 0;
-      this.moveInputX = 0;
-      this.moveInputZ = 0;
-      this.aiMageRecharging = false;
-      this.potions = 3;
-      this.gold = 0;
-      this.totalGoldEarned = 0;
-      this.kills = 0;
-      this.normalKills = 0;
-      this.eliteKills = 0;
-      this.bossKills = 0;
-      this.potionsUsed = 0;
-      this.totalDamageDealt = 0;
-      this.critCount = 0;
       this.runElapsedSec = 0;
-      this.slainBy = '地城陷阱';
-      this.equippedRelics = [];
-      this.relicBag = [];
-      this.stash = [];
-      this.stashOpen = false;
-      this.discoveredRelicIds.clear();
-      this.phantomCritTimer = 0;
-      this.alchemistShieldTimer = 0;
-      this.dragonAuraTimer = 0;
-      this.chronosUsedThisFloor = false;
-      this.bloodLeechAccum = 0;
-      this.pommelCooldown = 0;
-      this.pommelAnim = 0;
       let startDepth = 1;
       if (loadout) {
-        this.applyLoadout(loadout);
+        this.hero.applyLoadout(loadout);
         startDepth = Math.max(1, Math.floor(loadout.maxDepth));
       } else {
-        this.controlMode = 'auto';
+        this.hero.controlMode = 'auto';
       }
-      this.maxDepthReached = startDepth;
-      this.recomputeRelicStats(false);
+      this.hero.maxDepthReached = startDepth;
+      this.hero.recomputeRelicStats(false);
       if (loadout) {
         // Derived stats (max HP / shield incl. relic bonuses) are final now: start the run at full health.
-        this.hp = this.getEffectiveMaxHp();
-        this.shield = this.getEffectiveMaxShield();
+        this.hero.hp = this.hero.getEffectiveMaxHp();
+        this.hero.shield = this.hero.getEffectiveMaxShield();
       }
-      this.keysPressed.clear();
-      this.heroRig.body.rotation.z = 0;
-      this.heroRig.body.position.y = 0;
+      this.hero.input.keys.clear();
+      this.hero.rig.body.rotation.z = 0;
+      this.hero.rig.body.position.y = 0;
       this.buildLevel(startDepth);
       this.loadingRun = false;
     });
   }
 
-  /**
-   * Applies a saved loadout on top of the freshly reset class stats (called from restartRun).
-   * Upgrade levels are re-applied with the same formulas purchaseUpgrade uses.
-   */
-  private applyLoadout(l: CharacterLoadout): void {
-    const lvl = (n: number, max: number) => Math.max(0, Math.min(max, Math.floor(Number(n) || 0)));
-    const up = l.upgrades;
-    if (this.isMage()) {
-      this.hpShieldUpgrades = lvl(up.hpShield, FROST_MAGE.maxHpShieldUpgrades);
-      this.shieldSpeedUpgrades = lvl(up.shieldSpeed, FROST_MAGE.maxShieldSpeedUpgrades);
-      this.atkUpgrades = lvl(up.atk, FROST_MAGE.maxAtkUpgrades);
-      this.critUpgrades = lvl(up.crit, FROST_MAGE.maxCritUpgrades);
-      this.maxHp = HERO_CLASSES.frost_mage.baseHp + FROST_MAGE.hpPerUpgrade * this.hpShieldUpgrades;
-      this.baseMaxShield =
-        HERO_CLASSES.frost_mage.baseShield + FROST_MAGE.shieldPerUpgrade * this.hpShieldUpgrades;
-    } else {
-      this.hpUpgrades = lvl(up.hp, this.getUpgradeMax('hp'));
-      this.atkUpgrades = lvl(up.atk, 999);
-      this.armorUpgrades = lvl(up.armor, this.maxArmorUpgrades);
-      this.critUpgrades = lvl(up.crit, this.maxCritUpgrades);
-      this.maxHp = Math.min(this.maxHpCap, HERO_CLASSES.warrior.baseHp + 10 * this.hpUpgrades);
-    }
-    this.gold = Math.max(0, Math.floor(l.gold));
-    this.potions = Math.max(0, Math.floor(l.potions));
-    this.equippedRelics = l.equipped.slice(0, 4).map((r) => ({ ...r }));
-    this.relicBag = l.bag.slice(0, this.relicBagCap).map((r) => ({ ...r }));
-    this.stash = (l.stash ?? []).slice(0, STASH_CAP).map((r) => ({ ...r }));
-    for (const r of [...this.equippedRelics, ...this.relicBag, ...this.stash]) {
-      this.discoveredRelicIds.add(r.templateId);
-    }
-  }
-
   /** Snapshot of the persistent character state (gold, upgrades, relics, potions, max depth) for saving. */
   public exportCharacterState(): CharacterLoadout {
-    return {
-      gold: this.gold,
-      maxDepth: Math.max(this.maxDepthReached, this.depth),
-      potions: this.potions,
-      upgrades: {
-        hp: this.hpUpgrades,
-        atk: this.atkUpgrades,
-        armor: this.armorUpgrades,
-        crit: this.critUpgrades,
-        hpShield: this.hpShieldUpgrades,
-        shieldSpeed: this.shieldSpeedUpgrades,
-      },
-      equipped: this.equippedRelics.map((r) => ({ ...r })),
-      bag: this.relicBag.map((r) => ({ ...r })),
-      stash: this.stash.map((r) => ({ ...r })),
-    };
+    return this.hero.exportLoadout(this.depth);
   }
 
   private requestSave(reason: SaveCheckpointReason): void {
@@ -3372,140 +3134,72 @@ export class EmbervaultEngine {
     this.camZoom = THREE.MathUtils.clamp(this.camZoom + delta, 0.72, 1.35);
   }
 
-  private getEffectiveMaxHp(): number {
-    if (this.heroClass === 'frost_mage') {
-      return this.maxHp + splitRelicMaxHpForMage(this.relicStats.maxHp).hp;
-    }
-    return this.maxHp + this.relicStats.maxHp;
-  }
-
-  /** Effective max shield (Frost Mage only; 0 for classes without a shield). */
-  private getEffectiveMaxShield(): number {
-    if (this.heroClass !== 'frost_mage') return 0;
-    return this.baseMaxShield + splitRelicMaxHpForMage(this.relicStats.maxHp).shield;
-  }
-
-  private isMage(): boolean {
-    return this.heroClass === 'frost_mage';
-  }
-
-  private hasUnique(effectId: UniqueEffectId): boolean {
-    return this.relicStats.uniqueEffects.includes(effectId);
-  }
-
-  private hasSet4pc(setId: RelicSetId): boolean {
-    return this.relicStats.activeSetIds4pc.includes(setId);
-  }
-
-  private recomputeRelicStats(adjustHp = true): void {
-    const prevEffMax = this.getEffectiveMaxHp();
-    const prevMaxShield = this.getEffectiveMaxShield();
-    this.relicStats = computeRelicSummary(this.equippedRelics, this.angelBuff?.stats);
-    const nextEffMax = this.getEffectiveMaxHp();
-    const nextMaxShield = this.getEffectiveMaxShield();
-
-    if (adjustHp && !this.isDead) {
-      if (nextEffMax > prevEffMax) {
-        this.hp = Math.min(nextEffMax, this.hp + (nextEffMax - prevEffMax));
-      } else {
-        this.hp = Math.min(nextEffMax, this.hp);
-      }
-      if (nextMaxShield > prevMaxShield) {
-        this.shield = Math.min(nextMaxShield, this.shield + (nextMaxShield - prevMaxShield));
-      } else {
-        this.shield = Math.min(nextMaxShield, this.shield);
-      }
-    } else {
-      this.shield = Math.min(nextMaxShield, this.shield);
-    }
-
-    // Update 4-piece green set visual aura around hero
-    if (this.heroSetAura) {
-      const set4 = this.relicStats.activeSetIds4pc[0];
-      if (!set4) {
-        this.heroSetAura.group.visible = false;
-      } else {
-        this.heroSetAura.group.visible = true;
-        if (set4 === 'dragonfire') {
-          this.heroSetAura.outerMat.color.setHex(0xff5a1f);
-          this.heroSetAura.innerMat.color.setHex(0xffcf54);
-        } else if (set4 === 'voidstalker') {
-          this.heroSetAura.outerMat.color.setHex(0x9b5cff);
-          this.heroSetAura.innerMat.color.setHex(0x5ef0ff);
-        } else {
-          this.heroSetAura.outerMat.color.setHex(0xffd24a);
-          this.heroSetAura.innerMat.color.setHex(0xfff4a8);
-        }
-      }
-    }
-  }
-
   public equipRelic(relicId: string, replaceSlotIndex?: number): boolean {
-    if (this.isDead) return false;
-    const bagIdx = this.relicBag.findIndex((r) => r.id === relicId);
+    if (this.hero.isDead) return false;
+    const bagIdx = this.hero.relicBag.findIndex((r) => r.id === relicId);
     if (bagIdx === -1) return false;
 
-    const item = this.relicBag[bagIdx];
-    if (this.equippedRelics.length < 4 && replaceSlotIndex === undefined) {
-      this.relicBag.splice(bagIdx, 1);
-      this.equippedRelics.push(item);
+    const item = this.hero.relicBag[bagIdx];
+    if (this.hero.equippedRelics.length < 4 && replaceSlotIndex === undefined) {
+      this.hero.relicBag.splice(bagIdx, 1);
+      this.hero.equippedRelics.push(item);
     } else {
       const slot =
         replaceSlotIndex !== undefined &&
         replaceSlotIndex >= 0 &&
-        replaceSlotIndex < this.equippedRelics.length
+        replaceSlotIndex < this.hero.equippedRelics.length
           ? replaceSlotIndex
           : 0;
-      const swappedOut = this.equippedRelics[slot];
-      this.relicBag.splice(bagIdx, 1);
-      this.equippedRelics[slot] = item;
+      const swappedOut = this.hero.equippedRelics[slot];
+      this.hero.relicBag.splice(bagIdx, 1);
+      this.hero.equippedRelics[slot] = item;
       if (swappedOut) {
-        this.relicBag.unshift(swappedOut);
+        this.hero.relicBag.unshift(swappedOut);
       }
     }
 
-    this.recomputeRelicStats(true);
+    this.hero.recomputeRelicStats(true);
     this.audio.playRelicEquip();
     this.emitHud();
     return true;
   }
 
   public unequipRelic(slotIndex: number): boolean {
-    if (this.isDead) return false;
-    if (slotIndex < 0 || slotIndex >= this.equippedRelics.length) return false;
-    if (this.relicBag.length >= this.relicBagCap) return false;
+    if (this.hero.isDead) return false;
+    if (slotIndex < 0 || slotIndex >= this.hero.equippedRelics.length) return false;
+    if (this.hero.relicBag.length >= this.hero.relicBagCap) return false;
 
-    const [removed] = this.equippedRelics.splice(slotIndex, 1);
-    this.relicBag.unshift(removed);
-    this.recomputeRelicStats(true);
+    const [removed] = this.hero.equippedRelics.splice(slotIndex, 1);
+    this.hero.relicBag.unshift(removed);
+    this.hero.recomputeRelicStats(true);
     this.audio.playRelicEquip();
     this.emitHud();
     return true;
   }
 
   public sellRelic(relicId: string): boolean {
-    if (this.isDead || !this.isHeroNearShop()) return false;
-    const bagIdx = this.relicBag.findIndex((r) => r.id === relicId);
+    if (this.hero.isDead || !this.isHeroNearShop()) return false;
+    const bagIdx = this.hero.relicBag.findIndex((r) => r.id === relicId);
     if (bagIdx === -1) return false;
 
-    if (!this.audio.isEnabled() && this.controlMode === 'manual') {
+    if (!this.audio.isEnabled() && this.hero.controlMode === 'manual') {
       this.audio.unlockAndEnable();
     }
 
-    const [sold] = this.relicBag.splice(bagIdx, 1);
-    this.gold += sold.sellValue;
-    this.totalGoldEarned += sold.sellValue;
+    const [sold] = this.hero.relicBag.splice(bagIdx, 1);
+    this.hero.gold += sold.sellValue;
+    this.hero.totalGoldEarned += sold.sellValue;
     this.audio.playRelicSell();
-    this.emitFloatingText(this.heroX, 1.9, this.heroZ, `+${sold.sellValue} G`, 'gold');
+    this.emitFloatingText(this.hero.x, 1.9, this.hero.z, `+${sold.sellValue} G`, 'gold');
     this.emitHud();
     return true;
   }
 
   public sellCommonBagRelics(includeYellow = true): number {
-    if (this.isDead || !this.isHeroNearShop()) return 0;
+    if (this.hero.isDead || !this.isHeroNearShop()) return 0;
     let earned = 0;
     const keep: RelicItem[] = [];
-    for (const r of this.relicBag) {
+    for (const r of this.hero.relicBag) {
       if (r.rarity === 'blue' || (includeYellow && r.rarity === 'yellow')) {
         earned += r.sellValue;
       } else {
@@ -3514,80 +3208,17 @@ export class EmbervaultEngine {
     }
     if (earned <= 0) return 0;
 
-    if (!this.audio.isEnabled() && this.controlMode === 'manual') {
+    if (!this.audio.isEnabled() && this.hero.controlMode === 'manual') {
       this.audio.unlockAndEnable();
     }
 
-    this.relicBag = keep;
-    this.gold += earned;
-    this.totalGoldEarned += earned;
+    this.hero.relicBag = keep;
+    this.hero.gold += earned;
+    this.hero.totalGoldEarned += earned;
     this.audio.playRelicSell();
-    this.emitFloatingText(this.heroX, 2.0, this.heroZ, `售出 +${earned} G`, 'gold');
+    this.emitFloatingText(this.hero.x, 2.0, this.hero.z, `售出 +${earned} G`, 'gold');
     this.emitHud();
     return earned;
-  }
-
-  private getTotalUpgradeLevel(): number {
-    return (
-      this.hpUpgrades +
-      this.atkUpgrades +
-      this.armorUpgrades +
-      this.critUpgrades +
-      this.hpShieldUpgrades +
-      this.shieldSpeedUpgrades
-    );
-  }
-
-  /** Max purchase count for an upgrade of the current class (0 = not offered). */
-  private getUpgradeMax(kind: UpgradeKind): number {
-    if (this.isMage()) {
-      switch (kind) {
-        case 'hp_shield':
-          return FROST_MAGE.maxHpShieldUpgrades;
-        case 'atk':
-          return FROST_MAGE.maxAtkUpgrades;
-        case 'crit':
-          return FROST_MAGE.maxCritUpgrades;
-        case 'shield_speed':
-          return FROST_MAGE.maxShieldSpeedUpgrades;
-        default:
-          return 0;
-      }
-    }
-    switch (kind) {
-      case 'hp':
-        return Math.round((this.maxHpCap - HERO_CLASSES.warrior.baseHp) / 10);
-      case 'atk':
-        return 999; // warrior attack upgrades are uncapped
-      case 'armor':
-        return this.maxArmorUpgrades;
-      case 'crit':
-        return this.maxCritUpgrades;
-      default:
-        return 0;
-    }
-  }
-
-  private getUpgradeCount(kind: UpgradeKind): number {
-    switch (kind) {
-      case 'hp':
-        return this.hpUpgrades;
-      case 'atk':
-        return this.atkUpgrades;
-      case 'armor':
-        return this.armorUpgrades;
-      case 'crit':
-        return this.critUpgrades;
-      case 'hp_shield':
-        return this.hpShieldUpgrades;
-      case 'shield_speed':
-        return this.shieldSpeedUpgrades;
-    }
-  }
-
-  private isUpgradeMaxed(kind: UpgradeKind): boolean {
-    if (!this.isMage() && kind === 'hp') return this.maxHp >= this.maxHpCap;
-    return this.getUpgradeCount(kind) >= this.getUpgradeMax(kind);
   }
 
   public getUpgradeOptions(): UpgradeOptionView[] {
@@ -3603,33 +3234,33 @@ export class EmbervaultEngine {
       label,
       maxedLabel,
       progress,
-      count: this.getUpgradeCount(kind),
-      maxCount: this.getUpgradeMax(kind),
-      maxed: this.isUpgradeMaxed(kind),
+      count: this.hero.getUpgradeCount(kind),
+      maxCount: this.hero.getUpgradeMax(kind),
+      maxed: this.hero.isUpgradeMaxed(kind),
     });
-    if (this.isMage()) {
-      const speedPct = Math.round(this.shieldSpeedUpgrades * FROST_MAGE.shieldSpeedStep * 100);
+    if (this.hero.isMage()) {
+      const speedPct = Math.round(this.hero.shieldSpeedUpgrades * FROST_MAGE.shieldSpeedStep * 100);
       return [
         row(
           'hp_shield',
           'shield',
           `HP +${FROST_MAGE.hpPerUpgrade} · 護盾 +${FROST_MAGE.shieldPerUpgrade}`,
           'HP / 護盾 MAXED',
-          `${this.hpShieldUpgrades} / ${FROST_MAGE.maxHpShieldUpgrades} · HP ${this.maxHp} · 護盾 ${this.baseMaxShield}`
+          `${this.hero.hpShieldUpgrades} / ${FROST_MAGE.maxHpShieldUpgrades} · HP ${this.hero.maxHp} · 護盾 ${this.hero.baseMaxShield}`
         ),
         row(
           'atk',
           'atk',
           '+10% 攻擊力',
           'ATK MAXED',
-          `+${this.atkUpgrades * 10}% / +${FROST_MAGE.maxAtkUpgrades * 10}% DMG`
+          `+${this.hero.atkUpgrades * 10}% / +${FROST_MAGE.maxAtkUpgrades * 10}% DMG`
         ),
         row(
           'crit',
           'crit',
           '+2% 爆擊',
           'CRIT MAXED',
-          `+${this.critUpgrades * 2}% / +${FROST_MAGE.maxCritUpgrades * 2}% CRIT`
+          `+${this.hero.critUpgrades * 2}% / +${FROST_MAGE.maxCritUpgrades * 2}% CRIT`
         ),
         row(
           'shield_speed',
@@ -3641,33 +3272,33 @@ export class EmbervaultEngine {
       ];
     }
     return [
-      row('hp', 'hp', '+10 Max HP', 'HP MAXED', `${this.maxHp} / ${this.maxHpCap} HP`),
+      row('hp', 'hp', '+10 Max HP', 'HP MAXED', `${this.hero.maxHp} / ${this.hero.maxHpCap} HP`),
       row(
         'atk',
         'atk',
         '+10% Attack',
         'ATK MAXED',
-        `+${this.atkUpgrades * 10}% → +${this.atkUpgrades * 10 + 10}% DMG`
+        `+${this.hero.atkUpgrades * 10}% → +${this.hero.atkUpgrades * 10 + 10}% DMG`
       ),
       row(
         'armor',
         'armor',
         '+10% Armor',
         'DEF MAXED',
-        `${this.armorUpgrades * 10}% / ${this.maxArmorUpgrades * 10}% DEF`
+        `${this.hero.armorUpgrades * 10}% / ${this.hero.maxArmorUpgrades * 10}% DEF`
       ),
       row(
         'crit',
         'crit',
         '+2% Crit',
         'CRIT MAXED',
-        `+${this.critUpgrades * 2}% / +${this.maxCritUpgrades * 2}% CRIT`
+        `+${this.hero.critUpgrades * 2}% / +${this.hero.maxCritUpgrades * 2}% CRIT`
       ),
     ];
   }
 
   public getUpgradeCost(): number {
-    const lv = this.getTotalUpgradeLevel();
+    const lv = this.hero.getTotalUpgradeLevel();
     return 40 + lv * 25 + Math.floor(lv * lv * 4);
   }
 
@@ -3678,33 +3309,33 @@ export class EmbervaultEngine {
   private isHeroNearAltar(): boolean {
     if (!this.dungeon?.altarPos) return false;
     const aw = gridToWorld(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
-    return Math.hypot(this.heroX - aw.x, this.heroZ - aw.z) < 2.55;
+    return Math.hypot(this.hero.x - aw.x, this.hero.z - aw.z) < 2.55;
   }
 
   private isHeroNearShop(): boolean {
     if (!this.dungeon?.shopPos) return false;
     const sw = gridToWorld(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
-    return Math.hypot(this.heroX - sw.x, this.heroZ - sw.z) < 2.55;
+    return Math.hypot(this.hero.x - sw.x, this.hero.z - sw.z) < 2.55;
   }
 
   private isHeroNearPortal(): boolean {
     if (!this.inTown || !this.townGatePos) return false;
-    return Math.hypot(this.heroX - this.townGatePos.x, this.heroZ - this.townGatePos.z) < 2.25;
+    return Math.hypot(this.hero.x - this.townGatePos.x, this.hero.z - this.townGatePos.z) < 2.25;
   }
 
   private isHeroNearStash(): boolean {
     if (!this.inTown || !this.stashPos) return false;
-    return Math.hypot(this.heroX - this.stashPos.x, this.heroZ - this.stashPos.z) < 2.75;
+    return Math.hypot(this.hero.x - this.stashPos.x, this.hero.z - this.stashPos.z) < 2.75;
   }
 
   /** Opens the stash window. Only in town, next to the chest, on a saved character (never for attract mode). */
   public openStash(): boolean {
-    if (this.isDead || !this.inTown || !this.persistRun || this.loadingRun) return false;
+    if (this.hero.isDead || !this.inTown || !this.persistRun || this.loadingRun) return false;
     if (this.transitionState !== 'none' || !this.isHeroNearStash()) return false;
-    if (this.stashOpen) return true;
-    this.stashOpen = true;
-    this.keysPressed.clear();
-    this.leftMouseHeld = false;
+    if (this.hero.stashOpen) return true;
+    this.hero.stashOpen = true;
+    this.hero.input.keys.clear();
+    this.hero.input.leftMouseHeld = false;
     this.audio.playRelicEquip();
     this.emitHud();
     return true;
@@ -3712,9 +3343,9 @@ export class EmbervaultEngine {
 
   /** Closes the stash window and asks the host to save. Safe to call when already closed. */
   public closeStash(): void {
-    if (!this.stashOpen) return;
-    this.stashOpen = false;
-    this.keysPressed.clear();
+    if (!this.hero.stashOpen) return;
+    this.hero.stashOpen = false;
+    this.hero.input.keys.clear();
     this.audio.playRelicEquip();
     this.requestSave('stash');
     this.emitHud();
@@ -3722,12 +3353,12 @@ export class EmbervaultEngine {
 
   /** Bag -> stash. Equipped relics must be unequipped to the bag first. */
   public depositRelic(relicId: string): StashMoveResult {
-    if (!this.stashOpen || !this.inTown || this.isDead) return { ok: false, reason: 'closed' };
-    const idx = this.relicBag.findIndex((r) => r.id === relicId);
+    if (!this.hero.stashOpen || !this.inTown || this.hero.isDead) return { ok: false, reason: 'closed' };
+    const idx = this.hero.relicBag.findIndex((r) => r.id === relicId);
     if (idx === -1) return { ok: false, reason: 'notFound' };
-    if (this.stash.length >= STASH_CAP) return { ok: false, reason: 'stashFull' };
-    const [item] = this.relicBag.splice(idx, 1);
-    this.stash.push(item);
+    if (this.hero.stash.length >= STASH_CAP) return { ok: false, reason: 'stashFull' };
+    const [item] = this.hero.relicBag.splice(idx, 1);
+    this.hero.stash.push(item);
     this.audio.playRelicEquip();
     this.emitHud();
     return { ok: true };
@@ -3735,12 +3366,12 @@ export class EmbervaultEngine {
 
   /** Stash -> bag. */
   public withdrawRelic(relicId: string): StashMoveResult {
-    if (!this.stashOpen || !this.inTown || this.isDead) return { ok: false, reason: 'closed' };
-    const idx = this.stash.findIndex((r) => r.id === relicId);
+    if (!this.hero.stashOpen || !this.inTown || this.hero.isDead) return { ok: false, reason: 'closed' };
+    const idx = this.hero.stash.findIndex((r) => r.id === relicId);
     if (idx === -1) return { ok: false, reason: 'notFound' };
-    if (this.relicBag.length >= this.relicBagCap) return { ok: false, reason: 'bagFull' };
-    const [item] = this.stash.splice(idx, 1);
-    this.relicBag.unshift(item);
+    if (this.hero.relicBag.length >= this.hero.relicBagCap) return { ok: false, reason: 'bagFull' };
+    const [item] = this.hero.stash.splice(idx, 1);
+    this.hero.relicBag.unshift(item);
     this.audio.playRelicEquip();
     this.emitHud();
     return { ok: true };
@@ -3748,84 +3379,84 @@ export class EmbervaultEngine {
 
   private isHeroNearAngel(): boolean {
     if (!this.inTown || !this.angelPos) return false;
-    return Math.hypot(this.heroX - this.angelPos.x, this.heroZ - this.angelPos.z) < 2.75;
+    return Math.hypot(this.hero.x - this.angelPos.x, this.hero.z - this.angelPos.z) < 2.75;
   }
 
   public purchaseUpgrade(kind: UpgradeKind): boolean {
     if (!this.dungeon?.altarPos || !this.isHeroNearAltar()) return false;
     const cost = this.getUpgradeCost();
-    if (this.gold < cost) return false;
-    if (this.getUpgradeMax(kind) <= 0 || this.isUpgradeMaxed(kind)) return false;
+    if (this.hero.gold < cost) return false;
+    if (this.hero.getUpgradeMax(kind) <= 0 || this.hero.isUpgradeMaxed(kind)) return false;
 
-    if (!this.audio.isEnabled() && this.controlMode === 'manual') {
+    if (!this.audio.isEnabled() && this.hero.controlMode === 'manual') {
       this.audio.unlockAndEnable();
     }
 
-    this.gold -= cost;
-    const effMax = this.getEffectiveMaxHp();
+    this.hero.gold -= cost;
+    const effMax = this.hero.getEffectiveMaxHp();
     if (kind === 'hp_shield') {
-      this.hpShieldUpgrades += 1;
-      this.maxHp += FROST_MAGE.hpPerUpgrade;
-      this.baseMaxShield += FROST_MAGE.shieldPerUpgrade;
-      this.hp = this.getEffectiveMaxHp();
-      this.shield = this.getEffectiveMaxShield();
+      this.hero.hpShieldUpgrades += 1;
+      this.hero.maxHp += FROST_MAGE.hpPerUpgrade;
+      this.hero.baseMaxShield += FROST_MAGE.shieldPerUpgrade;
+      this.hero.hp = this.hero.getEffectiveMaxHp();
+      this.hero.shield = this.hero.getEffectiveMaxShield();
       this.emitFloatingText(
-        this.heroX,
+        this.hero.x,
         2.0,
-        this.heroZ,
+        this.hero.z,
         `HP +${FROST_MAGE.hpPerUpgrade} · 護盾 +${FROST_MAGE.shieldPerUpgrade} · FULL`,
         'shieldHit'
       );
     } else if (kind === 'shield_speed') {
-      this.shieldSpeedUpgrades += 1;
-      this.hp = effMax;
-      this.shield = this.getEffectiveMaxShield();
+      this.hero.shieldSpeedUpgrades += 1;
+      this.hero.hp = effMax;
+      this.hero.shield = this.hero.getEffectiveMaxShield();
       this.emitFloatingText(
-        this.heroX,
+        this.hero.x,
         2.0,
-        this.heroZ,
-        `護盾回充 +${this.shieldSpeedUpgrades * 12}% · FULL`,
+        this.hero.z,
+        `護盾回充 +${this.hero.shieldSpeedUpgrades * 12}% · FULL`,
         'shieldHit'
       );
     } else if (kind === 'hp') {
-      this.hpUpgrades += 1;
-      this.maxHp = Math.min(this.maxHpCap, this.maxHp + 10);
-      this.hp = this.getEffectiveMaxHp();
-      this.emitFloatingText(this.heroX, 2.0, this.heroZ, '+10 MAX HP · FULL HP', 'heal');
+      this.hero.hpUpgrades += 1;
+      this.hero.maxHp = Math.min(this.hero.maxHpCap, this.hero.maxHp + 10);
+      this.hero.hp = this.hero.getEffectiveMaxHp();
+      this.emitFloatingText(this.hero.x, 2.0, this.hero.z, '+10 MAX HP · FULL HP', 'heal');
     } else if (kind === 'armor') {
-      this.armorUpgrades += 1;
-      this.hp = effMax;
+      this.hero.armorUpgrades += 1;
+      this.hero.hp = effMax;
       this.emitFloatingText(
-        this.heroX,
+        this.hero.x,
         2.0,
-        this.heroZ,
-        `DEF +${this.armorUpgrades * 10}% · FULL HP`,
+        this.hero.z,
+        `DEF +${this.hero.armorUpgrades * 10}% · FULL HP`,
         'info'
       );
     } else if (kind === 'crit') {
-      this.critUpgrades += 1;
-      this.hp = effMax;
+      this.hero.critUpgrades += 1;
+      this.hero.hp = effMax;
       this.emitFloatingText(
-        this.heroX,
+        this.hero.x,
         2.0,
-        this.heroZ,
-        `CRIT +${this.critUpgrades * 2}% · FULL HP`,
+        this.hero.z,
+        `CRIT +${this.hero.critUpgrades * 2}% · FULL HP`,
         'crit'
       );
     } else {
-      this.atkUpgrades += 1;
-      this.hp = effMax;
+      this.hero.atkUpgrades += 1;
+      this.hero.hp = effMax;
       this.emitFloatingText(
-        this.heroX,
+        this.hero.x,
         2.0,
-        this.heroZ,
-        `ATK +${this.atkUpgrades * 10}% · FULL HP`,
+        this.hero.z,
+        `ATK +${this.hero.atkUpgrades * 10}% · FULL HP`,
         'crit'
       );
     }
 
-    if (this.isMage()) {
-      this.shield = this.getEffectiveMaxShield();
+    if (this.hero.isMage()) {
+      this.hero.shield = this.hero.getEffectiveMaxShield();
     }
     this.audio.playUpgrade();
 
@@ -3867,21 +3498,21 @@ export class EmbervaultEngine {
   }
 
   public purchasePotion(): boolean {
-    if (this.isDead) return false;
+    if (this.hero.isDead) return false;
     const nearShop = this.isHeroNearShop();
     const nearAltar = this.isHeroNearAltar();
     if (!nearShop && !nearAltar) return false;
     const cost = this.getPotionCost();
-    if (this.gold < cost) return false;
+    if (this.hero.gold < cost) return false;
 
-    if (!this.audio.isEnabled() && this.controlMode === 'manual') {
+    if (!this.audio.isEnabled() && this.hero.controlMode === 'manual') {
       this.audio.unlockAndEnable();
     }
 
-    this.gold -= cost;
-    this.potions += 1;
+    this.hero.gold -= cost;
+    this.hero.potions += 1;
     this.audio.playPotion();
-    this.emitFloatingText(this.heroX, 2.0, this.heroZ, '+1 ELIXIR', 'heal');
+    this.emitFloatingText(this.hero.x, 2.0, this.hero.z, '+1 ELIXIR', 'heal');
 
     const stationPos = nearShop ? this.dungeon.shopPos! : this.dungeon.altarPos!;
     const sw = gridToWorld(stationPos.gx, stationPos.gz);
@@ -3911,31 +3542,31 @@ export class EmbervaultEngine {
   }
 
   private usePotion(): void {
-    const effMax = this.getEffectiveMaxHp();
-    if (this.isDead || this.potions <= 0 || this.hp >= effMax) return;
+    const effMax = this.hero.getEffectiveMaxHp();
+    if (this.hero.isDead || this.hero.potions <= 0 || this.hero.hp >= effMax) return;
 
-    const hasAlchemist = this.hasUnique('alchemist_free_flask');
+    const hasAlchemist = this.hero.hasUnique('alchemist_free_flask');
     const savedFlask = hasAlchemist && Math.random() < 0.2;
     if (!savedFlask) {
-      this.potions -= 1;
+      this.hero.potions -= 1;
     }
-    this.potionsUsed += 1;
+    this.hero.potionsUsed += 1;
     if (hasAlchemist) {
-      this.alchemistShieldTimer = 3.0;
+      this.hero.alchemistShieldTimer = 3.0;
     }
 
-    const noodleBonus = this.hasUnique('noodle_elixir_boost') ? 15 : 0;
-    const baseHeal = Math.round(40 * (1 + this.relicStats.potionHealPct / 100)) + noodleBonus;
-    const heal = Math.min(baseHeal, effMax - this.hp);
-    this.hp = Math.min(effMax, this.hp + heal);
+    const noodleBonus = this.hero.hasUnique('noodle_elixir_boost') ? 15 : 0;
+    const baseHeal = Math.round(40 * (1 + this.hero.relicStats.potionHealPct / 100)) + noodleBonus;
+    const heal = Math.min(baseHeal, effMax - this.hero.hp);
+    this.hero.hp = Math.min(effMax, this.hero.hp + heal);
     this.audio.playPotion();
     this.pushBanner(
       savedFlask ? '秘藥奇蹟 · 不耗藥水!' : noodleBonus > 0 ? '泡麵加湯回復!' : 'ELIXIR USED'
     );
     this.emitFloatingText(
-      this.heroX,
+      this.hero.x,
       1.8,
-      this.heroZ,
+      this.hero.z,
       savedFlask ? `+${heal} HP (免費!)` : noodleBonus > 0 ? `+${heal} HP 暖胃!` : `+${heal} HP`,
       'heal'
     );
@@ -3944,9 +3575,9 @@ export class EmbervaultEngine {
     for (let i = 0; i < 16; i++) {
       const a = (i / 16) * Math.PI * 2;
       this.spawnParticle(
-        this.heroX + Math.cos(a) * 0.4,
+        this.hero.x + Math.cos(a) * 0.4,
         0.5,
-        this.heroZ + Math.sin(a) * 0.4,
+        this.hero.z + Math.sin(a) * 0.4,
         Math.cos(a) * 1.2,
         2.2 + Math.random() * 1.4,
         Math.sin(a) * 1.2,
@@ -3960,29 +3591,29 @@ export class EmbervaultEngine {
   }
 
   private performDash(): void {
-    if (this.dashCooldown > 0 || this.dashTimer > 0) return;
-    if (this.isMage()) {
+    if (this.hero.dashCooldown > 0 || this.hero.dashTimer > 0) return;
+    if (this.hero.isMage()) {
       this.performBlink();
       return;
     }
-    this.dashTimer = 0.16;
-    this.dashCooldown = Math.max(0.35, 1.1 * (1 - this.relicStats.dashCdPct / 100));
-    this.heroInvuln = Math.max(this.heroInvuln, 0.28);
-    if (this.hasUnique('phantom_dash_crit')) {
-      this.phantomCritTimer = 2.0;
+    this.hero.dashTimer = 0.16;
+    this.hero.dashCooldown = Math.max(0.35, 1.1 * (1 - this.hero.relicStats.dashCdPct / 100));
+    this.hero.invuln = Math.max(this.hero.invuln, 0.28);
+    if (this.hero.hasUnique('phantom_dash_crit')) {
+      this.hero.phantomCritTimer = 2.0;
     }
-    this.dashDirX = Math.sin(this.heroFacing);
-    this.dashDirZ = Math.cos(this.heroFacing);
+    this.hero.dashDirX = Math.sin(this.hero.facing);
+    this.hero.dashDirZ = Math.cos(this.hero.facing);
     this.audio.playDash();
 
     // Unique: Phoenix Plume — fiery ring nova when dashing
-    if (this.hasUnique('phoenix_dash_nova')) {
-      const dashAtkMult = 1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100;
+    if (this.hero.hasUnique('phoenix_dash_nova')) {
+      const dashAtkMult = 1 + this.hero.atkUpgrades * 0.1 + this.hero.relicStats.atkPct / 100;
       const fireDmg = Math.max(8, Math.round(14 * dashAtkMult));
       for (const e of this.enemies) {
         if (e.dead) continue;
-        const edx = e.x - this.heroX;
-        const edz = e.z - this.heroZ;
+        const edx = e.x - this.hero.x;
+        const edz = e.z - this.hero.z;
         const edist = Math.hypot(edx, edz);
         if (edist <= 3.4) {
           const push = e.isBoss ? 1.8 : 6.0;
@@ -3994,9 +3625,9 @@ export class EmbervaultEngine {
       for (let i = 0; i < 18; i++) {
         const a = (i / 18) * Math.PI * 2;
         this.spawnParticle(
-          this.heroX + Math.cos(a) * 0.35,
+          this.hero.x + Math.cos(a) * 0.35,
           0.55,
-          this.heroZ + Math.sin(a) * 0.35,
+          this.hero.z + Math.sin(a) * 0.35,
           Math.cos(a) * 5.2,
           1.1 + Math.random() * 1.4,
           Math.sin(a) * 5.2,
@@ -4010,12 +3641,12 @@ export class EmbervaultEngine {
 
     for (let i = 0; i < 12; i++) {
       this.spawnParticle(
-        this.heroX + (Math.random() - 0.5) * 0.5,
+        this.hero.x + (Math.random() - 0.5) * 0.5,
         0.4 + Math.random() * 0.7,
-        this.heroZ + (Math.random() - 0.5) * 0.5,
-        -this.dashDirX * (1.2 + Math.random()),
+        this.hero.z + (Math.random() - 0.5) * 0.5,
+        -this.hero.dashDirX * (1.2 + Math.random()),
         0.8 + Math.random(),
-        -this.dashDirZ * (1.2 + Math.random()),
+        -this.hero.dashDirZ * (1.2 + Math.random()),
         i % 2 === 0 ? 0x3be8e0 : 0xffbe55,
         1.15,
         0.38,
@@ -4035,8 +3666,8 @@ export class EmbervaultEngine {
     if (enemy.dead || bonusDmg <= 0) return;
     enemy.hp -= bonusDmg;
     enemy.hitFlash = 0.12;
-    this.totalDamageDealt += bonusDmg;
-    this.aiLastCombatDamageTime = this.elapsed;
+    this.hero.totalDamageDealt += bonusDmg;
+    this.hero.ai.lastCombatDamageTime = this.elapsed;
     this.emitFloatingText(enemy.x, enemy.isBoss ? 2.4 : 1.75, enemy.z, label, tone);
     for (let i = 0; i < 6; i++) {
       this.spawnParticle(
@@ -4058,29 +3689,29 @@ export class EmbervaultEngine {
   }
 
   private performAttack(): void {
-    if (this.attackCooldown > 0) return;
-    if (this.isMage()) {
+    if (this.hero.attackCooldown > 0) return;
+    if (this.hero.isMage()) {
       this.performMageAttack();
       return;
     }
 
-    this.comboStep = this.comboResetTimer > 0 ? (this.comboStep + 1) % 3 : 0;
-    this.comboResetTimer = 0.9;
-    const isCleave = this.comboStep === 2;
+    this.hero.comboStep = this.hero.comboResetTimer > 0 ? (this.hero.comboStep + 1) % 3 : 0;
+    this.hero.comboResetTimer = 0.9;
+    const isCleave = this.hero.comboStep === 2;
 
-    this.attackCooldown = isCleave ? 0.42 : 0.28;
-    this.attackAnim = isCleave ? 0.34 : 0.24;
+    this.hero.attackCooldown = isCleave ? 0.42 : 0.28;
+    this.hero.attackAnim = isCleave ? 0.34 : 0.24;
     this.audio.playSwordSlash(isCleave);
 
     // Spawn luminous crescent sword slash VFX mesh
     const arcGeo = isCleave
       ? new THREE.RingGeometry(0.75, 2.05, 24, 1, 0, Math.PI * 1.85)
       : new THREE.RingGeometry(0.65, 1.85, 14, 1, -Math.PI * 0.48, Math.PI * 0.96);
-    const arcColor = this.hasSet4pc('dragonfire')
+    const arcColor = this.hero.hasSet4pc('dragonfire')
       ? 0xff7b29
-      : this.hasSet4pc('voidstalker')
+      : this.hero.hasSet4pc('voidstalker')
       ? 0xc88cff
-      : this.hasSet4pc('syndicate')
+      : this.hero.hasSet4pc('syndicate')
       ? 0xffe066
       : isCleave
       ? 0xffdf7a
@@ -4095,8 +3726,8 @@ export class EmbervaultEngine {
     });
     const arcMesh = new THREE.Mesh(arcGeo, arcMat);
     arcMesh.rotation.x = -Math.PI / 2;
-    arcMesh.rotation.z = this.heroFacing - Math.PI / 2;
-    arcMesh.position.set(this.heroX, 0.85, this.heroZ);
+    arcMesh.rotation.z = this.hero.facing - Math.PI / 2;
+    arcMesh.position.set(this.hero.x, 0.85, this.hero.z);
     this.scene.add(arcMesh);
     this.slashArcs.push({
       mesh: arcMesh,
@@ -4106,40 +3737,40 @@ export class EmbervaultEngine {
     });
 
     const reach = isCleave ? 2.55 : 2.25;
-    const fwdX = Math.sin(this.heroFacing);
-    const fwdZ = Math.cos(this.heroFacing);
+    const fwdX = Math.sin(this.hero.facing);
+    const fwdZ = Math.cos(this.hero.facing);
     let landedHit = false;
-    const effMaxHp = this.getEffectiveMaxHp();
-    const usePhantomCrit = this.phantomCritTimer > 0;
+    const effMaxHp = this.hero.getEffectiveMaxHp();
+    const usePhantomCrit = this.hero.phantomCritTimer > 0;
     const hitState = { consumedPhantom: false, triggeredStorm: false };
 
-    const avariceBonus = this.hasUnique('avarice_gold_atk')
-      ? Math.min(0.4, Math.floor(this.gold / 100) * 0.01)
+    const avariceBonus = this.hero.hasUnique('avarice_gold_atk')
+      ? Math.min(0.4, Math.floor(this.hero.gold / 100) * 0.01)
       : 0;
     const titanFuryBonus =
-      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
-    const berserkerBonus = this.hasUnique('berserker_combo_ramp')
-      ? Math.min(0.25, this.floorKills * 0.01)
+      this.hero.hasUnique('titan_low_hp_fury') && this.hero.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
+    const berserkerBonus = this.hero.hasUnique('berserker_combo_ramp')
+      ? Math.min(0.25, this.hero.floorKills * 0.01)
       : 0;
     const atkMult =
       1 +
-      this.atkUpgrades * 0.1 +
-      this.relicStats.atkPct / 100 +
+      this.hero.atkUpgrades * 0.1 +
+      this.hero.relicStats.atkPct / 100 +
       avariceBonus +
       titanFuryBonus +
       berserkerBonus;
     const critChance = Math.min(
       0.95,
-      (isCleave ? 0.5 : 0.11) + this.critUpgrades * 0.02 + this.relicStats.critPct / 100
+      (isCleave ? 0.5 : 0.11) + this.hero.critUpgrades * 0.02 + this.hero.relicStats.critPct / 100
     );
-    const critMult = 1.35 + this.relicStats.critDmgPct / 100 + (usePhantomCrit ? 0.25 : 0);
-    const knockMult = 1 + this.relicStats.dramaticKnockback / 100;
+    const critMult = 1.35 + this.hero.relicStats.critDmgPct / 100 + (usePhantomCrit ? 0.25 : 0);
+    const knockMult = 1 + this.hero.relicStats.dramaticKnockback / 100;
 
     // Damage enemies in arc
     for (const enemy of this.enemies) {
       if (enemy.dead) continue;
-      const dx = enemy.x - this.heroX;
-      const dz = enemy.z - this.heroZ;
+      const dx = enemy.x - this.hero.x;
+      const dz = enemy.z - this.hero.z;
       const dist = Math.hypot(dx, dz);
       const effectiveReach = reach + (enemy.isBoss ? 0.5 : enemy.isElite ? 0.18 : 0);
       if (dist > effectiveReach) continue;
@@ -4156,8 +3787,8 @@ export class EmbervaultEngine {
         critMult,
         knockMult,
         knockBase: isCleave ? 8.5 : 5.5,
-        originX: this.heroX,
-        originZ: this.heroZ,
+        originX: this.hero.x,
+        originZ: this.hero.z,
         fallbackX: fwdX,
         fallbackZ: fwdZ,
         usePhantomCrit,
@@ -4168,13 +3799,13 @@ export class EmbervaultEngine {
     }
 
     if (hitState.consumedPhantom) {
-      this.phantomCritTimer = 0;
+      this.hero.phantomCritTimer = 0;
     }
 
     // Smash nearby crates & urns
     for (const br of this.breakables) {
       if (br.broken) continue;
-      const dist = Math.hypot(br.x - this.heroX, br.z - this.heroZ);
+      const dist = Math.hypot(br.x - this.hero.x, br.z - this.hero.z);
       if (dist <= reach * 0.92) {
         this.breakProp(br);
         landedHit = true;
@@ -4201,7 +3832,7 @@ export class EmbervaultEngine {
     const isCounter = enemy.isBoss && enemy.bossState === 'recover';
     const { atkMult, critChance, critMult, knockMult, usePhantomCrit, effMaxHp } = hit;
     const baseDmg = hit.baseDmg;
-    const bananaSlip = this.hasUnique('banana_slip_crit') && Math.random() < 0.15;
+    const bananaSlip = this.hero.hasUnique('banana_slip_crit') && Math.random() < 0.15;
     const isCrit = isCounter || usePhantomCrit || bananaSlip || Math.random() < critChance;
     if (usePhantomCrit) hit.state.consumedPhantom = true;
 
@@ -4210,14 +3841,14 @@ export class EmbervaultEngine {
       mult *= 1.4;
     }
     if (enemy.isBoss || enemy.isElite) {
-      mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
+      mult *= 1 + this.hero.relicStats.eliteBossDmgPct / 100;
     }
-    if (this.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
+    if (this.hero.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
       mult *= enemy.isBoss ? 1.25 : 1.5;
     }
 
     let gamblerTag = bananaSlip ? '滑倒! ' : '';
-    if (this.hasUnique('gambler_coin_flip')) {
+    if (this.hero.hasUnique('gambler_coin_flip')) {
       const gRoll = Math.random();
       if (gRoll < 0.25) {
         mult *= 1.6;
@@ -4230,9 +3861,9 @@ export class EmbervaultEngine {
 
     const dmg = Math.max(1, Math.round(baseDmg * mult));
 
-    this.totalDamageDealt += dmg;
-    if (isCrit) this.critCount += 1;
-    this.aiLastCombatDamageTime = this.elapsed;
+    this.hero.totalDamageDealt += dmg;
+    if (isCrit) this.hero.critCount += 1;
+    this.hero.ai.lastCombatDamageTime = this.elapsed;
 
     enemy.hp -= dmg;
     enemy.hitFlash = 0.14;
@@ -4257,7 +3888,7 @@ export class EmbervaultEngine {
     // Unique: Overtime Mug — funny quips when hitting Elites/Bosses
     if (
       (enemy.isBoss || enemy.isElite) &&
-      this.hasUnique('overtime_mug_fury') &&
+      this.hero.hasUnique('overtime_mug_fury') &&
       Math.random() < 0.2
     ) {
       const quips = ['準時下班!', '不准加班!', '拒絕開會!', '我要打卡!'];
@@ -4271,12 +3902,12 @@ export class EmbervaultEngine {
     }
 
     // Unique: Blood Moon Fang lifesteal (quarter strength: 1.5% with fractional accumulation)
-    if (this.hasUnique('blood_moon_leech') && this.hp < effMaxHp) {
-      this.bloodLeechAccum += dmg * 0.015;
-      const leech = Math.floor(this.bloodLeechAccum);
+    if (this.hero.hasUnique('blood_moon_leech') && this.hero.hp < effMaxHp) {
+      this.hero.bloodLeechAccum += dmg * 0.015;
+      const leech = Math.floor(this.hero.bloodLeechAccum);
       if (leech >= 1) {
-        this.bloodLeechAccum -= leech;
-        this.hp = Math.min(effMaxHp, this.hp + leech);
+        this.hero.bloodLeechAccum -= leech;
+        this.hero.hp = Math.min(effMaxHp, this.hero.hp + leech);
       }
     }
 
@@ -4302,7 +3933,7 @@ export class EmbervaultEngine {
     }
 
     // Unique: Astral Prism — 20% chance for refracted astral double-strike (+35% dmg)
-    if (!enemy.dead && this.hasUnique('astral_double_strike') && Math.random() < 0.2) {
+    if (!enemy.dead && this.hero.hasUnique('astral_double_strike') && Math.random() < 0.2) {
       const astralDmg = Math.max(3, Math.round(dmg * 0.35));
       this.applyBonusEnemyDamage(
         enemy,
@@ -4314,16 +3945,16 @@ export class EmbervaultEngine {
     }
 
     // Unique: Permafrost Stele — chill enemy cooldown (+35%) & frost chip damage
-    if (!enemy.dead && this.hasUnique('frost_chill_aura')) {
+    if (!enemy.dead && this.hero.hasUnique('frost_chill_aura')) {
       enemy.attackCooldown += enemy.isBoss ? 0.22 : 0.45;
       const frostDmg = Math.max(2, Math.round(dmg * 0.12));
       this.applyBonusEnemyDamage(enemy, frostDmg, `冰霜 -${frostDmg}`, 'relicBlue', 0x8be9ff);
     }
 
     // Unique: Cat Paw Gloves — every 3rd hit triggers rapid "喵!" bonus swat + knockback
-    if (this.hasUnique('cat_paw_swat')) {
-      this.catPawHitCounter += 1;
-      if (!enemy.dead && this.catPawHitCounter % 3 === 0) {
+    if (this.hero.hasUnique('cat_paw_swat')) {
+      this.hero.catPawHitCounter += 1;
+      if (!enemy.dead && this.hero.catPawHitCounter % 3 === 0) {
         const pawDmg = Math.max(4, Math.round(dmg * 0.35));
         enemy.vx += nx * (enemy.isBoss ? 1.6 : 6.2);
         enemy.vz += nz * (enemy.isBoss ? 1.6 : 6.2);
@@ -4332,7 +3963,7 @@ export class EmbervaultEngine {
     }
 
     // Unique: Dungeon Disco Ball — rainbow sparks on crit + 20% bonus tip coin
-    if (isCrit && this.hasUnique('disco_fever_aura')) {
+    if (isCrit && this.hero.hasUnique('disco_fever_aura')) {
       const discoColors = [0xff4fd8, 0x3ef5ff, 0xffe047, 0x5cff6b, 0xb266ff];
       for (let i = 0; i < 12; i++) {
         const a = (i / 12) * Math.PI * 2;
@@ -4360,7 +3991,7 @@ export class EmbervaultEngine {
     }
 
     // Unique: Crown of Ember Sovereign — fiery AoE nova on crit
-    if (isCrit && this.hasUnique('ember_crit_nova')) {
+    if (isCrit && this.hero.hasUnique('ember_crit_nova')) {
       const splashDmg = Math.max(2, Math.round(dmg * 0.22));
       for (const other of this.enemies) {
         if (other.dead || other.id === enemy.id) continue;
@@ -4386,7 +4017,7 @@ export class EmbervaultEngine {
     }
 
     // Unique: Stormforged Hammer — chain lightning on 3rd-hit cleave
-    if (hit.isEmpowered && !hit.state.triggeredStorm && this.hasUnique('storm_cleave_lightning')) {
+    if (hit.isEmpowered && !hit.state.triggeredStorm && this.hero.hasUnique('storm_cleave_lightning')) {
       hit.state.triggeredStorm = true;
       const arcDmg = Math.max(3, Math.round(dmg * 0.2));
       let chained = 0;
@@ -4400,7 +4031,7 @@ export class EmbervaultEngine {
     }
 
     // 4pc Green Set: Dragonfire Knight — fiery splash on every attack
-    if (this.hasSet4pc('dragonfire')) {
+    if (this.hero.hasSet4pc('dragonfire')) {
       const fireDmg = Math.max(2, Math.round(dmg * 0.14));
       for (const other of this.enemies) {
         if (other.dead || other.id === enemy.id) continue;
@@ -4411,13 +4042,13 @@ export class EmbervaultEngine {
     }
 
     // 4pc Green Set: Voidstalker — crit resets dash & fires 3 void blades
-    if (isCrit && this.hasSet4pc('voidstalker')) {
-      this.dashCooldown = 0;
+    if (isCrit && this.hero.hasSet4pc('voidstalker')) {
+      this.hero.dashCooldown = 0;
       const bladeDmg = Math.max(3, Math.round(dmg * 0.18));
       let hits = 0;
       for (const other of this.enemies) {
         if (other.dead || hits >= 3) continue;
-        if (Math.hypot(other.x - this.heroX, other.z - this.heroZ) <= 6.2) {
+        if (Math.hypot(other.x - this.hero.x, other.z - this.hero.z) <= 6.2) {
           hits += 1;
           this.applyBonusEnemyDamage(other, bladeDmg, `虛空刃 -${bladeDmg}`, 'info', 0xb46bff);
         }
@@ -4425,7 +4056,7 @@ export class EmbervaultEngine {
     }
 
     // 4pc Green Set: Gilded Syndicate — 20% Golden Smite bonus damage + gold pop
-    if (!enemy.dead && this.hasSet4pc('syndicate') && Math.random() < 0.2) {
+    if (!enemy.dead && this.hero.hasSet4pc('syndicate') && Math.random() < 0.2) {
       const smiteDmg = Math.max(4, Math.round(dmg * 0.18));
       this.applyBonusEnemyDamage(enemy, smiteDmg, `重金轟擊 -${smiteDmg}`, 'gold', 0xffd84a);
       this.spawnLoot(
@@ -4437,16 +4068,16 @@ export class EmbervaultEngine {
   }
 
   private performPommelStrike(): void {
-    if (this.isDead || this.pommelCooldown > 0) return;
-    if (this.isMage()) {
+    if (this.hero.isDead || this.hero.pommelCooldown > 0) return;
+    if (this.hero.isMage()) {
       this.performFrostNova();
       return;
     }
 
-    this.pommelCooldown = this.pommelMaxCooldown;
-    this.pommelAnim = 0.34;
-    this.attackAnim = 0;
-    this.attackCooldown = Math.max(this.attackCooldown, 0.28);
+    this.hero.pommelCooldown = this.hero.pommelMaxCooldown;
+    this.hero.pommelAnim = 0.34;
+    this.hero.attackAnim = 0;
+    this.hero.attackCooldown = Math.max(this.hero.attackCooldown, 0.28);
 
     this.audio.playPommelStrike();
     // Subtle full-screen impact shake
@@ -4464,7 +4095,7 @@ export class EmbervaultEngine {
     });
     const outerRing = new THREE.Mesh(outerGeo, outerMat);
     outerRing.rotation.x = -Math.PI / 2;
-    outerRing.position.set(this.heroX, 0.22, this.heroZ);
+    outerRing.position.set(this.hero.x, 0.22, this.hero.z);
     this.scene.add(outerRing);
     this.slashArcs.push({
       mesh: outerRing,
@@ -4486,7 +4117,7 @@ export class EmbervaultEngine {
     });
     const innerRing = new THREE.Mesh(innerGeo, innerMat);
     innerRing.rotation.x = -Math.PI / 2;
-    innerRing.position.set(this.heroX, 0.26, this.heroZ);
+    innerRing.position.set(this.hero.x, 0.26, this.hero.z);
     this.scene.add(innerRing);
     this.slashArcs.push({
       mesh: innerRing,
@@ -4502,9 +4133,9 @@ export class EmbervaultEngine {
       const a = (i / 16) * Math.PI * 2;
       const spd = 4.6 + Math.random() * 2.4;
       this.spawnParticle(
-        this.heroX + Math.cos(a) * 0.45,
+        this.hero.x + Math.cos(a) * 0.45,
         0.35,
-        this.heroZ + Math.sin(a) * 0.45,
+        this.hero.z + Math.sin(a) * 0.45,
         Math.cos(a) * spd,
         1.1 + Math.random() * 1.4,
         Math.sin(a) * spd,
@@ -4517,35 +4148,35 @@ export class EmbervaultEngine {
 
     // Same 360-degree radius as the 3rd-hit cleave (2.55 + target size margin)
     const reach = 2.55;
-    const effMaxHp = this.getEffectiveMaxHp();
-    const avariceBonus = this.hasUnique('avarice_gold_atk')
-      ? Math.min(0.4, Math.floor(this.gold / 100) * 0.01)
+    const effMaxHp = this.hero.getEffectiveMaxHp();
+    const avariceBonus = this.hero.hasUnique('avarice_gold_atk')
+      ? Math.min(0.4, Math.floor(this.hero.gold / 100) * 0.01)
       : 0;
     const titanFuryBonus =
-      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
-    const berserkerBonus = this.hasUnique('berserker_combo_ramp')
-      ? Math.min(0.25, this.floorKills * 0.01)
+      this.hero.hasUnique('titan_low_hp_fury') && this.hero.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
+    const berserkerBonus = this.hero.hasUnique('berserker_combo_ramp')
+      ? Math.min(0.25, this.hero.floorKills * 0.01)
       : 0;
     const atkMult =
       1 +
-      this.atkUpgrades * 0.1 +
-      this.relicStats.atkPct / 100 +
+      this.hero.atkUpgrades * 0.1 +
+      this.hero.relicStats.atkPct / 100 +
       avariceBonus +
       titanFuryBonus +
       berserkerBonus;
     const critChance = Math.min(
       0.95,
-      0.11 + this.critUpgrades * 0.02 + this.relicStats.critPct / 100
+      0.11 + this.hero.critUpgrades * 0.02 + this.hero.relicStats.critPct / 100
     );
-    const critMult = 1.35 + this.relicStats.critDmgPct / 100;
-    const knockMult = 1 + this.relicStats.dramaticKnockback / 100;
+    const critMult = 1.35 + this.hero.relicStats.critDmgPct / 100;
+    const knockMult = 1 + this.hero.relicStats.dramaticKnockback / 100;
 
     let landedHit = false;
 
     for (const enemy of this.enemies) {
       if (enemy.dead) continue;
-      const dx = enemy.x - this.heroX;
-      const dz = enemy.z - this.heroZ;
+      const dx = enemy.x - this.hero.x;
+      const dz = enemy.z - this.hero.z;
       const dist = Math.hypot(dx, dz);
       const effectiveReach = reach + (enemy.isBoss ? 0.5 : enemy.isElite ? 0.18 : 0);
       if (dist > effectiveReach) continue;
@@ -4555,16 +4186,16 @@ export class EmbervaultEngine {
       const isCrit = Math.random() < critChance;
       let mult = atkMult * 0.5 * (isCrit ? critMult : 1);
       if (enemy.isBoss || enemy.isElite) {
-        mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
+        mult *= 1 + this.hero.relicStats.eliteBossDmgPct / 100;
       }
-      if (this.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
+      if (this.hero.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
         mult *= enemy.isBoss ? 1.25 : 1.5;
       }
 
       const dmg = Math.max(1, Math.round(normalBase * mult));
-      this.totalDamageDealt += dmg;
-      if (isCrit) this.critCount += 1;
-      this.aiLastCombatDamageTime = this.elapsed;
+      this.hero.totalDamageDealt += dmg;
+      if (isCrit) this.hero.critCount += 1;
+      this.hero.ai.lastCombatDamageTime = this.elapsed;
 
       enemy.hp -= dmg;
       enemy.hitFlash = 0.18;
@@ -4622,8 +4253,8 @@ export class EmbervaultEngine {
       enemy.rig.stunStars.visible = true;
 
       // Crisp outward shockwave knockback
-      const nx = dist > 0.01 ? dx / dist : Math.sin(this.heroFacing);
-      const nz = dist > 0.01 ? dz / dist : Math.cos(this.heroFacing);
+      const nx = dist > 0.01 ? dx / dist : Math.sin(this.hero.facing);
+      const nz = dist > 0.01 ? dz / dist : Math.cos(this.hero.facing);
       const knock = 4.6 * knockMult * (enemy.isBoss ? 0.18 : enemy.isElite ? 0.45 : 0.85);
       enemy.vx += nx * knock;
       enemy.vz += nz * knock;
@@ -4660,7 +4291,7 @@ export class EmbervaultEngine {
     // Also shatter nearby breakables caught in shockwave
     for (const br of this.breakables) {
       if (br.broken) continue;
-      if (Math.hypot(br.x - this.heroX, br.z - this.heroZ) <= reach) {
+      if (Math.hypot(br.x - this.hero.x, br.z - this.hero.z) <= reach) {
         this.breakProp(br);
         landedHit = true;
       }
@@ -4675,27 +4306,6 @@ export class EmbervaultEngine {
   // =========================================================================
   // FROST MAGE — combat core
   // =========================================================================
-
-  /** Attack multiplier from upgrades, relics and conditional uniques (shared by both classes). */
-  private getHeroAtkMult(): number {
-    const effMaxHp = this.getEffectiveMaxHp();
-    const avariceBonus = this.hasUnique('avarice_gold_atk')
-      ? Math.min(0.4, Math.floor(this.gold / 100) * 0.01)
-      : 0;
-    const titanFuryBonus =
-      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 0.18 : 0;
-    const berserkerBonus = this.hasUnique('berserker_combo_ramp')
-      ? Math.min(0.25, this.floorKills * 0.01)
-      : 0;
-    return (
-      1 +
-      this.atkUpgrades * 0.1 +
-      this.relicStats.atkPct / 100 +
-      avariceBonus +
-      titanFuryBonus +
-      berserkerBonus
-    );
-  }
 
   /** Rough collision radius of an enemy body for projectile / AoE checks. */
   private getEnemyHitRadius(e: EnemyEntity): number {
@@ -4763,17 +4373,17 @@ export class EmbervaultEngine {
 
   /** Rotates the hero to face the nearest valid enemy. Returns true if a target was found. */
   private autoFaceNearestEnemy(): boolean {
-    const mage = this.isMage();
+    const mage = this.hero.isMage();
     const range = mage ? FROST_MAGE.projectileRange : 3.2;
     let best: EnemyEntity | null = null;
     let bestDist = Infinity;
     for (const e of this.enemies) {
       if (e.dead) continue;
-      const d = Math.hypot(e.x - this.heroX, e.z - this.heroZ);
+      const d = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
       if (d > range + this.getEnemyHitRadius(e) || d >= bestDist) continue;
       if (
         mage &&
-        !hasLineOfSight(this.dungeon, this.heroX, this.heroZ, e.x, e.z, this.doorUnlocked, 0.2)
+        !hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, e.x, e.z, this.doorUnlocked, 0.2)
       ) {
         continue;
       }
@@ -4781,8 +4391,8 @@ export class EmbervaultEngine {
       bestDist = d;
     }
     if (!best) return false;
-    this.heroFacing = Math.atan2(best.x - this.heroX, best.z - this.heroZ);
-    this.heroRig.body.rotation.y = this.heroFacing;
+    this.hero.facing = Math.atan2(best.x - this.hero.x, best.z - this.hero.z);
+    this.hero.rig.body.rotation.y = this.hero.facing;
     return true;
   }
 
@@ -4805,24 +4415,24 @@ export class EmbervaultEngine {
 
   /** Frost Mage basic attack: fires one ice spike along heroFacing (3-shot cycle, never resets). */
   private performMageAttack(): void {
-    if (this.attackCooldown > 0) return;
-    const shotIdx = this.mageShotIndex;
+    if (this.hero.attackCooldown > 0) return;
+    const shotIdx = this.hero.mageShotIndex;
     const empowered = shotIdx === 2;
-    this.mageShotIndex = (this.mageShotIndex + 1) % 3;
-    this.attackCooldown = FROST_MAGE.shotCooldown[shotIdx];
-    this.attackAnim = empowered ? 0.3 : 0.22;
+    this.hero.mageShotIndex = (this.hero.mageShotIndex + 1) % 3;
+    this.hero.attackCooldown = FROST_MAGE.shotCooldown[shotIdx];
+    this.hero.attackAnim = empowered ? 0.3 : 0.22;
     this.audio.playIceCast(empowered);
 
-    const dirX = Math.sin(this.heroFacing);
-    const dirZ = Math.cos(this.heroFacing);
-    this.spawnIceSpike(this.heroX + dirX * 0.55, this.heroZ + dirZ * 0.55, dirX, dirZ, shotIdx);
+    const dirX = Math.sin(this.hero.facing);
+    const dirZ = Math.cos(this.hero.facing);
+    this.spawnIceSpike(this.hero.x + dirX * 0.55, this.hero.z + dirZ * 0.55, dirX, dirZ, shotIdx);
 
     // Muzzle frost sparkle at the staff tip
     for (let i = 0; i < (empowered ? 10 : 5); i++) {
       this.spawnParticle(
-        this.heroX + dirX * 0.7,
+        this.hero.x + dirX * 0.7,
         1.05,
-        this.heroZ + dirZ * 0.7,
+        this.hero.z + dirZ * 0.7,
         dirX * 2 + (Math.random() - 0.5) * 1.6,
         0.6 + Math.random(),
         dirZ * 2 + (Math.random() - 0.5) * 1.6,
@@ -4848,9 +4458,9 @@ export class EmbervaultEngine {
       vz: dirZ * FROST_MAGE.projectileSpeed,
       traveled: 0,
       shotIdx,
-      phantomCrit: this.phantomCritTimer > 0,
+      phantomCrit: this.hero.phantomCritTimer > 0,
     });
-    this.phantomCritTimer = 0;
+    this.hero.phantomCritTimer = 0;
   }
 
   private removeHeroProjectileAt(idx: number): void {
@@ -4979,16 +4589,16 @@ export class EmbervaultEngine {
       );
     }
 
-    const atkMult = this.getHeroAtkMult();
+    const atkMult = this.hero.getAtkMult();
     const usePhantomCrit = phantomCrit;
     const hitState = { consumedPhantom: false, triggeredStorm: false };
     const critChance = Math.min(
       0.95,
-      FROST_MAGE.shotBaseCrit[shotIdx] + this.critUpgrades * 0.02 + this.relicStats.critPct / 100
+      FROST_MAGE.shotBaseCrit[shotIdx] + this.hero.critUpgrades * 0.02 + this.hero.relicStats.critPct / 100
     );
-    const critMult = 1.35 + this.relicStats.critDmgPct / 100 + (usePhantomCrit ? 0.25 : 0);
-    const knockMult = 1 + this.relicStats.dramaticKnockback / 100;
-    const effMaxHp = this.getEffectiveMaxHp();
+    const critMult = 1.35 + this.hero.relicStats.critDmgPct / 100 + (usePhantomCrit ? 0.25 : 0);
+    const knockMult = 1 + this.hero.relicStats.dramaticKnockback / 100;
+    const effMaxHp = this.hero.getEffectiveMaxHp();
     let landedHit = false;
 
     for (const enemy of this.enemies) {
@@ -5008,8 +4618,8 @@ export class EmbervaultEngine {
         knockBase: empowered ? 3.6 : 1.8,
         originX: x,
         originZ: z,
-        fallbackX: Math.sin(this.heroFacing),
-        fallbackZ: Math.cos(this.heroFacing),
+        fallbackX: Math.sin(this.hero.facing),
+        fallbackZ: Math.cos(this.hero.facing),
         usePhantomCrit,
         effMaxHp,
         state: hitState,
@@ -5041,10 +4651,10 @@ export class EmbervaultEngine {
 
   /** Frost Mage right-click: screen-wide expanding ice nova — freeze, damage, push. */
   private performFrostNova(): void {
-    if (this.isDead || this.pommelCooldown > 0) return;
-    this.pommelCooldown = this.pommelMaxCooldown;
-    this.attackAnim = 0.34;
-    this.attackCooldown = Math.max(this.attackCooldown, 0.3);
+    if (this.hero.isDead || this.hero.pommelCooldown > 0) return;
+    this.hero.pommelCooldown = this.hero.pommelMaxCooldown;
+    this.hero.attackAnim = 0.34;
+    this.hero.attackCooldown = Math.max(this.hero.attackCooldown, 0.3);
     this.audio.playFrostNova();
     this.addScreenShake(0.32, 0.28);
 
@@ -5066,7 +4676,7 @@ export class EmbervaultEngine {
       });
       const mesh = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 48), mat);
       mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(this.heroX, 0.24, this.heroZ);
+      mesh.position.set(this.hero.x, 0.24, this.hero.z);
       this.scene.add(mesh);
       this.slashArcs.push({
         mesh,
@@ -5081,9 +4691,9 @@ export class EmbervaultEngine {
       const a = (i / 40) * Math.PI * 2;
       const spd = 8 + Math.random() * 6;
       this.spawnParticle(
-        this.heroX + Math.cos(a) * 0.5,
+        this.hero.x + Math.cos(a) * 0.5,
         0.4 + Math.random() * 0.6,
-        this.heroZ + Math.sin(a) * 0.5,
+        this.hero.z + Math.sin(a) * 0.5,
         Math.cos(a) * spd,
         0.8 + Math.random() * 1.6,
         Math.sin(a) * spd,
@@ -5094,36 +4704,36 @@ export class EmbervaultEngine {
       );
     }
 
-    const atkMult = this.getHeroAtkMult();
-    const critChance = Math.min(0.95, 0.08 + this.critUpgrades * 0.02 + this.relicStats.critPct / 100);
-    const critMult = 1.35 + this.relicStats.critDmgPct / 100;
-    const knockMult = 1 + this.relicStats.dramaticKnockback / 100;
+    const atkMult = this.hero.getAtkMult();
+    const critChance = Math.min(0.95, 0.08 + this.hero.critUpgrades * 0.02 + this.hero.relicStats.critPct / 100);
+    const critMult = 1.35 + this.hero.relicStats.critDmgPct / 100;
+    const knockMult = 1 + this.hero.relicStats.dramaticKnockback / 100;
     let landedHit = false;
 
     for (const enemy of this.enemies) {
       if (enemy.dead) continue;
-      const dx = enemy.x - this.heroX;
-      const dz = enemy.z - this.heroZ;
+      const dx = enemy.x - this.hero.x;
+      const dz = enemy.z - this.hero.z;
       const dist = Math.hypot(dx, dz);
       if (dist > FROST_MAGE.novaRadius + this.getEnemyHitRadius(enemy)) continue;
 
       const base = (11 + Math.floor(Math.random() * 6)) * FROST_MAGE.novaDamageMult;
       const isCrit = Math.random() < critChance;
       let mult = atkMult * (isCrit ? critMult : 1);
-      if (enemy.isBoss || enemy.isElite) mult *= 1 + this.relicStats.eliteBossDmgPct / 100;
-      if (this.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
+      if (enemy.isBoss || enemy.isElite) mult *= 1 + this.hero.relicStats.eliteBossDmgPct / 100;
+      if (this.hero.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
         mult *= enemy.isBoss ? 1.25 : 1.5;
       }
       const dmg = Math.max(1, Math.round(base * mult));
-      this.totalDamageDealt += dmg;
-      if (isCrit) this.critCount += 1;
-      this.aiLastCombatDamageTime = this.elapsed;
+      this.hero.totalDamageDealt += dmg;
+      if (isCrit) this.hero.critCount += 1;
+      this.hero.ai.lastCombatDamageTime = this.elapsed;
       enemy.hp -= dmg;
       enemy.hitFlash = 0.18;
 
       if (!enemy.isBoss) {
-        const nx = dist > 0.01 ? dx / dist : Math.sin(this.heroFacing);
-        const nz = dist > 0.01 ? dz / dist : Math.cos(this.heroFacing);
+        const nx = dist > 0.01 ? dx / dist : Math.sin(this.hero.facing);
+        const nz = dist > 0.01 ? dz / dist : Math.cos(this.hero.facing);
         const knock = FROST_MAGE.novaKnockback * knockMult * (enemy.isElite ? 0.45 : 1);
         enemy.vx += nx * knock;
         enemy.vz += nz * knock;
@@ -5157,8 +4767,8 @@ export class EmbervaultEngine {
     for (const br of this.breakables) {
       if (br.broken) continue;
       if (
-        Math.hypot(br.x - this.heroX, br.z - this.heroZ) <= FROST_MAGE.novaRadius &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, br.x, br.z, this.doorUnlocked, 0.05)
+        Math.hypot(br.x - this.hero.x, br.z - this.hero.z) <= FROST_MAGE.novaRadius &&
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, br.x, br.z, this.doorUnlocked, 0.05)
       ) {
         this.breakProp(br);
       }
@@ -5169,7 +4779,7 @@ export class EmbervaultEngine {
 
   /** Phoenix Plume fire ring at a point (shared by Dash and Blink). */
   private triggerPhoenixRingAt(x: number, z: number): void {
-    const fireDmg = Math.max(8, Math.round(14 * (1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100)));
+    const fireDmg = Math.max(8, Math.round(14 * (1 + this.hero.atkUpgrades * 0.1 + this.hero.relicStats.atkPct / 100)));
     for (const e of this.enemies) {
       if (e.dead) continue;
       const edx = e.x - x;
@@ -5201,23 +4811,23 @@ export class EmbervaultEngine {
 
   /** Frost Mage mobility: instant short teleport along the move direction (or facing). */
   private performBlink(dirOverride?: { x: number; z: number }): void {
-    if (this.dashCooldown > 0 || this.dashTimer > 0) return;
+    if (this.hero.dashCooldown > 0 || this.hero.dashTimer > 0) return;
     // Direction priority: explicit (AI) > current move input (manual) > facing
-    let dirX = Math.sin(this.heroFacing);
-    let dirZ = Math.cos(this.heroFacing);
+    let dirX = Math.sin(this.hero.facing);
+    let dirZ = Math.cos(this.hero.facing);
     if (dirOverride) {
       dirX = dirOverride.x;
       dirZ = dirOverride.z;
-    } else if (this.controlMode === 'manual' && Math.hypot(this.moveInputX, this.moveInputZ) > 0.1) {
-      dirX = this.moveInputX;
-      dirZ = this.moveInputZ;
+    } else if (this.hero.controlMode === 'manual' && Math.hypot(this.hero.input.moveX, this.hero.input.moveZ) > 0.1) {
+      dirX = this.hero.input.moveX;
+      dirZ = this.hero.input.moveZ;
     }
     const len = Math.hypot(dirX, dirZ) || 1;
     dirX /= len;
     dirZ /= len;
 
-    const startX = this.heroX;
-    const startZ = this.heroZ;
+    const startX = this.hero.x;
+    const startZ = this.hero.z;
     let endX = startX;
     let endZ = startZ;
     const stepLen = 0.2;
@@ -5229,9 +4839,9 @@ export class EmbervaultEngine {
       endZ = tz;
     }
 
-    this.dashCooldown = Math.max(0.35, 1.1 * (1 - this.relicStats.dashCdPct / 100));
-    this.heroInvuln = Math.max(this.heroInvuln, 0.28);
-    if (this.hasUnique('phantom_dash_crit')) this.phantomCritTimer = 2.0;
+    this.hero.dashCooldown = Math.max(0.35, 1.1 * (1 - this.hero.relicStats.dashCdPct / 100));
+    this.hero.invuln = Math.max(this.hero.invuln, 0.28);
+    if (this.hero.hasUnique('phantom_dash_crit')) this.hero.phantomCritTimer = 2.0;
     this.audio.playBlink();
 
     const burst = (bx: number, bz: number, outward: boolean) => {
@@ -5253,31 +4863,17 @@ export class EmbervaultEngine {
       }
     };
     burst(startX, startZ, false);
-    if (this.hasUnique('phoenix_dash_nova')) this.triggerPhoenixRingAt(startX, startZ);
+    if (this.hero.hasUnique('phoenix_dash_nova')) this.triggerPhoenixRingAt(startX, startZ);
 
-    this.heroX = endX;
-    this.heroZ = endZ;
-    this.heroVx = 0;
-    this.heroVz = 0;
-    this.heroFacing = Math.atan2(dirX, dirZ);
-    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
+    this.hero.x = endX;
+    this.hero.z = endZ;
+    this.hero.vx = 0;
+    this.hero.vz = 0;
+    this.hero.facing = Math.atan2(dirX, dirZ);
+    this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
     burst(endX, endZ, true);
-    if (this.hasUnique('phoenix_dash_nova')) this.triggerPhoenixRingAt(endX, endZ);
+    if (this.hero.hasUnique('phoenix_dash_nova')) this.triggerPhoenixRingAt(endX, endZ);
     this.emitHud();
-  }
-
-  /** Frost Mage shield regeneration tick. */
-  private updateShield(dt: number): void {
-    this.timeSinceDamaged += dt;
-    if (!this.isMage()) return;
-    const maxShield = this.getEffectiveMaxShield();
-    if (this.shield >= maxShield) {
-      this.shield = maxShield;
-      return;
-    }
-    if (this.timeSinceDamaged < this.getShieldRegenDelay()) return;
-    const rate = maxShield / Math.max(0.1, this.getShieldRefillTime());
-    this.shield = Math.min(maxShield, this.shield + rate * dt);
   }
 
   private breakProp(br: BreakableEntity): void {
@@ -5285,11 +4881,11 @@ export class EmbervaultEngine {
     br.mesh.visible = false;
     this.audio.playCrateBreak();
 
-    if (this.relicStats.crateDmgPct > 0) {
-      const megaDmg = Math.round(15 * (1 + this.relicStats.crateDmgPct / 100));
+    if (this.hero.relicStats.crateDmgPct > 0) {
+      const megaDmg = Math.round(15 * (1 + this.hero.relicStats.crateDmgPct / 100));
       this.emitFloatingText(br.x, 1.35, br.z, `木箱粉碎 -${megaDmg}!`, 'crit');
     }
-    if (this.hasUnique('noodle_elixir_boost') && Math.random() < 0.28) {
+    if (this.hero.hasUnique('noodle_elixir_boost') && Math.random() < 0.28) {
       this.emitFloatingText(br.x, 1.75, br.z, '真香！泡麵魂!', 'relicOrange');
     }
 
@@ -5315,12 +4911,12 @@ export class EmbervaultEngine {
     }
 
     // Loot chance from crates/urns (boosted by Drop Rate)
-    const dropMult = 1 + this.relicStats.dropRatePct / 100;
+    const dropMult = 1 + this.hero.relicStats.dropRatePct / 100;
     if (Math.random() < 0.72) {
       const potChance = Math.min(0.45, 0.13 * dropMult);
       this.spawnLoot(br.x, br.z, Math.random() < potChance ? 'potion' : 'gold');
     }
-    if (this.hasUnique('starforged_treasure_sense') && Math.random() < 0.25) {
+    if (this.hero.hasUnique('starforged_treasure_sense') && Math.random() < 0.25) {
       this.spawnLoot(br.x + (Math.random() - 0.5) * 0.45, br.z + (Math.random() - 0.5) * 0.45, 'gold');
     }
     this.spawnRelicDrops(br.x, br.z, 'crate');
@@ -5332,14 +4928,14 @@ export class EmbervaultEngine {
     if (enemy.telegraph) {
       enemy.telegraph.group.visible = false;
     }
-    this.kills += 1;
-    this.floorKills += 1;
+    this.hero.kills += 1;
+    this.hero.floorKills += 1;
     if (enemy.isBoss) {
-      this.bossKills += 1;
+      this.hero.bossKills += 1;
     } else if (enemy.isElite) {
-      this.eliteKills += 1;
+      this.hero.eliteKills += 1;
     } else {
-      this.normalKills += 1;
+      this.hero.normalKills += 1;
     }
 
     if (enemy.isBoss) {
@@ -5400,9 +4996,9 @@ export class EmbervaultEngine {
       }
       this.spawnLoot(enemy.x, enemy.z, 'potion');
       this.spawnRelicDrops(enemy.x, enemy.z, 'boss');
-      if (this.relicStats.lifeOnKill > 0) {
-        const effMax = this.getEffectiveMaxHp();
-        this.hp = Math.min(effMax, this.hp + this.relicStats.lifeOnKill);
+      if (this.hero.relicStats.lifeOnKill > 0) {
+        const effMax = this.hero.getEffectiveMaxHp();
+        this.hero.hp = Math.min(effMax, this.hero.hp + this.hero.relicStats.lifeOnKill);
       }
       this.emitHud();
       return;
@@ -5568,15 +5164,15 @@ export class EmbervaultEngine {
     }
 
     // Relic on-kill bonuses (Life on Kill, Politeness flavor, Frying Pan coin, Syndicate 4pc gold rain)
-    if (this.relicStats.lifeOnKill > 0 && !this.isDead) {
-      const effMax = this.getEffectiveMaxHp();
-      if (this.hp < effMax) {
-        this.hp = Math.min(effMax, this.hp + this.relicStats.lifeOnKill);
+    if (this.hero.relicStats.lifeOnKill > 0 && !this.hero.isDead) {
+      const effMax = this.hero.getEffectiveMaxHp();
+      if (this.hero.hp < effMax) {
+        this.hero.hp = Math.min(effMax, this.hero.hp + this.hero.relicStats.lifeOnKill);
       }
     }
     if (
-      this.relicStats.politeness > 0 &&
-      Math.random() < Math.min(0.45, this.relicStats.politeness / 170)
+      this.hero.relicStats.politeness > 0 &&
+      Math.random() < Math.min(0.45, this.hero.relicStats.politeness / 170)
     ) {
       const lines = ['大哥太強了…', '甘拜下風！', '這什麼神裝！？', '英雄饒命啊…', '好痛好帥！'];
       const msg = lines[Math.floor(Math.random() * lines.length)];
@@ -5586,9 +5182,9 @@ export class EmbervaultEngine {
     const isSwarm = isSwarmEnemy(enemy.kind);
     const specialDropMult = enemy.isSpecialElite ? 1.2 : 1;
     const extraCoins =
-      (this.hasSet4pc('syndicate') ? 1 : 0) +
-      (this.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0) +
-      (enemy.isElite && this.hasUnique('starforged_treasure_sense') && Math.random() < 0.25 ? 2 : 0);
+      (this.hero.hasSet4pc('syndicate') ? 1 : 0) +
+      (this.hero.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0) +
+      (enemy.isElite && this.hero.hasUnique('starforged_treasure_sense') && Math.random() < 0.25 ? 2 : 0);
     const rawCoinDrops =
       ((isGuardianEnemy(enemy.kind) ? 3 : enemy.isElite ? 3 : isSwarm ? 0.65 : 1) + extraCoins) *
       specialDropMult;
@@ -5601,7 +5197,7 @@ export class EmbervaultEngine {
         'gold'
       );
     }
-    const dropMult = 1 + this.relicStats.dropRatePct / 100;
+    const dropMult = 1 + this.hero.relicStats.dropRatePct / 100;
     const basePotionChance = isGuardianEnemy(enemy.kind)
       ? 0.5
       : enemy.isElite
@@ -5633,12 +5229,12 @@ export class EmbervaultEngine {
     const dropped = rollRelicDrops(
       this.depth,
       source,
-      this.relicStats.dropRatePct,
+      this.hero.relicStats.dropRatePct,
       () => this.nextId++,
       extraDropMult
     );
     // Base angle points away from the hero so dropped relics pop outward instead of instantly landing on the player
-    const awayAngle = Math.atan2(z - this.heroZ, x - this.heroX);
+    const awayAngle = Math.atan2(z - this.hero.z, x - this.hero.x);
     dropped.forEach((relic, idx) => {
       const fanOffset =
         dropped.length > 1
@@ -5817,31 +5413,31 @@ export class EmbervaultEngine {
 
   private buildRunSummary(): RunSummary {
     return {
-      heroClass: this.heroClass,
+      heroClass: this.hero.classId,
       depth: this.depth,
       biomeName: this.dungeon.biome.name,
       durationSec: Math.max(1, Math.floor(this.runElapsedSec)),
-      totalGoldEarned: this.totalGoldEarned,
-      goldRemaining: this.gold,
-      totalKills: this.kills,
-      normalKills: this.normalKills,
-      eliteKills: this.eliteKills,
-      bossKills: this.bossKills,
-      upgradeLevel: this.getTotalUpgradeLevel(),
+      totalGoldEarned: this.hero.totalGoldEarned,
+      goldRemaining: this.hero.gold,
+      totalKills: this.hero.kills,
+      normalKills: this.hero.normalKills,
+      eliteKills: this.hero.eliteKills,
+      bossKills: this.hero.bossKills,
+      upgradeLevel: this.hero.getTotalUpgradeLevel(),
       // For the Frost Mage, "hpUpgrades" reports HP+shield upgrades and "armorUpgrades" reports shield-speed upgrades
-      hpUpgrades: this.isMage() ? this.hpShieldUpgrades : this.hpUpgrades,
-      atkUpgrades: this.atkUpgrades,
-      armorUpgrades: this.isMage() ? this.shieldSpeedUpgrades : this.armorUpgrades,
-      critUpgrades: this.critUpgrades,
-      maxHp: this.maxHp,
-      atkBonusPct: this.atkUpgrades * 10,
-      armorBonusPct: this.armorUpgrades * 10,
-      critBonusPct: this.critUpgrades * 2,
-      potionsUsed: this.potionsUsed,
-      potionsLeft: this.potions,
-      totalDamageDealt: this.totalDamageDealt,
-      critCount: this.critCount,
-      slainBy: this.slainBy,
+      hpUpgrades: this.hero.isMage() ? this.hero.hpShieldUpgrades : this.hero.hpUpgrades,
+      atkUpgrades: this.hero.atkUpgrades,
+      armorUpgrades: this.hero.isMage() ? this.hero.shieldSpeedUpgrades : this.hero.armorUpgrades,
+      critUpgrades: this.hero.critUpgrades,
+      maxHp: this.hero.maxHp,
+      atkBonusPct: this.hero.atkUpgrades * 10,
+      armorBonusPct: this.hero.armorUpgrades * 10,
+      critBonusPct: this.hero.critUpgrades * 2,
+      potionsUsed: this.hero.potionsUsed,
+      potionsLeft: this.hero.potions,
+      totalDamageDealt: this.hero.totalDamageDealt,
+      critCount: this.hero.critCount,
+      slainBy: this.hero.slainBy,
     };
   }
 
@@ -5852,29 +5448,29 @@ export class EmbervaultEngine {
     sourceLabel = '地城怪物',
     attacker?: EnemyEntity
   ): void {
-    if (this.isDead || this.heroInvuln > 0 || this.transitionState !== 'none') return;
+    if (this.hero.isDead || this.hero.invuln > 0 || this.transitionState !== 'none') return;
 
     const isSwarmHit = Boolean(attacker && isSwarmEnemy(attacker.kind));
-    const effMaxHp = this.getEffectiveMaxHp();
+    const effMaxHp = this.hero.getEffectiveMaxHp();
 
     // Relic Block Chance: completely negate incoming damage
-    if (this.relicStats.blockPct > 0 && Math.random() * 100 < this.relicStats.blockPct) {
-      const hasPan = this.hasUnique('frying_pan_bonk');
-      this.heroInvuln = isSwarmHit ? 0.14 : 0.38;
+    if (this.hero.relicStats.blockPct > 0 && Math.random() * 100 < this.hero.relicStats.blockPct) {
+      const hasPan = this.hero.hasUnique('frying_pan_bonk');
+      this.hero.invuln = isSwarmHit ? 0.14 : 0.38;
       this.audio.playBlock(hasPan);
       this.emitFloatingText(
-        this.heroX,
+        this.hero.x,
         1.9,
-        this.heroZ,
+        this.hero.z,
         hasPan ? '噹！神聖格擋!' : 'BLOCK!',
         'block'
       );
       for (let i = 0; i < 12; i++) {
         const a = (i / 12) * Math.PI * 2;
         this.spawnParticle(
-          this.heroX,
+          this.hero.x,
           0.95,
-          this.heroZ,
+          this.hero.z,
           Math.cos(a) * 3.4,
           1.4 + Math.random() * 1.4,
           Math.sin(a) * 3.4,
@@ -5886,13 +5482,13 @@ export class EmbervaultEngine {
       }
 
       // Unique: Eternal Aegis counter-shockwave & heal on block
-      if (this.hasUnique('aegis_block_counter')) {
-        this.hp = Math.min(effMaxHp, this.hp + 3);
-        this.emitFloatingText(this.heroX, 2.25, this.heroZ, '+3 HP 聖盾反震', 'heal');
+      if (this.hero.hasUnique('aegis_block_counter')) {
+        this.hero.hp = Math.min(effMaxHp, this.hero.hp + 3);
+        this.emitFloatingText(this.hero.x, 2.25, this.hero.z, '+3 HP 聖盾反震', 'heal');
         for (const e of this.enemies) {
           if (e.dead) continue;
-          const edx = e.x - this.heroX;
-          const edz = e.z - this.heroZ;
+          const edx = e.x - this.hero.x;
+          const edz = e.z - this.hero.z;
           const edist = Math.hypot(edx, edz);
           if (edist <= 3.4) {
             e.vx += (edx / (edist || 1)) * 7.5;
@@ -5904,7 +5500,7 @@ export class EmbervaultEngine {
 
       // Unique: Frying Pan bonus coin pop on block
       if (hasPan && Math.random() < 0.15) {
-        this.spawnLoot(this.heroX + (Math.random() - 0.5) * 0.6, this.heroZ + (Math.random() - 0.5) * 0.6, 'gold');
+        this.spawnLoot(this.hero.x + (Math.random() - 0.5) * 0.6, this.hero.z + (Math.random() - 0.5) * 0.6, 'gold');
       }
 
       this.emitHud();
@@ -5912,34 +5508,34 @@ export class EmbervaultEngine {
     }
 
     // Armor % reduction + Flat Relic Damage Reduction (always minimum 1 HP per hit)
-    const defMult = Math.max(0.5, 1 - this.armorUpgrades * 0.1);
+    const defMult = Math.max(0.5, 1 - this.hero.armorUpgrades * 0.1);
     const titanFlat =
-      this.hasUnique('titan_low_hp_fury') && this.hp / Math.max(1, effMaxHp) < 0.4 ? 2 : 0;
-    const alchemistFlat = this.alchemistShieldTimer > 0 ? 2 : 0;
-    const flatReduce = this.relicStats.damageReduction + titanFlat + alchemistFlat;
+      this.hero.hasUnique('titan_low_hp_fury') && this.hero.hp / Math.max(1, effMaxHp) < 0.4 ? 2 : 0;
+    const alchemistFlat = this.hero.alchemistShieldTimer > 0 ? 2 : 0;
+    const flatReduce = this.hero.relicStats.damageReduction + titanFlat + alchemistFlat;
     const actualDamage = Math.max(1, Math.round(amount * defMult) - flatReduce);
 
-    const dx = this.heroX - sourceX;
-    const dz = this.heroZ - sourceZ;
+    const dx = this.hero.x - sourceX;
+    const dz = this.hero.z - sourceZ;
     const dist = Math.hypot(dx, dz) || 1;
 
     // Frost Mage: the shield absorbs damage first, HP only takes the remainder
     let shieldAbsorbed = 0;
     let hpDamage = actualDamage;
-    if (this.isMage() && this.shield > 0) {
-      const absorb = Math.min(this.shield, actualDamage);
-      this.shield = Math.max(0, this.shield - absorb);
+    if (this.hero.isMage() && this.hero.shield > 0) {
+      const absorb = Math.min(this.hero.shield, actualDamage);
+      this.hero.shield = Math.max(0, this.hero.shield - absorb);
       hpDamage = Math.max(0, actualDamage - Math.ceil(absorb));
       shieldAbsorbed = actualDamage - hpDamage;
-      if (this.shield <= 0) this.audio.playShieldBreak();
+      if (this.hero.shield <= 0) this.audio.playShieldBreak();
     }
-    this.timeSinceDamaged = 0;
+    this.hero.timeSinceDamaged = 0;
 
-    this.hp = Math.max(0, this.hp - hpDamage);
+    this.hero.hp = Math.max(0, this.hero.hp - hpDamage);
     // Swarm critters use a brief invuln window so their 2/sec rapid chip bites (-1, -1, -2, -2) land cleanly
-    this.heroInvuln = isSwarmHit ? 0.14 : 0.72;
-    this.heroHitFlash = isSwarmHit ? 0.1 : 0.18;
-    this.heroHitShieldOnly = hpDamage <= 0;
+    this.hero.invuln = isSwarmHit ? 0.14 : 0.72;
+    this.hero.hitFlash = isSwarmHit ? 0.1 : 0.18;
+    this.hero.hitShieldOnly = hpDamage <= 0;
     this.audio.playPlayerHurt();
     this.addScreenShake(isSwarmHit ? 0.08 : 0.24, isSwarmHit ? 0.08 : 0.18);
     const labelJitterX = isSwarmHit ? (Math.random() - 0.5) * 0.55 : 0;
@@ -5947,49 +5543,49 @@ export class EmbervaultEngine {
     const labelY = isSwarmHit ? 1.6 + Math.random() * 0.35 : 1.8;
     if (shieldAbsorbed > 0) {
       this.emitFloatingText(
-        this.heroX + labelJitterX - 0.15,
+        this.hero.x + labelJitterX - 0.15,
         labelY + (hpDamage > 0 ? 0.3 : 0),
-        this.heroZ + labelJitterZ,
+        this.hero.z + labelJitterZ,
         `-${shieldAbsorbed}`,
         'shieldHit'
       );
     }
     if (hpDamage > 0) {
       this.emitFloatingText(
-        this.heroX + labelJitterX,
+        this.hero.x + labelJitterX,
         labelY,
-        this.heroZ + labelJitterZ,
+        this.hero.z + labelJitterZ,
         `-${hpDamage}`,
         'playerHit'
       );
     }
 
     // Relic Thorns: reflect fixed damage to melee attacker
-    if (attacker && !attacker.dead && this.relicStats.thorns > 0) {
+    if (attacker && !attacker.dead && this.hero.relicStats.thorns > 0) {
       this.applyBonusEnemyDamage(
         attacker,
-        this.relicStats.thorns,
-        `荊棘 -${this.relicStats.thorns}`,
+        this.hero.relicStats.thorns,
+        `荊棘 -${this.hero.relicStats.thorns}`,
         'info',
         0x7eff9b
       );
     }
 
     // Unique: Eclipse Mirror — reflect 150% of damage taken as arcane pulse to nearby enemies
-    if (this.hasUnique('eclipse_reflect_beam')) {
+    if (this.hero.hasUnique('eclipse_reflect_beam')) {
       const refDmg = Math.max(4, Math.round(actualDamage * 1.5));
       for (const e of this.enemies) {
         if (e.dead) continue;
-        if (Math.hypot(e.x - this.heroX, e.z - this.heroZ) <= 3.8) {
+        if (Math.hypot(e.x - this.hero.x, e.z - this.hero.z) <= 3.8) {
           this.applyBonusEnemyDamage(e, refDmg, `蝕月反衝 -${refDmg}`, 'info', 0xc88cff);
         }
       }
       for (let i = 0; i < 14; i++) {
         const a = (i / 14) * Math.PI * 2;
         this.spawnParticle(
-          this.heroX,
+          this.hero.x,
           0.85,
-          this.heroZ,
+          this.hero.z,
           Math.cos(a) * 5.2,
           0.9 + Math.random(),
           Math.sin(a) * 5.2,
@@ -6002,22 +5598,22 @@ export class EmbervaultEngine {
     }
 
     // Unique: Bathhouse Rubber Duck — loud "啾！" knockback + 20% chance to heal 2 HP
-    if (this.hasUnique('rubber_duck_squeak') && this.hp > 0) {
+    if (this.hero.hasUnique('rubber_duck_squeak') && this.hero.hp > 0) {
       const duckHeal = Math.random() < 0.2;
       if (duckHeal) {
-        this.hp = Math.min(effMaxHp, this.hp + 2);
+        this.hero.hp = Math.min(effMaxHp, this.hero.hp + 2);
       }
       this.emitFloatingText(
-        this.heroX,
+        this.hero.x,
         2.2,
-        this.heroZ,
+        this.hero.z,
         duckHeal ? '啾！+2 HP' : '啾！',
         duckHeal ? 'heal' : 'relicYellow'
       );
       for (const e of this.enemies) {
         if (e.dead) continue;
-        const edx = e.x - this.heroX;
-        const edz = e.z - this.heroZ;
+        const edx = e.x - this.hero.x;
+        const edz = e.z - this.hero.z;
         const edist = Math.hypot(edx, edz);
         if (edist <= 3.5) {
           const push = e.isBoss ? 1.8 : 7.5;
@@ -6028,9 +5624,9 @@ export class EmbervaultEngine {
       for (let i = 0; i < 10; i++) {
         const a = (i / 10) * Math.PI * 2;
         this.spawnParticle(
-          this.heroX,
+          this.hero.x,
           0.95,
-          this.heroZ,
+          this.hero.z,
           Math.cos(a) * 3.8,
           1.6 + Math.random() * 1.4,
           Math.sin(a) * 3.8,
@@ -6043,35 +5639,35 @@ export class EmbervaultEngine {
     }
 
     const kbForce = isSwarmHit ? 1.15 : 5.2;
-    this.heroVx += (dx / dist) * kbForce;
-    this.heroVz += (dz / dist) * kbForce;
+    this.hero.vx += (dx / dist) * kbForce;
+    this.hero.vz += (dz / dist) * kbForce;
 
     // Auto-heal trigger in autonomous mode if low HP
-    const healThreshold = this.getAutoHealThreshold(effMaxHp);
-    if (this.controlMode === 'auto' && this.hp > 0 && this.hp <= healThreshold && this.potions > 0) {
+    const healThreshold = this.hero.getAutoHealThreshold(effMaxHp);
+    if (this.hero.controlMode === 'auto' && this.hero.hp > 0 && this.hero.hp <= healThreshold && this.hero.potions > 0) {
       this.usePotion();
     }
 
     // Unique: Shattered Chronos Hourglass — cheat death once per floor!
     if (
-      this.hp <= 0 &&
-      this.hasUnique('chronos_cheat_death') &&
-      !this.chronosUsedThisFloor
+      this.hero.hp <= 0 &&
+      this.hero.hasUnique('chronos_cheat_death') &&
+      !this.hero.chronosUsedThisFloor
     ) {
-      this.chronosUsedThisFloor = true;
-      this.hp = this.isMage()
+      this.hero.chronosUsedThisFloor = true;
+      this.hero.hp = this.hero.isMage()
         ? Math.max(1, Math.round(effMaxHp * 0.2))
         : Math.max(10, Math.round(effMaxHp * 0.2));
-      if (this.isMage()) this.shield = this.getEffectiveMaxShield();
-      this.heroInvuln = 1.65;
+      if (this.hero.isMage()) this.hero.shield = this.hero.getEffectiveMaxShield();
+      this.hero.invuln = 1.65;
       this.audio.playUpgrade();
       this.addScreenShake(0.32, 0.25);
       this.pushBanner('時光砂漏觸發！', '時間凝滯 · 逆轉死亡');
-      this.emitFloatingText(this.heroX, 2.2, this.heroZ, 'TIME REWIND!', 'relicOrange');
+      this.emitFloatingText(this.hero.x, 2.2, this.hero.z, 'TIME REWIND!', 'relicOrange');
       for (const e of this.enemies) {
         if (e.dead) continue;
-        const edx = e.x - this.heroX;
-        const edz = e.z - this.heroZ;
+        const edx = e.x - this.hero.x;
+        const edz = e.z - this.hero.z;
         const edist = Math.hypot(edx, edz);
         if (edist < 4.5) {
           e.vx += (edx / (edist || 1)) * 10;
@@ -6081,9 +5677,9 @@ export class EmbervaultEngine {
       for (let i = 0; i < 24; i++) {
         const a = (i / 24) * Math.PI * 2;
         this.spawnParticle(
-          this.heroX,
+          this.hero.x,
           0.9,
-          this.heroZ,
+          this.hero.z,
           Math.cos(a) * 4.5,
           1.8 + Math.random() * 2.0,
           Math.sin(a) * 4.5,
@@ -6097,19 +5693,19 @@ export class EmbervaultEngine {
       return;
     }
 
-    if (this.hp <= 0) {
-      this.isDead = true;
+    if (this.hero.hp <= 0) {
+      this.hero.isDead = true;
       this.requestSave('death');
-      this.slainBy = sourceLabel;
+      this.hero.slainBy = sourceLabel;
       // Downed: open the hero's portal right where they fell (replaces any older one)
-      this.placeHeroPortal(this.heroX, this.heroZ, this.depth);
+      this.placeHeroPortal(this.hero.x, this.hero.z, this.depth);
       this.audio.playPortal();
       for (let i = 0; i < 20; i++) {
         const a = (i / 20) * Math.PI * 2;
         this.spawnParticle(
-          this.heroX + Math.cos(a) * 0.35,
+          this.hero.x + Math.cos(a) * 0.35,
           0.7,
-          this.heroZ + Math.sin(a) * 0.35,
+          this.hero.z + Math.sin(a) * 0.35,
           Math.cos(a) * 2.4,
           2.2 + Math.random() * 1.4,
           Math.sin(a) * 2.4,
@@ -6119,13 +5715,13 @@ export class EmbervaultEngine {
           -0.4
         );
       }
-      this.heroVx = 0;
-      this.heroVz = 0;
-      this.dashTimer = 0;
-      this.keysPressed.clear();
-      this.heroRig.body.rotation.z = Math.PI * 0.46;
-      this.heroRig.body.position.y = 0.22;
-      for (const m of this.heroRig.flashMaterials) {
+      this.hero.vx = 0;
+      this.hero.vz = 0;
+      this.hero.dashTimer = 0;
+      this.hero.input.keys.clear();
+      this.hero.rig.body.rotation.z = Math.PI * 0.46;
+      this.hero.rig.body.position.y = 0.22;
+      for (const m of this.hero.rig.flashMaterials) {
         m.emissive.setHex(0x000000);
         m.emissiveIntensity = 0;
       }
@@ -6166,31 +5762,32 @@ export class EmbervaultEngine {
   }
 
   private emitHud(): void {
+    const lh = this.localHero;
     const activeBoss = this.enemies.find(
       (e) =>
         e.isBoss &&
         !e.dead &&
-        Math.hypot(e.x - this.heroX, e.z - this.heroZ) < 15.5
+        Math.hypot(e.x - lh.x, e.z - lh.z) < 15.5
     );
 
     this.callbacks.onHudChange({
-      hp: this.hp,
-      maxHp: this.getEffectiveMaxHp(),
-      baseMaxHp: this.maxHp,
-      maxHpCap: this.maxHpCap,
-      potions: this.potions,
+      hp: lh.hp,
+      maxHp: lh.getEffectiveMaxHp(),
+      baseMaxHp: lh.maxHp,
+      maxHpCap: lh.maxHpCap,
+      potions: lh.potions,
       hasKey: this.hasKey,
       doorUnlocked: this.doorUnlocked,
       depth: this.depth,
       biomeName: this.inTown ? '庇護小鎮' : this.dungeon.biome.name,
-      gold: this.gold,
-      kills: this.kills,
-      atkBonusPct: this.atkUpgrades * 10,
-      armorBonusPct: this.armorUpgrades * 10,
-      armorMaxPct: this.maxArmorUpgrades * 10,
-      critBonusPct: this.critUpgrades * 2,
-      critMaxPct: this.maxCritUpgrades * 2,
-      upgradeLevel: this.getTotalUpgradeLevel(),
+      gold: lh.gold,
+      kills: lh.kills,
+      atkBonusPct: lh.atkUpgrades * 10,
+      armorBonusPct: lh.armorUpgrades * 10,
+      armorMaxPct: lh.maxArmorUpgrades * 10,
+      critBonusPct: lh.critUpgrades * 2,
+      critMaxPct: lh.maxCritUpgrades * 2,
+      upgradeLevel: lh.getTotalUpgradeLevel(),
       upgradeCost: this.getUpgradeCost(),
       potionCost: this.getPotionCost(),
       nearAltar: this.isHeroNearAltar(),
@@ -6201,14 +5798,14 @@ export class EmbervaultEngine {
       nearPortal: this.isHeroNearPortal(),
       nearAngel: this.isHeroNearAngel(),
       townReturnCost: this.getTownReturnCost(),
-      angelBuff: this.angelBuff ? { ...this.angelBuff } : null,
-      controlMode: this.controlMode,
+      angelBuff: lh.angelBuff ? { ...lh.angelBuff } : null,
+      controlMode: lh.controlMode,
       soundOn: this.audio.isEnabled(),
-      dashReady: this.dashCooldown <= 0,
-      pommelCooldown: this.pommelCooldown,
-      pommelMaxCooldown: this.pommelMaxCooldown,
+      dashReady: lh.dashCooldown <= 0,
+      pommelCooldown: lh.pommelCooldown,
+      pommelMaxCooldown: lh.pommelMaxCooldown,
       fadeOpacity: this.fadeOpacity,
-      aiStatus: this.aiStatus,
+      aiStatus: lh.ai.status,
       boss: activeBoss
         ? {
             name: activeBoss.bossName ?? 'DUNGEON BOSS',
@@ -6218,48 +5815,35 @@ export class EmbervaultEngine {
             state: activeBoss.bossState ?? 'chase',
           }
         : null,
-      isDead: this.isDead,
-      runSummary: this.isDead ? this.buildRunSummary() : null,
-      equippedRelics: [...this.equippedRelics],
-      relicBag: [...this.relicBag],
-      relicBagCap: this.relicBagCap,
+      isDead: lh.isDead,
+      runSummary: lh.isDead ? this.buildRunSummary() : null,
+      equippedRelics: [...lh.equippedRelics],
+      relicBag: [...lh.relicBag],
+      relicBagCap: lh.relicBagCap,
       nearStash: this.isHeroNearStash(),
-      stashOpen: this.stashOpen,
-      stash: this.stashOpen ? [...this.stash] : [],
-      stashCount: this.stash.length,
+      stashOpen: lh.stashOpen,
+      stash: lh.stashOpen ? [...lh.stash] : [],
+      stashCount: lh.stash.length,
       stashCap: STASH_CAP,
-      relicStats: this.relicStats,
-      activeSets: this.relicStats.activeSets,
-      discoveredRelicIds: Array.from(this.discoveredRelicIds),
-      heroClass: this.heroClass,
-      shield: Math.round(this.shield),
-      maxShield: this.getEffectiveMaxShield(),
+      relicStats: lh.relicStats,
+      activeSets: lh.relicStats.activeSets,
+      discoveredRelicIds: Array.from(lh.discoveredRelicIds),
+      heroClass: lh.classId,
+      shield: Math.round(lh.shield),
+      maxShield: lh.getEffectiveMaxShield(),
       shieldRegenerating:
-        this.isMage() &&
-        this.shield < this.getEffectiveMaxShield() &&
-        this.timeSinceDamaged >= this.getShieldRegenDelay(),
-      skillName: HERO_CLASSES[this.heroClass].skillName,
-      mobilityName: HERO_CLASSES[this.heroClass].mobilityName,
+        lh.isMage() &&
+        lh.shield < lh.getEffectiveMaxShield() &&
+        lh.timeSinceDamaged >= lh.getShieldRegenDelay(),
+      skillName: HERO_CLASSES[lh.classId].skillName,
+      mobilityName: HERO_CLASSES[lh.classId].mobilityName,
       upgradeOptions: this.getUpgradeOptions(),
     });
   }
 
-  /** HP at or below which the auto-pilot drinks a potion. */
-  private getAutoHealThreshold(effMaxHp: number): number {
-    if (this.isMage()) return Math.max(4, Math.floor(effMaxHp * 0.5));
-    return Math.max(20, Math.floor(effMaxHp * 0.45));
-  }
-
-  private getShieldRegenDelay(): number {
-    return FROST_MAGE.shieldDelayBase * getShieldSpeedFactor(this.shieldSpeedUpgrades);
-  }
-
-  private getShieldRefillTime(): number {
-    return FROST_MAGE.shieldRefillBase * getShieldSpeedFactor(this.shieldSpeedUpgrades);
-  }
-
   private emitMinimap(): void {
-    const heroG = worldToGrid(this.heroX, this.heroZ);
+    const lh = this.localHero;
+    const heroG = worldToGrid(lh.x, lh.z);
     this.callbacks.onMinimapUpdate({
       width: this.dungeon.width,
       height: this.dungeon.height,
@@ -6426,7 +6010,7 @@ export class EmbervaultEngine {
     goalGx: number,
     goalGz: number
   ): Array<{ gx: number; gz: number }> {
-    const start = worldToWalkableGrid(this.dungeon, this.heroX, this.heroZ, this.doorUnlocked);
+    const start = worldToWalkableGrid(this.dungeon, this.hero.x, this.hero.z, this.doorUnlocked);
     const path = findGridPath(
       this.dungeon,
       start.gx,
@@ -6440,8 +6024,8 @@ export class EmbervaultEngine {
       const firstW = gridToWorld(path[0].gx, path[0].gz);
       const curW = gridToWorld(start.gx, start.gz);
       if (
-        Math.hypot(this.heroX - curW.x, this.heroZ - curW.z) > 0.3 &&
-        !hasLineOfSight(this.dungeon, this.heroX, this.heroZ, firstW.x, firstW.z, this.doorUnlocked, 0.42)
+        Math.hypot(this.hero.x - curW.x, this.hero.z - curW.z) > 0.3 &&
+        !hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, firstW.x, firstW.z, this.doorUnlocked, 0.42)
       ) {
         path.unshift({ gx: start.gx, gz: start.gz });
       }
@@ -6455,8 +6039,8 @@ export class EmbervaultEngine {
     while (path.length > 0) {
       const nextTile = path[0];
       const targetW = gridToWorld(nextTile.gx, nextTile.gz);
-      const dx = targetW.x - this.heroX;
-      const dz = targetW.z - this.heroZ;
+      const dx = targetW.x - this.hero.x;
+      const dz = targetW.z - this.hero.z;
       const dist = Math.hypot(dx, dz);
       if (dist < 0.36) {
         path.shift();
@@ -6468,10 +6052,10 @@ export class EmbervaultEngine {
   }
 
   private nudgeHeroToClearTile(): void {
-    const cur = worldToGrid(this.heroX, this.heroZ);
+    const cur = worldToGrid(this.hero.x, this.hero.z);
     const targetTile =
-      this.aiPath.length > 0 && isTileWalkable(this.dungeon, this.aiPath[0].gx, this.aiPath[0].gz, this.doorUnlocked)
-        ? this.aiPath[0]
+      this.hero.ai.path.length > 0 && isTileWalkable(this.dungeon, this.hero.ai.path[0].gx, this.hero.ai.path[0].gz, this.doorUnlocked)
+        ? this.hero.ai.path[0]
         : null;
 
     const candidates: Array<{ gx: number; gz: number }> = [];
@@ -6494,13 +6078,13 @@ export class EmbervaultEngine {
     for (const c of candidates) {
       const cw = gridToWorld(c.gx, c.gz);
       if (this.canMoveTo(cw.x, cw.z, 0.36)) {
-        const dx = cw.x - this.heroX;
-        const dz = cw.z - this.heroZ;
+        const dx = cw.x - this.hero.x;
+        const dz = cw.z - this.hero.z;
         const d = Math.hypot(dx, dz);
         if (d > 0.05) {
           const step = Math.min(d, 0.55);
-          this.heroX += (dx / d) * step;
-          this.heroZ += (dz / d) * step;
+          this.hero.x += (dx / d) * step;
+          this.hero.z += (dz / d) * step;
           return;
         }
       }
@@ -6510,12 +6094,12 @@ export class EmbervaultEngine {
   private tryAutoTravelDash(moveX: number, moveZ: number, distToGoal: number): void {
     // Warrior dash travels ~2.15 units; the mage's Blink teleports 5 units, so every
     // safety check below scales with the actual travel distance.
-    const mage = this.isMage();
+    const mage = this.hero.isMage();
     const travel = mage ? FROST_MAGE.blinkDistance : 2.15;
     if (
-      this.dashCooldown > 0 ||
-      this.dashTimer > 0 ||
-      this.aiForcePathTimer > 0 ||
+      this.hero.dashCooldown > 0 ||
+      this.hero.dashTimer > 0 ||
+      this.hero.ai.forcePathTimer > 0 ||
       distToGoal < (mage ? travel + 1.5 : 3.4) // never blink past the key / altar / stairs
     ) {
       return;
@@ -6528,7 +6112,7 @@ export class EmbervaultEngine {
 
     // Mage: only blink when already heading that way (within ~15°), so it never zig-zags
     if (mage) {
-      let diff = Math.atan2(nx, nz) - this.heroFacing;
+      let diff = Math.atan2(nx, nz) - this.hero.facing;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
       if (Math.abs(diff) > 0.26) return;
@@ -6536,23 +6120,23 @@ export class EmbervaultEngine {
 
     // Only dash in confirmed safe zones (no nearby enemies or active projectiles)
     for (const e of this.enemies) {
-      if (!e.dead && Math.hypot(e.x - this.heroX, e.z - this.heroZ) < 9.0) {
+      if (!e.dead && Math.hypot(e.x - this.hero.x, e.z - this.hero.z) < 9.0) {
         return;
       }
     }
     for (const p of this.projectiles) {
-      if (Math.hypot(p.x - this.heroX, p.z - this.heroZ) < 8.0) {
+      if (Math.hypot(p.x - this.hero.x, p.z - this.hero.z) < 8.0) {
         return;
       }
     }
 
     // Ensure a completely clear straight corridor ahead for the whole travel distance
-    const checkEndX = this.heroX + nx * (travel + 0.4);
-    const checkEndZ = this.heroZ + nz * (travel + 0.4);
-    const landX = this.heroX + nx * travel;
-    const landZ = this.heroZ + nz * travel;
+    const checkEndX = this.hero.x + nx * (travel + 0.4);
+    const checkEndZ = this.hero.z + nz * (travel + 0.4);
+    const landX = this.hero.x + nx * travel;
+    const landZ = this.hero.z + nz * travel;
     if (
-      !hasLineOfSight(this.dungeon, this.heroX, this.heroZ, checkEndX, checkEndZ, this.doorUnlocked, 0.44) ||
+      !hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, checkEndX, checkEndZ, this.doorUnlocked, 0.44) ||
       !this.canMoveTo(landX, landZ, 0.42)
     ) {
       return;
@@ -6565,7 +6149,7 @@ export class EmbervaultEngine {
       }
     }
 
-    this.heroFacing = Math.atan2(nx, nz);
+    this.hero.facing = Math.atan2(nx, nz);
     this.performDash();
   }
 
@@ -6577,35 +6161,35 @@ export class EmbervaultEngine {
       return { moveX: fallback.moveX, moveZ: fallback.moveZ, distToGoal: 0 };
     }
     const endW = gridToWorld(path[path.length - 1].gx, path[path.length - 1].gz);
-    const distToGoal = Math.hypot(endW.x - this.heroX, endW.z - this.heroZ);
+    const distToGoal = Math.hypot(endW.x - this.hero.x, endW.z - this.hero.z);
 
     // Look up to 3 tiles ahead along the A* path for a clean straight dash vector
     const maxLook = Math.min(path.length - 1, 2);
     for (let i = maxLook; i >= 0; i--) {
       const tw = gridToWorld(path[i].gx, path[i].gz);
-      const dx = tw.x - this.heroX;
-      const dz = tw.z - this.heroZ;
+      const dx = tw.x - this.hero.x;
+      const dz = tw.z - this.hero.z;
       const d = Math.hypot(dx, dz);
       if (
         d > 1.2 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, tw.x, tw.z, this.doorUnlocked, 0.44)
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, tw.x, tw.z, this.doorUnlocked, 0.44)
       ) {
         const dirX = dx / d;
         const dirZ = dz / d;
-        if (!this.isMage()) return { moveX: dirX, moveZ: dirZ, distToGoal };
+        if (!this.hero.isMage()) return { moveX: dirX, moveZ: dirZ, distToGoal };
         // Mage: Blink only along a genuinely straight stretch of the path. Report how far the
         // path keeps going in this exact direction (waypoints within 0.6 of the line, in LOS),
         // so tryAutoTravelDash refuses to blink around bends.
         let straightRun = 0;
         for (const wp of path) {
           const ww = gridToWorld(wp.gx, wp.gz);
-          const vx = ww.x - this.heroX;
-          const vz = ww.z - this.heroZ;
+          const vx = ww.x - this.hero.x;
+          const vz = ww.z - this.hero.z;
           const along = vx * dirX + vz * dirZ;
           const off = Math.abs(vx * dirZ - vz * dirX);
           if (along < 0) continue;
           if (off > 0.6) break;
-          if (!hasLineOfSight(this.dungeon, this.heroX, this.heroZ, ww.x, ww.z, this.doorUnlocked, 0.44)) break;
+          if (!hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, ww.x, ww.z, this.doorUnlocked, 0.44)) break;
           straightRun = Math.max(straightRun, along);
         }
         return { moveX: dirX, moveZ: dirZ, distToGoal: Math.min(distToGoal, straightRun) };
@@ -6615,19 +6199,19 @@ export class EmbervaultEngine {
   }
 
   private triggerStuckRecovery(emergencyWarp: boolean): void {
-    this.aiStrafeSign *= -1;
-    this.aiPath = [];
-    this.aiCombatPath = [];
-    this.aiRepathTimer = 0;
-    this.aiCombatRepathTimer = 0;
-    this.aiForcePathTimer = 2.0;
+    this.hero.ai.strafeSign *= -1;
+    this.hero.ai.path = [];
+    this.hero.ai.combatPath = [];
+    this.hero.ai.repathTimer = 0;
+    this.hero.ai.combatRepathTimer = 0;
+    this.hero.ai.forcePathTimer = 2.0;
 
-    if (this.aiCurrentTargetId !== null && this.aiUnstuckAttempts >= 1) {
+    if (this.hero.ai.currentTargetId !== null && this.hero.ai.unstuckAttempts >= 1) {
       // Temporarily ignore a deadlocked target while repositioning around obstacles
-      this.aiSkipEnemyUntil.set(this.aiCurrentTargetId, this.elapsed + 4.5);
+      this.hero.ai.skipEnemyUntil.set(this.hero.ai.currentTargetId, this.elapsed + 4.5);
     }
 
-    const heroG = worldToWalkableGrid(this.dungeon, this.heroX, this.heroZ, this.doorUnlocked);
+    const heroG = worldToWalkableGrid(this.dungeon, this.hero.x, this.hero.z, this.doorUnlocked);
 
     // Collect verified open escape tiles (room centers + nearby clear tiles 2-4 tiles away)
     const escapeCandidates: Array<{ gx: number; gz: number; score: number }> = [];
@@ -6635,7 +6219,7 @@ export class EmbervaultEngine {
       if (r.role === 'exit' && !this.doorUnlocked) continue;
       if (!isTileWalkable(this.dungeon, r.cx, r.cz, this.doorUnlocked)) continue;
       const rw = gridToWorld(r.cx, r.cz);
-      const d = Math.hypot(rw.x - this.heroX, rw.z - this.heroZ);
+      const d = Math.hypot(rw.x - this.hero.x, rw.z - this.hero.z);
       if (d > 1.8 && d < 18 && this.canMoveTo(rw.x, rw.z, 0.44)) {
         escapeCandidates.push({ gx: r.cx, gz: r.cz, score: Math.abs(d - 5.0) });
       }
@@ -6668,17 +6252,17 @@ export class EmbervaultEngine {
         );
         if (pathCheck.length > 0) {
           const dest = gridToWorld(c.gx, c.gz);
-          this.heroX = dest.x;
-          this.heroZ = dest.z;
-          this.heroVx = 0;
-          this.heroVz = 0;
-          this.aiProgressAnchorX = dest.x;
-          this.aiProgressAnchorZ = dest.z;
-          this.aiUnstuckAttempts = 0;
-          this.aiUnstuckTimer = 0;
-          this.aiUnstuckPath = [];
-          this.aiSkipEnemyUntil.clear();
-          this.aiStatus = 'Repositioning';
+          this.hero.x = dest.x;
+          this.hero.z = dest.z;
+          this.hero.vx = 0;
+          this.hero.vz = 0;
+          this.hero.ai.progressAnchorX = dest.x;
+          this.hero.ai.progressAnchorZ = dest.z;
+          this.hero.ai.unstuckAttempts = 0;
+          this.hero.ai.unstuckTimer = 0;
+          this.hero.ai.unstuckPath = [];
+          this.hero.ai.skipEnemyUntil.clear();
+          this.hero.ai.status = 'Repositioning';
           for (let i = 0; i < 12; i++) {
             const a = (i / 12) * Math.PI * 2;
             this.spawnParticle(
@@ -6698,7 +6282,7 @@ export class EmbervaultEngine {
         }
       }
       this.nudgeHeroToClearTile();
-      this.aiUnstuckAttempts = 0;
+      this.hero.ai.unstuckAttempts = 0;
       return;
     }
 
@@ -6706,9 +6290,9 @@ export class EmbervaultEngine {
     for (const c of escapeCandidates) {
       const p = this.buildSafeGridPath(c.gx, c.gz);
       if (p.length > 0) {
-        this.aiUnstuckPath = p;
-        this.aiUnstuckTimer = 1.6;
-        this.aiStatus = 'Repositioning';
+        this.hero.ai.unstuckPath = p;
+        this.hero.ai.unstuckTimer = 1.6;
+        this.hero.ai.status = 'Repositioning';
         return;
       }
     }
@@ -6726,12 +6310,12 @@ export class EmbervaultEngine {
     target: EnemyEntity,
     targetDist: number
   ): { moveX: number; moveZ: number } | null {
-    const dx = target.x - this.heroX;
-    const dz = target.z - this.heroZ;
+    const dx = target.x - this.hero.x;
+    const dz = target.z - this.hero.z;
     const shotLOS = hasLineOfSight(
       this.dungeon,
-      this.heroX,
-      this.heroZ,
+      this.hero.x,
+      this.hero.z,
       target.x,
       target.z,
       this.doorUnlocked,
@@ -6750,7 +6334,7 @@ export class EmbervaultEngine {
     let cn = 0;
     for (const e of this.enemies) {
       if (e.dead) continue;
-      const d = Math.hypot(e.x - this.heroX, e.z - this.heroZ);
+      const d = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
       const frozen = (e.frozenTimer ?? 0) > 0 || e.stunTimer > 0;
       if (d <= 4 && !frozen) within4 += 1;
       if (d <= 1.9 && !frozen) adjacent += 1;
@@ -6766,38 +6350,38 @@ export class EmbervaultEngine {
         closest = e;
       }
     }
-    const shieldBroken = this.getEffectiveMaxShield() > 0 && this.shield <= 0.5;
+    const shieldBroken = this.hero.getEffectiveMaxShield() > 0 && this.hero.shield <= 0.5;
     let castNova = false;
 
     // 1. Frost Nova
     if (
-      this.pommelCooldown <= 0 &&
+      this.hero.pommelCooldown <= 0 &&
       (within4 >= 3 || (shieldBroken && adjacent > 0) || bossWindup || swarmClose >= 2)
     ) {
       this.performFrostNova();
-      this.aiStatus = 'Frost Nova!';
+      this.hero.ai.status = 'Frost Nova!';
       castNova = true;
     }
 
     // 2. Blink out of a swarm / melee crowd when Nova is not available
     if (
       !castNova &&
-      this.pommelCooldown > 0 &&
-      this.dashCooldown <= 0 &&
+      this.hero.pommelCooldown > 0 &&
+      this.hero.dashCooldown <= 0 &&
       cn > 0 &&
       (swarmClose >= 2 || adjacent >= 2 || (shieldBroken && adjacent >= 1))
     ) {
-      const awayX = this.heroX - cx / cn;
-      const awayZ = this.heroZ - cz / cn;
+      const awayX = this.hero.x - cx / cn;
+      const awayZ = this.hero.z - cz / cn;
       const len = Math.hypot(awayX, awayZ);
-      const baseAng = len > 0.05 ? Math.atan2(awayX, awayZ) : this.heroFacing + Math.PI;
+      const baseAng = len > 0.05 ? Math.atan2(awayX, awayZ) : this.hero.facing + Math.PI;
       // Try straight away from the crowd first, then fan out
       for (const off of [0, 0.6, -0.6, 1.2, -1.2, 1.9, -1.9]) {
         const ex = Math.sin(baseAng + off);
         const ez = Math.cos(baseAng + off);
-        if (this.canMoveTo(this.heroX + ex * 2.5, this.heroZ + ez * 2.5, 0.4)) {
+        if (this.canMoveTo(this.hero.x + ex * 2.5, this.hero.z + ez * 2.5, 0.4)) {
           this.performBlink({ x: ex, z: ez });
-          this.aiStatus = 'Blinking Clear';
+          this.hero.ai.status = 'Blinking Clear';
           break;
         }
       }
@@ -6805,8 +6389,8 @@ export class EmbervaultEngine {
 
     // 3. Shoot the target when we have a clean shot
     if (shotLOS && targetDist <= FROST_MAGE.projectileRange + this.getEnemyHitRadius(target)) {
-      this.heroFacing = Math.atan2(dx, dz);
-      if (this.attackCooldown <= 0) this.performAttack();
+      this.hero.facing = Math.atan2(dx, dz);
+      if (this.hero.attackCooldown <= 0) this.performAttack();
     } else if (!shotLOS) {
       return null; // let the shared pathing bring us around the corner
     }
@@ -6816,19 +6400,19 @@ export class EmbervaultEngine {
       const l = Math.hypot(mx, mz) || 1;
       const nx = mx / l;
       const nz = mz / l;
-      if (this.canMoveTo(this.heroX + nx * 0.7, this.heroZ + nz * 0.7, 0.4)) return { moveX: nx, moveZ: nz };
+      if (this.canMoveTo(this.hero.x + nx * 0.7, this.hero.z + nz * 0.7, 0.4)) return { moveX: nx, moveZ: nz };
       return null;
     };
 
     if (closest && closestDist < 3) {
-      this.aiStatus = 'Kiting';
-      const ax = this.heroX - closest.x;
-      const az = this.heroZ - closest.z;
+      this.hero.ai.status = 'Kiting';
+      const ax = this.hero.x - closest.x;
+      const az = this.hero.z - closest.z;
       const l = Math.hypot(ax, az) || 1;
       const bx = ax / l;
       const bz = az / l;
-      const px = -bz * this.aiStrafeSign;
-      const pz = bx * this.aiStrafeSign;
+      const px = -bz * this.hero.ai.strafeSign;
+      const pz = bx * this.hero.ai.strafeSign;
       const step =
         tryDir(bx, bz) ??
         tryDir(bx + px, bz + pz) ??
@@ -6837,7 +6421,7 @@ export class EmbervaultEngine {
         tryDir(-px, -pz);
       if (step) return step;
       // Cornered: Blink sideways if possible, otherwise stand and shoot
-      if (this.dashCooldown <= 0) {
+      if (this.hero.dashCooldown <= 0) {
         this.performBlink({ x: px, z: pz });
       }
       return { moveX: 0, moveZ: 0 };
@@ -6845,7 +6429,7 @@ export class EmbervaultEngine {
 
     const l = targetDist || 1;
     if (targetDist > 7) {
-      this.aiStatus = target.isBoss ? `Battling ${target.bossName}` : 'Closing Distance';
+      this.hero.ai.status = target.isBoss ? `Battling ${target.bossName}` : 'Closing Distance';
       return { moveX: dx / l, moveZ: dz / l };
     }
     if (targetDist < 4.5) {
@@ -6854,64 +6438,64 @@ export class EmbervaultEngine {
     }
     // Comfortable range: light strafing so slow ranged shots and boss telegraphs miss
     return {
-      moveX: (-dz / l) * 0.3 * this.aiStrafeSign,
-      moveZ: (dx / l) * 0.3 * this.aiStrafeSign,
+      moveX: (-dz / l) * 0.3 * this.hero.ai.strafeSign,
+      moveZ: (dx / l) * 0.3 * this.hero.ai.strafeSign,
     };
   }
 
   private updateAI(dt: number): { moveX: number; moveZ: number } {
-    this.aiForcePathTimer = Math.max(0, this.aiForcePathTimer - dt);
+    this.hero.ai.forcePathTimer = Math.max(0, this.hero.ai.forcePathTimer - dt);
 
     // 0a. Macro Stuck Detector: if hero's XY/XZ position barely changes for 2.5s AND no enemy took damage,
     //     run a 2-stage unstuck recovery flow (Stage 1: detour around obstacle; Stage 2: clean reposition)!
     const anchorDist = Math.hypot(
-      this.heroX - this.aiProgressAnchorX,
-      this.heroZ - this.aiProgressAnchorZ
+      this.hero.x - this.hero.ai.progressAnchorX,
+      this.hero.z - this.hero.ai.progressAnchorZ
     );
-    const recentCombatDamage = this.elapsed - this.aiLastCombatDamageTime < 2.2;
+    const recentCombatDamage = this.elapsed - this.hero.ai.lastCombatDamageTime < 2.2;
     if (anchorDist > 1.35 || recentCombatDamage) {
-      this.aiProgressAnchorX = this.heroX;
-      this.aiProgressAnchorZ = this.heroZ;
-      this.aiNoProgressTimer = 0;
+      this.hero.ai.progressAnchorX = this.hero.x;
+      this.hero.ai.progressAnchorZ = this.hero.z;
+      this.hero.ai.noProgressTimer = 0;
       if (anchorDist > 1.8) {
-        this.aiUnstuckAttempts = 0;
+        this.hero.ai.unstuckAttempts = 0;
       }
     } else {
-      this.aiNoProgressTimer += dt;
-      if (this.aiNoProgressTimer >= 2.5) {
-        this.aiNoProgressTimer = 0;
-        this.aiUnstuckAttempts += 1;
-        this.triggerStuckRecovery(this.aiUnstuckAttempts >= 2);
+      this.hero.ai.noProgressTimer += dt;
+      if (this.hero.ai.noProgressTimer >= 2.5) {
+        this.hero.ai.noProgressTimer = 0;
+        this.hero.ai.unstuckAttempts += 1;
+        this.triggerStuckRecovery(this.hero.ai.unstuckAttempts >= 2);
       }
     }
 
     // 0b. Micro stuck watchdog: quick 0.55s snag check for doorway corners
-    this.aiStuckTimer += dt;
-    if (this.aiStuckTimer > 0.55) {
-      const progress = Math.hypot(this.heroX - this.aiLastCheckX, this.heroZ - this.aiLastCheckZ);
-      this.aiLastCheckX = this.heroX;
-      this.aiLastCheckZ = this.heroZ;
-      this.aiStuckTimer = 0;
+    this.hero.ai.stuckTimer += dt;
+    if (this.hero.ai.stuckTimer > 0.55) {
+      const progress = Math.hypot(this.hero.x - this.hero.ai.lastCheckX, this.hero.z - this.hero.ai.lastCheckZ);
+      this.hero.ai.lastCheckX = this.hero.x;
+      this.hero.ai.lastCheckZ = this.hero.z;
+      this.hero.ai.stuckTimer = 0;
       if (progress < 0.22 && !recentCombatDamage) {
-        this.aiStuckCount += 1;
-        this.aiCombatPath = [];
-        this.aiRepathTimer = 0;
-        this.aiCombatRepathTimer = 0;
-        this.aiForcePathTimer = 1.4;
-        this.aiStrafeSign *= -1;
-        if (this.aiStuckCount >= 2) {
+        this.hero.ai.stuckCount += 1;
+        this.hero.ai.combatPath = [];
+        this.hero.ai.repathTimer = 0;
+        this.hero.ai.combatRepathTimer = 0;
+        this.hero.ai.forcePathTimer = 1.4;
+        this.hero.ai.strafeSign *= -1;
+        if (this.hero.ai.stuckCount >= 2) {
           this.nudgeHeroToClearTile();
-          this.aiStuckCount = 0;
+          this.hero.ai.stuckCount = 0;
         }
-        this.aiPath = [];
+        this.hero.ai.path = [];
       } else {
-        this.aiStuckCount = 0;
+        this.hero.ai.stuckCount = 0;
       }
     }
 
     // 1. Auto-heal check
-    const healThreshold = this.getAutoHealThreshold(this.getEffectiveMaxHp());
-    if (this.hp <= healThreshold && this.potions > 0) {
+    const healThreshold = this.hero.getAutoHealThreshold(this.hero.getEffectiveMaxHp());
+    if (this.hero.hp <= healThreshold && this.hero.potions > 0) {
       this.usePotion();
     }
 
@@ -6919,16 +6503,16 @@ export class EmbervaultEngine {
     for (const e of this.enemies) {
       if (e.dead || !e.isBoss || e.bossState !== 'windup') continue;
       if (e.bossSkill === 'ranged_volley') {
-        const bdx = this.heroX - e.x;
-        const bdz = this.heroZ - e.z;
+        const bdx = this.hero.x - e.x;
+        const bdz = this.hero.z - e.z;
         const bDist = Math.hypot(bdx, bdz);
         if (bDist < 8.5 && (e.bossStateTimer ?? 1) < 0.45) {
-          this.aiStatus = 'Strafing Boss Volley';
+          this.hero.ai.status = 'Strafing Boss Volley';
           const dirX = bDist > 0.05 ? bdx / bDist : 1;
           const dirZ = bDist > 0.05 ? bdz / bDist : 0;
-          const perpX = -dirZ * this.aiStrafeSign;
-          const perpZ = dirX * this.aiStrafeSign;
-          if (this.canMoveTo(this.heroX + perpX * 0.7, this.heroZ + perpZ * 0.7, 0.4)) {
+          const perpX = -dirZ * this.hero.ai.strafeSign;
+          const perpZ = dirX * this.hero.ai.strafeSign;
+          if (this.canMoveTo(this.hero.x + perpX * 0.7, this.hero.z + perpZ * 0.7, 0.4)) {
             return { moveX: perpX, moveZ: perpZ };
           }
           return { moveX: -perpX, moveZ: -perpZ };
@@ -6939,23 +6523,23 @@ export class EmbervaultEngine {
       const tx = e.telegraphX ?? e.x;
       const tz = e.telegraphZ ?? e.z;
       const rad = e.telegraphRadius ?? 2.8;
-      const dx = this.heroX - tx;
-      const dz = this.heroZ - tz;
+      const dx = this.hero.x - tx;
+      const dz = this.hero.z - tz;
       const dist = Math.hypot(dx, dz);
       if (dist < rad + 0.65) {
-        this.aiStatus = 'Evading Boss Strike';
+        this.hero.ai.status = 'Evading Boss Strike';
         const escX = dist > 0.05 ? dx / dist : Math.cos(this.elapsed);
         const escZ = dist > 0.05 ? dz / dist : Math.sin(this.elapsed);
-        this.heroFacing = Math.atan2(escX, escZ);
-        if (this.dashCooldown <= 0 && (e.bossStateTimer ?? 1) < 0.52) {
+        this.hero.facing = Math.atan2(escX, escZ);
+        if (this.hero.dashCooldown <= 0 && (e.bossStateTimer ?? 1) < 0.52) {
           this.performDash();
         }
-        if (this.canMoveTo(this.heroX + escX * 0.7, this.heroZ + escZ * 0.7, 0.4)) {
+        if (this.canMoveTo(this.hero.x + escX * 0.7, this.hero.z + escZ * 0.7, 0.4)) {
           return { moveX: escX, moveZ: escZ };
         }
-        const perpX = -escZ * this.aiStrafeSign;
-        const perpZ = escX * this.aiStrafeSign;
-        if (this.canMoveTo(this.heroX + perpX * 0.7, this.heroZ + perpZ * 0.7, 0.4)) {
+        const perpX = -escZ * this.hero.ai.strafeSign;
+        const perpZ = escX * this.hero.ai.strafeSign;
+        if (this.canMoveTo(this.hero.x + perpX * 0.7, this.hero.z + perpZ * 0.7, 0.4)) {
           return { moveX: perpX, moveZ: perpZ };
         }
         return { moveX: -perpX, moveZ: -perpZ };
@@ -6963,34 +6547,34 @@ export class EmbervaultEngine {
     }
 
     // 1c. Active Unstuck Detour: commit to breaking free from a pillar/corner deadlock before re-engaging
-    if (this.aiUnstuckTimer > 0) {
-      this.aiUnstuckTimer = Math.max(0, this.aiUnstuckTimer - dt);
-      const escapeStep = this.followGridPath(this.aiUnstuckPath);
+    if (this.hero.ai.unstuckTimer > 0) {
+      this.hero.ai.unstuckTimer = Math.max(0, this.hero.ai.unstuckTimer - dt);
+      const escapeStep = this.followGridPath(this.hero.ai.unstuckPath);
       if (escapeStep) {
-        this.aiStatus = 'Repositioning';
-        const dashVec = this.getPathDashDirection(this.aiUnstuckPath, escapeStep);
+        this.hero.ai.status = 'Repositioning';
+        const dashVec = this.getPathDashDirection(this.hero.ai.unstuckPath, escapeStep);
         this.tryAutoTravelDash(dashVec.moveX, dashVec.moveZ, dashVec.distToGoal);
         return escapeStep;
       }
-      this.aiUnstuckTimer = 0;
+      this.hero.ai.unstuckTimer = 0;
     }
 
     // 1d. If standing right beside the Relic Key with clear LOS and no melee threat on top of us, grab it immediately!
     if (!this.hasKey) {
       const kw = gridToWorld(this.dungeon.keyPos.gx, this.dungeon.keyPos.gz);
-      const kdx = kw.x - this.heroX;
-      const kdz = kw.z - this.heroZ;
+      const kdx = kw.x - this.hero.x;
+      const kdz = kw.z - this.hero.z;
       const kDist = Math.hypot(kdx, kdz);
       if (
         kDist < 2.65 &&
-        this.aiForcePathTimer <= 0 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, kw.x, kw.z, this.doorUnlocked, 0.36)
+        this.hero.ai.forcePathTimer <= 0 &&
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, kw.x, kw.z, this.doorUnlocked, 0.36)
       ) {
         const immediateThreat = this.enemies.some(
-          (e) => !e.dead && Math.hypot(e.x - this.heroX, e.z - this.heroZ) < 2.2
+          (e) => !e.dead && Math.hypot(e.x - this.hero.x, e.z - this.hero.z) < 2.2
         );
         if (!immediateThreat) {
-          this.aiStatus = 'Claiming Relic Key';
+          this.hero.ai.status = 'Claiming Relic Key';
           return { moveX: kdx / (kDist || 1), moveZ: kdz / (kDist || 1) };
         }
       }
@@ -6999,7 +6583,7 @@ export class EmbervaultEngine {
     // 2. Check alive REACHABLE enemies:
     //    - Always finish every enemy inside the hero's current room before leaving!
     //    - Tactical Boss Rule: if a Boss is nearby, eliminate ranged escorts near the Boss first!
-    const heroG = worldToWalkableGrid(this.dungeon, this.heroX, this.heroZ, this.doorUnlocked);
+    const heroG = worldToWalkableGrid(this.dungeon, this.hero.x, this.hero.z, this.doorUnlocked);
     const currentRoom = this.dungeon.rooms.find(
       (r) =>
         heroG.gx >= r.x &&
@@ -7009,7 +6593,7 @@ export class EmbervaultEngine {
     );
     const exitRoom = this.dungeon.rooms.find((r) => r.role === 'exit');
     const nearbyBoss = this.enemies.find(
-      (e) => !e.dead && e.isBoss && Math.hypot(e.x - this.heroX, e.z - this.heroZ) < 13.0
+      (e) => !e.dead && e.isBoss && Math.hypot(e.x - this.hero.x, e.z - this.hero.z) < 13.0
     );
 
     let nearestEnemy: EnemyEntity | null = null;
@@ -7021,10 +6605,10 @@ export class EmbervaultEngine {
 
     for (const e of this.enemies) {
       if (e.dead) continue;
-      const skipUntil = this.aiSkipEnemyUntil.get(e.id);
+      const skipUntil = this.hero.ai.skipEnemyUntil.get(e.id);
       if (skipUntil !== undefined && this.elapsed < skipUntil) continue;
 
-      const d = Math.hypot(e.x - this.heroX, e.z - this.heroZ);
+      const d = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
       const eg = worldToWalkableGrid(this.dungeon, e.x, e.z, this.doorUnlocked);
 
       if (
@@ -7054,8 +6638,8 @@ export class EmbervaultEngine {
       // Skip enemies that cannot be reached (e.g., separated by a locked gate)
       const directReachable = hasLineOfSight(
         this.dungeon,
-        this.heroX,
-        this.heroZ,
+        this.hero.x,
+        this.hero.z,
         e.x,
         e.z,
         this.doorUnlocked,
@@ -7099,21 +6683,21 @@ export class EmbervaultEngine {
       nearestEnemyDist = roomEnemyDist;
     }
 
-    this.aiCurrentTargetId = nearestEnemy ? nearestEnemy.id : null;
+    this.hero.ai.currentTargetId = nearestEnemy ? nearestEnemy.id : null;
 
     if (nearestEnemy) {
-      this.aiStatus = priorityRanged
+      this.hero.ai.status = priorityRanged
         ? 'Eliminating Ranged Threat'
         : nearestEnemy.isBoss
         ? `Battling ${nearestEnemy.bossName}`
         : 'Engaging Foes';
-      const dx = nearestEnemy.x - this.heroX;
-      const dz = nearestEnemy.z - this.heroZ;
+      const dx = nearestEnemy.x - this.hero.x;
+      const dz = nearestEnemy.z - this.hero.z;
 
       const clearLOS = hasLineOfSight(
         this.dungeon,
-        this.heroX,
-        this.heroZ,
+        this.hero.x,
+        this.hero.z,
         nearestEnemy.x,
         nearestEnemy.z,
         this.doorUnlocked,
@@ -7121,19 +6705,19 @@ export class EmbervaultEngine {
       );
 
       // Frost Mage: ranged kiting combat. Falls through to path navigation only when LOS is blocked.
-      if (this.isMage()) {
+      if (this.hero.isMage()) {
         const mageMove = this.updateMageCombatAI(nearestEnemy, nearestEnemyDist);
         if (mageMove) return mageMove;
       }
 
       // Auto AI casts Pommel Strike when off CD to interrupt windups or stun nearby foes
-      if (!this.isMage() && this.pommelCooldown <= 0) {
+      if (!this.hero.isMage() && this.hero.pommelCooldown <= 0) {
         let inShockRange = 0;
         let hasPriorityInterrupt = false;
         let hasUnstunnedElite = false;
         for (const e of this.enemies) {
           if (e.dead) continue;
-          const ed = Math.hypot(e.x - this.heroX, e.z - this.heroZ);
+          const ed = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
           const eReach = 2.55 + (e.isBoss ? 0.5 : e.isElite ? 0.18 : 0);
           if (ed <= eReach) {
             if (e.isBoss && e.bossState === 'windup') {
@@ -7155,71 +6739,71 @@ export class EmbervaultEngine {
           inShockRange >= 2 ||
           (nearestEnemyDist <= 2.2 && nearestEnemy.stunTimer <= 0.1 && clearLOS)
         ) {
-          this.heroFacing = Math.atan2(dx, dz);
+          this.hero.facing = Math.atan2(dx, dz);
           this.performPommelStrike();
         }
       }
 
       const attackRange = nearestEnemy.isBoss ? 2.25 : 1.85;
-      if (!this.isMage() && nearestEnemyDist <= attackRange && clearLOS) {
-        this.heroFacing = Math.atan2(dx, dz);
-        if (this.attackCooldown <= 0) {
+      if (!this.hero.isMage() && nearestEnemyDist <= attackRange && clearLOS) {
+        this.hero.facing = Math.atan2(dx, dz);
+        if (this.hero.attackCooldown <= 0) {
           this.performAttack();
         }
         return {
-          moveX: (-dz / (nearestEnemyDist || 1)) * 0.25 * this.aiStrafeSign,
-          moveZ: (dx / (nearestEnemyDist || 1)) * 0.25 * this.aiStrafeSign,
+          moveX: (-dz / (nearestEnemyDist || 1)) * 0.25 * this.hero.ai.strafeSign,
+          moveZ: (dx / (nearestEnemyDist || 1)) * 0.25 * this.hero.ai.strafeSign,
         };
       }
 
-      if (clearLOS && this.aiForcePathTimer <= 0) {
-        this.aiCombatPath = [];
+      if (clearLOS && this.hero.ai.forcePathTimer <= 0) {
+        this.hero.ai.combatPath = [];
         return { moveX: dx / nearestEnemyDist, moveZ: dz / nearestEnemyDist };
       }
 
       // Line of sight is blocked by a wall corner or pillar: navigate cleanly via walkable-snapped A*!
-      this.aiCombatRepathTimer -= dt;
-      if (this.aiCombatPath.length === 0 || this.aiCombatRepathTimer <= 0) {
-        this.aiCombatRepathTimer = 0.4;
+      this.hero.ai.combatRepathTimer -= dt;
+      if (this.hero.ai.combatPath.length === 0 || this.hero.ai.combatRepathTimer <= 0) {
+        this.hero.ai.combatRepathTimer = 0.4;
         const enemyG = worldToWalkableGrid(
           this.dungeon,
           nearestEnemy.x,
           nearestEnemy.z,
           this.doorUnlocked
         );
-        this.aiCombatPath = this.buildSafeGridPath(enemyG.gx, enemyG.gz);
+        this.hero.ai.combatPath = this.buildSafeGridPath(enemyG.gx, enemyG.gz);
       }
-      const step = this.followGridPath(this.aiCombatPath);
+      const step = this.followGridPath(this.hero.ai.combatPath);
       if (step) return step;
 
       // Pillar-flank fallback: if hero & enemy share a snapped tile across a pillar edge, flank sideways around it!
       const len = nearestEnemyDist || 1;
-      const perpX = (-dz / len) * this.aiStrafeSign;
-      const perpZ = (dx / len) * this.aiStrafeSign;
-      if (this.canMoveTo(this.heroX + perpX * 0.65, this.heroZ + perpZ * 0.65, 0.4)) {
+      const perpX = (-dz / len) * this.hero.ai.strafeSign;
+      const perpZ = (dx / len) * this.hero.ai.strafeSign;
+      if (this.canMoveTo(this.hero.x + perpX * 0.65, this.hero.z + perpZ * 0.65, 0.4)) {
         return { moveX: perpX, moveZ: perpZ };
       }
-      if (this.canMoveTo(this.heroX - perpX * 0.65, this.heroZ - perpZ * 0.65, 0.4)) {
+      if (this.canMoveTo(this.hero.x - perpX * 0.65, this.hero.z - perpZ * 0.65, 0.4)) {
         return { moveX: -perpX, moveZ: -perpZ };
       }
     }
 
     // 2a. Frost Mage: with no enemy nearby and the shield below 60%, hold position until it refills
-    if (this.isMage() && !nearestEnemy) {
-      const maxShield = this.getEffectiveMaxShield();
+    if (this.hero.isMage() && !nearestEnemy) {
+      const maxShield = this.hero.getEffectiveMaxShield();
       const anyNear = this.enemies.some(
-        (e) => !e.dead && Math.hypot(e.x - this.heroX, e.z - this.heroZ) < 11
+        (e) => !e.dead && Math.hypot(e.x - this.hero.x, e.z - this.hero.z) < 11
       );
-      if (maxShield > 0 && this.shield < maxShield * 0.6) this.aiMageRecharging = true;
-      if (this.shield >= maxShield * 0.99) this.aiMageRecharging = false;
-      if (maxShield > 0 && this.aiMageRecharging && !anyNear) {
-        this.aiStatus = 'Recharging Frost Shield';
-        this.aiProgressAnchorX = this.heroX;
-        this.aiProgressAnchorZ = this.heroZ;
-        this.aiNoProgressTimer = 0;
-        this.aiStuckTimer = 0;
-        this.aiLastCheckX = this.heroX;
-        this.aiLastCheckZ = this.heroZ;
+      if (maxShield > 0 && this.hero.shield < maxShield * 0.6) this.hero.ai.mageRecharging = true;
+      if (this.hero.shield >= maxShield * 0.99) this.hero.ai.mageRecharging = false;
+      if (maxShield > 0 && this.hero.ai.mageRecharging && !anyNear) {
+        this.hero.ai.status = 'Recharging Frost Shield';
+        this.hero.ai.progressAnchorX = this.hero.x;
+        this.hero.ai.progressAnchorZ = this.hero.z;
+        this.hero.ai.noProgressTimer = 0;
+        this.hero.ai.stuckTimer = 0;
+        this.hero.ai.lastCheckX = this.hero.x;
+        this.hero.ai.lastCheckZ = this.hero.z;
         return { moveX: 0, moveZ: 0 };
       }
     }
@@ -7227,15 +6811,15 @@ export class EmbervaultEngine {
     // 2b. No active threats in room: if the Relic Key is in sight nearby, claim it immediately!
     if (!this.hasKey) {
       const kw = gridToWorld(this.dungeon.keyPos.gx, this.dungeon.keyPos.gz);
-      const kdx = kw.x - this.heroX;
-      const kdz = kw.z - this.heroZ;
+      const kdx = kw.x - this.hero.x;
+      const kdz = kw.z - this.hero.z;
       const kDist = Math.hypot(kdx, kdz);
       if (
         kDist < 8.5 &&
-        this.aiForcePathTimer <= 0 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, kw.x, kw.z, this.doorUnlocked, 0.42)
+        this.hero.ai.forcePathTimer <= 0 &&
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, kw.x, kw.z, this.doorUnlocked, 0.42)
       ) {
-        this.aiStatus = 'Claiming Relic Key';
+        this.hero.ai.status = 'Claiming Relic Key';
         const dirX = kdx / (kDist || 1);
         const dirZ = kdz / (kDist || 1);
         this.tryAutoTravelDash(dirX, dirZ, kDist);
@@ -7246,24 +6830,24 @@ export class EmbervaultEngine {
     // 3. Collect nearby loose gold & potion loot (only if body-width line-of-sight is clear)
     for (const l of this.loots) {
       if (l.collected || l.type === 'relic') continue;
-      const d = Math.hypot(l.x - this.heroX, l.z - this.heroZ);
+      const d = Math.hypot(l.x - this.hero.x, l.z - this.hero.z);
       if (
         d < 4.5 &&
-        this.aiForcePathTimer <= 0 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, l.x, l.z, this.doorUnlocked, 0.42)
+        this.hero.ai.forcePathTimer <= 0 &&
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, l.x, l.z, this.doorUnlocked, 0.42)
       ) {
-        this.aiStatus = 'Gathering Spoils';
-        return { moveX: (l.x - this.heroX) / (d || 1), moveZ: (l.z - this.heroZ) / (d || 1) };
+        this.hero.ai.status = 'Gathering Spoils';
+        return { moveX: (l.x - this.hero.x) / (d || 1), moveZ: (l.z - this.hero.z) / (d || 1) };
       }
     }
 
     // 4. Smash nearby crate if right next to hero
     for (const br of this.breakables) {
       if (br.broken) continue;
-      const d = Math.hypot(br.x - this.heroX, br.z - this.heroZ);
+      const d = Math.hypot(br.x - this.hero.x, br.z - this.hero.z);
       if (d < 2.0) {
-        this.heroFacing = Math.atan2(br.x - this.heroX, br.z - this.heroZ);
-        if (this.attackCooldown <= 0) this.performAttack();
+        this.hero.facing = Math.atan2(br.x - this.hero.x, br.z - this.hero.z);
+        if (this.hero.attackCooldown <= 0) this.performAttack();
         break;
       }
     }
@@ -7275,26 +6859,26 @@ export class EmbervaultEngine {
       if (l.collected || l.type !== 'relic' || !l.relic) continue;
       const readyAge = (l.pickupDelay ?? 0.85) * 0.72;
       if (l.age < readyAge) continue;
-      const d = Math.hypot(l.x - this.heroX, l.z - this.heroZ);
+      const d = Math.hypot(l.x - this.hero.x, l.z - this.hero.z);
       const maxSearch = l.relic.rarity === 'orange' || l.relic.rarity === 'green' ? 11.0 : 5.8;
       if (
         d < maxSearch &&
         d < nearestRelicDist &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, l.x, l.z, this.doorUnlocked, 0.36)
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, l.x, l.z, this.doorUnlocked, 0.36)
       ) {
         nearestRelicDist = d;
         nearestRelic = l;
       }
     }
     if (nearestRelic && nearestRelicDist > 0.3) {
-      this.aiStatus = 'Collecting Relic';
-      const dirX = (nearestRelic.x - this.heroX) / nearestRelicDist;
-      const dirZ = (nearestRelic.z - this.heroZ) / nearestRelicDist;
+      this.hero.ai.status = 'Collecting Relic';
+      const dirX = (nearestRelic.x - this.hero.x) / nearestRelicDist;
+      const dirZ = (nearestRelic.z - this.hero.z) / nearestRelicDist;
       return { moveX: dirX, moveZ: dirZ };
     }
 
     // 4a-2. Auto-Heal at any discovered Healing Sanctum (Rune Well) whenever HP is not full
-    if (this.hp < this.getEffectiveMaxHp()) {
+    if (this.hero.hp < this.hero.getEffectiveMaxHp()) {
       let bestRune: AnimatedLightProp | null = null;
       let bestRuneDist = Infinity;
       let bestRuneGrid: { gx: number; gz: number } | null = null;
@@ -7303,10 +6887,10 @@ export class EmbervaultEngine {
         if (lp.kind !== 'rune' || lp.used) continue;
         const rg = worldToGrid(lp.x, lp.z);
         const discovered = Boolean(this.dungeon.explored[rg.gz]?.[rg.gx]);
-        const d = Math.hypot(lp.x - this.heroX, lp.z - this.heroZ);
+        const d = Math.hypot(lp.x - this.hero.x, lp.z - this.hero.z);
         const directVisible =
           d < 10.5 &&
-          hasLineOfSight(this.dungeon, this.heroX, this.heroZ, lp.x, lp.z, this.doorUnlocked, 0.36);
+          hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, lp.x, lp.z, this.doorUnlocked, 0.36);
         if (!discovered && !directVisible) continue;
         if (!this.doorUnlocked && exitRoom) {
           if (
@@ -7326,15 +6910,15 @@ export class EmbervaultEngine {
       }
 
       if (bestRune && bestRuneGrid) {
-        const dx = bestRune.x - this.heroX;
-        const dz = bestRune.z - this.heroZ;
-        this.aiStatus = 'Healing at Sanctum';
+        const dx = bestRune.x - this.hero.x;
+        const dz = bestRune.z - this.hero.z;
+        this.hero.ai.status = 'Healing at Sanctum';
         if (
-          this.aiForcePathTimer <= 0 &&
+          this.hero.ai.forcePathTimer <= 0 &&
           hasLineOfSight(
             this.dungeon,
-            this.heroX,
-            this.heroZ,
+            this.hero.x,
+            this.hero.z,
             bestRune.x,
             bestRune.z,
             this.doorUnlocked,
@@ -7346,19 +6930,19 @@ export class EmbervaultEngine {
           this.tryAutoTravelDash(dirX, dirZ, bestRuneDist);
           return { moveX: dirX, moveZ: dirZ };
         }
-        this.aiRepathTimer -= dt;
-        const lastRunePt = this.aiPath[this.aiPath.length - 1];
+        this.hero.ai.repathTimer -= dt;
+        const lastRunePt = this.hero.ai.path[this.hero.ai.path.length - 1];
         const pathMatchesRune =
           Boolean(lastRunePt) &&
           lastRunePt.gx === bestRuneGrid.gx &&
           lastRunePt.gz === bestRuneGrid.gz;
-        if (!pathMatchesRune || this.aiPath.length === 0 || this.aiRepathTimer <= 0) {
-          this.aiRepathTimer = 0.65;
-          this.aiPath = this.buildSafeGridPath(bestRuneGrid.gx, bestRuneGrid.gz);
+        if (!pathMatchesRune || this.hero.ai.path.length === 0 || this.hero.ai.repathTimer <= 0) {
+          this.hero.ai.repathTimer = 0.65;
+          this.hero.ai.path = this.buildSafeGridPath(bestRuneGrid.gx, bestRuneGrid.gz);
         }
-        const runeStep = this.followGridPath(this.aiPath);
+        const runeStep = this.followGridPath(this.hero.ai.path);
         if (runeStep) {
-          const dashVec = this.getPathDashDirection(this.aiPath, runeStep);
+          const dashVec = this.getPathDashDirection(this.hero.ai.path, runeStep);
           this.tryAutoTravelDash(dashVec.moveX, dashVec.moveZ, dashVec.distToGoal);
           return runeStep;
         }
@@ -7368,81 +6952,81 @@ export class EmbervaultEngine {
     // 4b. Auto-Upgrade & Smart Potion Restock (Altar of Ascension & Dedicated Potion Shop)
     // Target potion stock scales with depth (4 early -> 5-8 deeper) so Auto buys potions when running low
     const targetPotions = Math.min(8, 4 + Math.floor(this.depth / 6));
-    const urgentPotionNeed = this.potions <= 2 && this.gold >= this.getPotionCost();
-    const wantsMorePotions = this.potions < targetPotions && this.gold >= this.getPotionCost();
+    const urgentPotionNeed = this.hero.potions <= 2 && this.hero.gold >= this.getPotionCost();
+    const wantsMorePotions = this.hero.potions < targetPotions && this.hero.gold >= this.getPotionCost();
     const canAutoUpgradeStat =
-      this.gold >= this.getUpgradeCost() &&
+      this.hero.gold >= this.getUpgradeCost() &&
       this.getUpgradeOptions().some((o) => !o.maxed);
-    const hasSellableBagRelics = this.relicBag.some(
+    const hasSellableBagRelics = this.hero.relicBag.some(
       (r) => r.rarity === 'blue' || r.rarity === 'yellow'
     );
 
     if (this.dungeon.altarPos && (canAutoUpgradeStat || wantsMorePotions)) {
       const aw = gridToWorld(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
-      const dx = aw.x - this.heroX;
-      const dz = aw.z - this.heroZ;
+      const dx = aw.x - this.hero.x;
+      const dz = aw.z - this.hero.z;
       const altarDist = Math.hypot(dx, dz);
 
       if (altarDist < 2.2) {
-        this.aiStatus = urgentPotionNeed ? 'Restocking Elixirs' : 'Ascending at Altar';
-        this.aiStuckTimer = 0;
-        this.aiStuckCount = 0;
-        this.aiNoProgressTimer = 0;
-        this.aiProgressAnchorX = this.heroX;
-        this.aiProgressAnchorZ = this.heroZ;
-        this.autoUpgradeCooldown -= dt;
-        if (this.autoUpgradeCooldown <= 0) {
+        this.hero.ai.status = urgentPotionNeed ? 'Restocking Elixirs' : 'Ascending at Altar';
+        this.hero.ai.stuckTimer = 0;
+        this.hero.ai.stuckCount = 0;
+        this.hero.ai.noProgressTimer = 0;
+        this.hero.ai.progressAnchorX = this.hero.x;
+        this.hero.ai.progressAnchorZ = this.hero.z;
+        this.hero.ai.upgradeCooldown -= dt;
+        if (this.hero.ai.upgradeCooldown <= 0) {
           if (urgentPotionNeed) {
             if (this.purchasePotion()) {
-              this.autoUpgradeCooldown = 0.42;
-              this.aiPath = [];
+              this.hero.ai.upgradeCooldown = 0.42;
+              this.hero.ai.path = [];
             }
-          } else if (this.gold >= this.getUpgradeCost()) {
-            const cycle: UpgradeKind[] = this.isMage()
+          } else if (this.hero.gold >= this.getUpgradeCost()) {
+            const cycle: UpgradeKind[] = this.hero.isMage()
               ? ['hp_shield', 'atk', 'shield_speed', 'crit']
               : ['hp', 'atk', 'armor', 'crit'];
-            const startIdx = Math.max(0, cycle.indexOf(this.autoNextUpgrade));
+            const startIdx = Math.max(0, cycle.indexOf(this.hero.autoNextUpgrade));
             let choice: UpgradeKind = 'atk';
             for (let offset = 0; offset < cycle.length; offset++) {
               const cand = cycle[(startIdx + offset) % cycle.length];
-              if (this.isUpgradeMaxed(cand)) continue;
+              if (this.hero.isUpgradeMaxed(cand)) continue;
               choice = cand;
               break;
             }
             if (this.purchaseUpgrade(choice)) {
               const nextIdx = (cycle.indexOf(choice) + 1) % cycle.length;
-              this.autoNextUpgrade = cycle[nextIdx];
-              this.autoUpgradeCooldown = 0.55;
-              this.aiPath = [];
+              this.hero.autoNextUpgrade = cycle[nextIdx];
+              this.hero.ai.upgradeCooldown = 0.55;
+              this.hero.ai.path = [];
             }
-          } else if (this.potions < targetPotions && this.gold >= this.getPotionCost()) {
+          } else if (this.hero.potions < targetPotions && this.hero.gold >= this.getPotionCost()) {
             if (this.purchasePotion()) {
-              this.autoUpgradeCooldown = 0.42;
-              this.aiPath = [];
+              this.hero.ai.upgradeCooldown = 0.42;
+              this.hero.ai.path = [];
             }
           }
         }
         return { moveX: 0, moveZ: 0 };
       }
 
-      this.aiStatus = 'Visiting Altar';
+      this.hero.ai.status = 'Visiting Altar';
       if (
-        this.aiForcePathTimer <= 0 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, aw.x, aw.z, this.doorUnlocked, 0.42)
+        this.hero.ai.forcePathTimer <= 0 &&
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, aw.x, aw.z, this.doorUnlocked, 0.42)
       ) {
         const dirX = dx / (altarDist || 1);
         const dirZ = dz / (altarDist || 1);
         this.tryAutoTravelDash(dirX, dirZ, altarDist);
         return { moveX: dirX, moveZ: dirZ };
       }
-      this.aiRepathTimer -= dt;
-      if (this.aiPath.length === 0 || this.aiRepathTimer <= 0) {
-        this.aiRepathTimer = 0.7;
-        this.aiPath = this.buildSafeGridPath(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
+      this.hero.ai.repathTimer -= dt;
+      if (this.hero.ai.path.length === 0 || this.hero.ai.repathTimer <= 0) {
+        this.hero.ai.repathTimer = 0.7;
+        this.hero.ai.path = this.buildSafeGridPath(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
       }
-      const altarStep = this.followGridPath(this.aiPath);
+      const altarStep = this.followGridPath(this.hero.ai.path);
       if (altarStep) {
-        const dashVec = this.getPathDashDirection(this.aiPath, altarStep);
+        const dashVec = this.getPathDashDirection(this.hero.ai.path, altarStep);
         this.tryAutoTravelDash(dashVec.moveX, dashVec.moveZ, dashVec.distToGoal);
         return altarStep;
       }
@@ -7452,62 +7036,62 @@ export class EmbervaultEngine {
     // Auto sells all unused Blue & Yellow relics in bag and restocks potions when needed
     if (this.dungeon.shopPos && (wantsMorePotions || hasSellableBagRelics)) {
       const sw = gridToWorld(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
-      const dx = sw.x - this.heroX;
-      const dz = sw.z - this.heroZ;
+      const dx = sw.x - this.hero.x;
+      const dz = sw.z - this.hero.z;
       const shopDist = Math.hypot(dx, dz);
 
       if (shopDist < 2.2) {
-        this.aiStatus = hasSellableBagRelics ? 'Selling Spare Relics' : 'Buying Elixirs';
-        this.aiStuckTimer = 0;
-        this.aiStuckCount = 0;
-        this.aiNoProgressTimer = 0;
-        this.aiProgressAnchorX = this.heroX;
-        this.aiProgressAnchorZ = this.heroZ;
-        this.autoUpgradeCooldown -= dt;
-        if (this.autoUpgradeCooldown <= 0) {
+        this.hero.ai.status = hasSellableBagRelics ? 'Selling Spare Relics' : 'Buying Elixirs';
+        this.hero.ai.stuckTimer = 0;
+        this.hero.ai.stuckCount = 0;
+        this.hero.ai.noProgressTimer = 0;
+        this.hero.ai.progressAnchorX = this.hero.x;
+        this.hero.ai.progressAnchorZ = this.hero.z;
+        this.hero.ai.upgradeCooldown -= dt;
+        if (this.hero.ai.upgradeCooldown <= 0) {
           if (hasSellableBagRelics && this.sellCommonBagRelics(true) > 0) {
-            this.autoUpgradeCooldown = 0.45;
-            this.aiPath = [];
-          } else if (this.potions < targetPotions && this.purchasePotion()) {
-            this.autoUpgradeCooldown = 0.42;
-            this.aiPath = [];
+            this.hero.ai.upgradeCooldown = 0.45;
+            this.hero.ai.path = [];
+          } else if (this.hero.potions < targetPotions && this.purchasePotion()) {
+            this.hero.ai.upgradeCooldown = 0.42;
+            this.hero.ai.path = [];
           }
         }
         return { moveX: 0, moveZ: 0 };
       }
 
-      this.aiStatus = 'Visiting Potion Shop';
+      this.hero.ai.status = 'Visiting Potion Shop';
       if (
-        this.aiForcePathTimer <= 0 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, sw.x, sw.z, this.doorUnlocked, 0.42)
+        this.hero.ai.forcePathTimer <= 0 &&
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, sw.x, sw.z, this.doorUnlocked, 0.42)
       ) {
         const dirX = dx / (shopDist || 1);
         const dirZ = dz / (shopDist || 1);
         this.tryAutoTravelDash(dirX, dirZ, shopDist);
         return { moveX: dirX, moveZ: dirZ };
       }
-      this.aiRepathTimer -= dt;
-      const lastShopPt = this.aiPath[this.aiPath.length - 1];
+      this.hero.ai.repathTimer -= dt;
+      const lastShopPt = this.hero.ai.path[this.hero.ai.path.length - 1];
       const pathMatchesShop =
         Boolean(lastShopPt) &&
         lastShopPt.gx === this.dungeon.shopPos.gx &&
         lastShopPt.gz === this.dungeon.shopPos.gz;
-      if (!pathMatchesShop || this.aiPath.length === 0 || this.aiRepathTimer <= 0) {
-        this.aiRepathTimer = 0.7;
-        this.aiPath = this.buildSafeGridPath(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
+      if (!pathMatchesShop || this.hero.ai.path.length === 0 || this.hero.ai.repathTimer <= 0) {
+        this.hero.ai.repathTimer = 0.7;
+        this.hero.ai.path = this.buildSafeGridPath(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
       }
-      const shopStep = this.followGridPath(this.aiPath);
+      const shopStep = this.followGridPath(this.hero.ai.path);
       if (shopStep) {
-        const dashVec = this.getPathDashDirection(this.aiPath, shopStep);
+        const dashVec = this.getPathDashDirection(this.hero.ai.path, shopStep);
         this.tryAutoTravelDash(dashVec.moveX, dashVec.moveZ, dashVec.distToGoal);
         return shopStep;
       }
     }
 
     // 5. Strategic objective pathfinding
-    this.aiRepathTimer -= dt;
-    if (this.aiPath.length === 0 || this.aiRepathTimer <= 0) {
-      this.aiRepathTimer = 0.85;
+    this.hero.ai.repathTimer -= dt;
+    if (this.hero.ai.path.length === 0 || this.hero.ai.repathTimer <= 0) {
+      this.hero.ai.repathTimer = 0.85;
       let goal: { gx: number; gz: number } | null = null;
 
       if (!this.hasKey) {
@@ -7517,7 +7101,7 @@ export class EmbervaultEngine {
         );
         if (keyDiscovered) {
           goal = { gx: this.dungeon.keyPos.gx, gz: this.dungeon.keyPos.gz };
-          this.aiStatus = 'Seeking Relic Key';
+          this.hero.ai.status = 'Seeking Relic Key';
         } else {
           // Otherwise sweep the nearest unexplored non-exit chamber (no random cross-map backtracking)
           let nearestRoom: DungeonData['rooms'][number] | null = null;
@@ -7532,29 +7116,29 @@ export class EmbervaultEngine {
           }
           if (nearestRoom) {
             goal = { gx: nearestRoom.cx, gz: nearestRoom.cz };
-            this.aiStatus = 'Exploring Chambers';
+            this.hero.ai.status = 'Exploring Chambers';
           } else {
             goal = { gx: this.dungeon.keyPos.gx, gz: this.dungeon.keyPos.gz };
-            this.aiStatus = 'Seeking Relic Key';
+            this.hero.ai.status = 'Seeking Relic Key';
           }
         }
       } else if (!this.doorUnlocked) {
         // Walk adjacent to Locked Gate to unlock it
         goal = this.findApproachTile(this.dungeon.doorPos.gx, this.dungeon.doorPos.gz);
-        this.aiStatus = 'Unlocking Seal Gate';
+        this.hero.ai.status = 'Unlocking Seal Gate';
       } else {
         goal = { gx: this.dungeon.stairsPos.gx, gz: this.dungeon.stairsPos.gz };
-        this.aiStatus = 'Descending Deeper';
+        this.hero.ai.status = 'Descending Deeper';
       }
 
       if (goal) {
-        this.aiPath = this.buildSafeGridPath(goal.gx, goal.gz);
+        this.hero.ai.path = this.buildSafeGridPath(goal.gx, goal.gz);
       }
     }
 
-    const navStep = this.followGridPath(this.aiPath);
+    const navStep = this.followGridPath(this.hero.ai.path);
     if (navStep) {
-      const dashVec = this.getPathDashDirection(this.aiPath, navStep);
+      const dashVec = this.getPathDashDirection(this.hero.ai.path, navStep);
       this.tryAutoTravelDash(dashVec.moveX, dashVec.moveZ, dashVec.distToGoal);
       return navStep;
     }
@@ -7562,37 +7146,37 @@ export class EmbervaultEngine {
     // Fallback direct approach ONLY when line-of-sight is genuinely clear (never walk blindly into walls)
     if (!this.hasKey) {
       const kw = gridToWorld(this.dungeon.keyPos.gx, this.dungeon.keyPos.gz);
-      const dx = kw.x - this.heroX;
-      const dz = kw.z - this.heroZ;
+      const dx = kw.x - this.hero.x;
+      const dz = kw.z - this.hero.z;
       const d = Math.hypot(dx, dz);
       if (
         d > 0.25 &&
         d < 3.5 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, kw.x, kw.z, this.doorUnlocked, 0.32)
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, kw.x, kw.z, this.doorUnlocked, 0.32)
       ) {
         return { moveX: dx / d, moveZ: dz / d };
       }
     } else if (!this.doorUnlocked) {
       const dw = gridToWorld(this.dungeon.doorPos.gx, this.dungeon.doorPos.gz);
-      const dx = dw.x - this.heroX;
-      const dz = dw.z - this.heroZ;
+      const dx = dw.x - this.hero.x;
+      const dz = dw.z - this.hero.z;
       const d = Math.hypot(dx, dz);
       if (
         d > 0.25 &&
         d < 2.6 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, dw.x, dw.z, true, 0.2)
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, dw.x, dw.z, true, 0.2)
       ) {
         return { moveX: dx / d, moveZ: dz / d };
       }
     } else {
       const sw = gridToWorld(this.dungeon.stairsPos.gx, this.dungeon.stairsPos.gz);
-      const dx = sw.x - this.heroX;
-      const dz = sw.z - this.heroZ;
+      const dx = sw.x - this.hero.x;
+      const dz = sw.z - this.hero.z;
       const d = Math.hypot(dx, dz);
       if (
         d > 0.2 &&
         d < 3.5 &&
-        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, sw.x, sw.z, this.doorUnlocked, 0.32)
+        hasLineOfSight(this.dungeon, this.hero.x, this.hero.z, sw.x, sw.z, this.doorUnlocked, 0.32)
       ) {
         return { moveX: dx / d, moveZ: dz / d };
       }
@@ -7602,7 +7186,7 @@ export class EmbervaultEngine {
   }
 
   private findApproachTile(gx: number, gz: number): { gx: number; gz: number } {
-    const start = worldToGrid(this.heroX, this.heroZ);
+    const start = worldToGrid(this.hero.x, this.hero.z);
     const dirs = [
       [1, 0],
       [-1, 0],
@@ -7649,7 +7233,7 @@ export class EmbervaultEngine {
 
     // Freeze dungeon simulation immediately on death until player clicks Restart
     // (the world stays frozen, so enemies never target or hit a downed hero; only the portal and particles animate)
-    if (this.isDead) {
+    if (this.hero.isDead) {
       this.animateHeroPortal(dt);
       this.updateParticles(dt);
       return;
@@ -7664,30 +7248,30 @@ export class EmbervaultEngine {
     }
 
     // Cooldowns & Relic Timers
-    this.attackCooldown = Math.max(0, this.attackCooldown - dt);
-    this.attackAnim = Math.max(0, this.attackAnim - dt);
-    this.pommelCooldown = Math.max(0, this.pommelCooldown - dt);
-    this.pommelAnim = Math.max(0, this.pommelAnim - dt);
-    this.comboResetTimer = Math.max(0, this.comboResetTimer - dt);
-    this.dashCooldown = Math.max(0, this.dashCooldown - dt);
-    this.heroInvuln = Math.max(0, this.heroInvuln - dt);
-    this.heroHitFlash = Math.max(0, this.heroHitFlash - dt);
-    this.phantomCritTimer = Math.max(0, this.phantomCritTimer - dt);
-    this.alchemistShieldTimer = Math.max(0, this.alchemistShieldTimer - dt);
-    this.updateShield(dt);
+    this.hero.attackCooldown = Math.max(0, this.hero.attackCooldown - dt);
+    this.hero.attackAnim = Math.max(0, this.hero.attackAnim - dt);
+    this.hero.pommelCooldown = Math.max(0, this.hero.pommelCooldown - dt);
+    this.hero.pommelAnim = Math.max(0, this.hero.pommelAnim - dt);
+    this.hero.comboResetTimer = Math.max(0, this.hero.comboResetTimer - dt);
+    this.hero.dashCooldown = Math.max(0, this.hero.dashCooldown - dt);
+    this.hero.invuln = Math.max(0, this.hero.invuln - dt);
+    this.hero.hitFlash = Math.max(0, this.hero.hitFlash - dt);
+    this.hero.phantomCritTimer = Math.max(0, this.hero.phantomCritTimer - dt);
+    this.hero.alchemistShieldTimer = Math.max(0, this.hero.alchemistShieldTimer - dt);
+    this.hero.updateShield(dt);
 
     // 4pc Green Set: Dragonfire Knight periodic fiery breath nova every 3.0s
-    if (this.hasSet4pc('dragonfire')) {
-      this.dragonAuraTimer -= dt;
-      if (this.dragonAuraTimer <= 0) {
+    if (this.hero.hasSet4pc('dragonfire')) {
+      this.hero.dragonAuraTimer -= dt;
+      if (this.hero.dragonAuraTimer <= 0) {
         const nearbyEnemies = this.enemies.filter(
-          (e) => !e.dead && Math.hypot(e.x - this.heroX, e.z - this.heroZ) <= 3.6
+          (e) => !e.dead && Math.hypot(e.x - this.hero.x, e.z - this.hero.z) <= 3.6
         );
         if (nearbyEnemies.length > 0) {
-          this.dragonAuraTimer = 3.0;
+          this.hero.dragonAuraTimer = 3.0;
           const novaDmg = Math.max(
             5,
-            Math.round((7 + this.depth * 1.1) * (1 + this.atkUpgrades * 0.1 + this.relicStats.atkPct / 100))
+            Math.round((7 + this.depth * 1.1) * (1 + this.hero.atkUpgrades * 0.1 + this.hero.relicStats.atkPct / 100))
           );
           for (const e of nearbyEnemies) {
             this.applyBonusEnemyDamage(e, novaDmg, `龍息 -${novaDmg}`, 'relicOrange', 0xff5a1f);
@@ -7695,9 +7279,9 @@ export class EmbervaultEngine {
           for (let i = 0; i < 18; i++) {
             const a = (i / 18) * Math.PI * 2;
             this.spawnParticle(
-              this.heroX + Math.cos(a) * 0.5,
+              this.hero.x + Math.cos(a) * 0.5,
               0.45,
-              this.heroZ + Math.sin(a) * 0.5,
+              this.hero.z + Math.sin(a) * 0.5,
               Math.cos(a) * 5.8,
               0.7 + Math.random() * 0.8,
               Math.sin(a) * 5.8,
@@ -7715,17 +7299,17 @@ export class EmbervaultEngine {
     let moveX = 0;
     let moveZ = 0;
 
-    if (this.controlMode === 'manual' || this.inTown) {
+    if (this.hero.controlMode === 'manual' || this.inTown) {
       if (this.inTown) {
-        this.aiStatus = '庇護小鎮休整中';
+        this.hero.ai.status = '庇護小鎮休整中';
       }
       // Camera looks along (-1, -1) in XZ, so screen-up = (-1,-1) and screen-right = (1,-1)
       let ix = 0;
       let iy = 0;
-      if (this.keysPressed.has('KeyW') || this.keysPressed.has('ArrowUp')) iy += 1;
-      if (this.keysPressed.has('KeyS') || this.keysPressed.has('ArrowDown')) iy -= 1;
-      if (this.keysPressed.has('KeyD') || this.keysPressed.has('ArrowRight')) ix += 1;
-      if (this.keysPressed.has('KeyA') || this.keysPressed.has('ArrowLeft')) ix -= 1;
+      if (this.hero.input.keys.has('KeyW') || this.hero.input.keys.has('ArrowUp')) iy += 1;
+      if (this.hero.input.keys.has('KeyS') || this.hero.input.keys.has('ArrowDown')) iy -= 1;
+      if (this.hero.input.keys.has('KeyD') || this.hero.input.keys.has('ArrowRight')) ix += 1;
+      if (this.hero.input.keys.has('KeyA') || this.hero.input.keys.has('ArrowLeft')) ix -= 1;
 
       if (ix !== 0 || iy !== 0) {
         moveX = ix - iy;
@@ -7740,22 +7324,22 @@ export class EmbervaultEngine {
       moveZ = aiMove.moveZ;
     }
 
-    this.moveInputX = moveX;
-    this.moveInputZ = moveZ;
+    this.hero.input.moveX = moveX;
+    this.hero.input.moveZ = moveZ;
 
     // 2. Move Hero (Dash or Walk + Knockback)
-    const moveSpeed = 4.65 * (1 + this.relicStats.moveSpeedPct / 100);
+    const moveSpeed = 4.65 * (1 + this.hero.relicStats.moveSpeedPct / 100);
     let dx = 0;
     let dz = 0;
-    if (this.dashTimer > 0) {
-      this.dashTimer -= dt;
-      dx = this.dashDirX * 13.5 * dt;
-      dz = this.dashDirZ * 13.5 * dt;
+    if (this.hero.dashTimer > 0) {
+      this.hero.dashTimer -= dt;
+      dx = this.hero.dashDirX * 13.5 * dt;
+      dz = this.hero.dashDirZ * 13.5 * dt;
       if (Math.random() < 0.7) {
         this.spawnParticle(
-          this.heroX,
+          this.hero.x,
           0.6,
-          this.heroZ,
+          this.hero.z,
           0,
           0.4,
           0,
@@ -7766,84 +7350,84 @@ export class EmbervaultEngine {
         );
       }
     } else {
-      dx = (moveX * moveSpeed + this.heroVx) * dt;
-      dz = (moveZ * moveSpeed + this.heroVz) * dt;
+      dx = (moveX * moveSpeed + this.hero.vx) * dt;
+      dz = (moveZ * moveSpeed + this.hero.vz) * dt;
     }
 
-    this.heroVx *= Math.exp(-10 * dt);
-    this.heroVz *= Math.exp(-10 * dt);
+    this.hero.vx *= Math.exp(-10 * dt);
+    this.hero.vz *= Math.exp(-10 * dt);
 
-    const moved = this.moveWithSlide(this.heroX, this.heroZ, dx, dz, 0.4);
-    this.heroX = moved.x;
-    this.heroZ = moved.z;
+    const moved = this.moveWithSlide(this.hero.x, this.hero.z, dx, dz, 0.4);
+    this.hero.x = moved.x;
+    this.hero.z = moved.z;
 
     const speedMag = Math.hypot(moveX, moveZ);
-    if (speedMag > 0.08 && this.dashTimer <= 0) {
+    if (speedMag > 0.08 && this.hero.dashTimer <= 0) {
       const desiredAngle = Math.atan2(moveX, moveZ);
-      let diff = desiredAngle - this.heroFacing;
+      let diff = desiredAngle - this.hero.facing;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      this.heroFacing += diff * Math.min(1, dt * 14);
+      this.hero.facing += diff * Math.min(1, dt * 14);
 
-      this.walkCycle += dt * 11.5;
-      this.footstepTimer -= dt;
-      if (this.footstepTimer <= 0) {
-        this.footstepTimer = 0.28;
+      this.hero.walkCycle += dt * 11.5;
+      this.hero.footstepTimer -= dt;
+      if (this.hero.footstepTimer <= 0) {
+        this.hero.footstepTimer = 0.28;
         this.audio.playFootstep();
       }
     } else {
-      this.walkCycle *= 0.85;
+      this.hero.walkCycle *= 0.85;
     }
 
     // Hold-to-attack: aim at the cursor every frame (overrides walk facing) and fire when ready
     this.updateHeldAttack();
 
     // 3. Animate Hero Composite Rig
-    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
-    this.heroRig.body.rotation.y = this.heroFacing;
-    const stride = Math.sin(this.walkCycle) * (speedMag > 0.1 ? 0.55 : 0);
-    this.heroRig.leftLeg.rotation.x = stride;
-    this.heroRig.rightLeg.rotation.x = -stride;
-    this.heroRig.body.position.y = Math.abs(Math.sin(this.walkCycle)) * (speedMag > 0.1 ? 0.08 : 0);
-    this.heroRig.cape.rotation.x = 0.14 + (speedMag > 0.1 ? 0.22 : 0) + Math.sin(this.elapsed * 3.5) * 0.05;
-    this.heroRig.lanternPivot.rotation.z = Math.sin(this.elapsed * 4.2 + this.walkCycle * 0.5) * 0.16;
+    this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
+    this.hero.rig.body.rotation.y = this.hero.facing;
+    const stride = Math.sin(this.hero.walkCycle) * (speedMag > 0.1 ? 0.55 : 0);
+    this.hero.rig.leftLeg.rotation.x = stride;
+    this.hero.rig.rightLeg.rotation.x = -stride;
+    this.hero.rig.body.position.y = Math.abs(Math.sin(this.hero.walkCycle)) * (speedMag > 0.1 ? 0.08 : 0);
+    this.hero.rig.cape.rotation.x = 0.14 + (speedMag > 0.1 ? 0.22 : 0) + Math.sin(this.elapsed * 3.5) * 0.05;
+    this.hero.rig.lanternPivot.rotation.z = Math.sin(this.elapsed * 4.2 + this.hero.walkCycle * 0.5) * 0.16;
 
     // Sword swing / Pommel Strike arm & hilt animation
-    if (this.pommelAnim > 0) {
-      const p = 1 - this.pommelAnim / 0.34;
+    if (this.hero.pommelAnim > 0) {
+      const p = 1 - this.hero.pommelAnim / 0.34;
       // Reverse sword grip so pommel/hilt juts forward & slams down with a crisp torque twist
-      this.heroRig.swordGroup.rotation.x = -Math.PI * 0.56;
+      this.hero.rig.swordGroup.rotation.x = -Math.PI * 0.56;
       const slamCurve = Math.sin(p * Math.PI);
-      this.heroRig.rightArm.rotation.x = -1.35 + slamCurve * 1.15;
-      this.heroRig.rightArm.rotation.y = -0.35 + p * 1.35;
-      this.heroRig.body.rotation.y = this.heroFacing + slamCurve * 0.72;
-    } else if (this.attackAnim > 0) {
-      const p = 1 - this.attackAnim / 0.28;
-      this.heroRig.swordGroup.rotation.x = THREE.MathUtils.damp(
-        this.heroRig.swordGroup.rotation.x,
+      this.hero.rig.rightArm.rotation.x = -1.35 + slamCurve * 1.15;
+      this.hero.rig.rightArm.rotation.y = -0.35 + p * 1.35;
+      this.hero.rig.body.rotation.y = this.hero.facing + slamCurve * 0.72;
+    } else if (this.hero.attackAnim > 0) {
+      const p = 1 - this.hero.attackAnim / 0.28;
+      this.hero.rig.swordGroup.rotation.x = THREE.MathUtils.damp(
+        this.hero.rig.swordGroup.rotation.x,
         Math.PI * 0.42,
         22,
         dt
       );
-      this.heroRig.rightArm.rotation.x = -1.6 + p * 2.4;
-      this.heroRig.rightArm.rotation.y = -0.7 + p * 1.6;
+      this.hero.rig.rightArm.rotation.x = -1.6 + p * 2.4;
+      this.hero.rig.rightArm.rotation.y = -0.7 + p * 1.6;
     } else {
-      this.heroRig.swordGroup.rotation.x = THREE.MathUtils.damp(
-        this.heroRig.swordGroup.rotation.x,
+      this.hero.rig.swordGroup.rotation.x = THREE.MathUtils.damp(
+        this.hero.rig.swordGroup.rotation.x,
         Math.PI * 0.42,
         16,
         dt
       );
-      this.heroRig.rightArm.rotation.x = THREE.MathUtils.damp(this.heroRig.rightArm.rotation.x, -stride * 0.4, 12, dt);
-      this.heroRig.rightArm.rotation.y = THREE.MathUtils.damp(this.heroRig.rightArm.rotation.y, 0, 12, dt);
+      this.hero.rig.rightArm.rotation.x = THREE.MathUtils.damp(this.hero.rig.rightArm.rotation.x, -stride * 0.4, 12, dt);
+      this.hero.rig.rightArm.rotation.y = THREE.MathUtils.damp(this.hero.rig.rightArm.rotation.y, 0, 12, dt);
     }
 
     // Hero Hit Flash
     const heroEmissive =
-      this.heroHitFlash > 0 ? (this.heroHitShieldOnly ? 0x6fd8ff : 0xff3b3b) : 0x000000;
-    for (const m of this.heroRig.flashMaterials) {
+      this.hero.hitFlash > 0 ? (this.hero.hitShieldOnly ? 0x6fd8ff : 0xff3b3b) : 0x000000;
+    for (const m of this.hero.rig.flashMaterials) {
       m.emissive.setHex(heroEmissive);
-      m.emissiveIntensity = this.heroHitFlash > 0 ? 0.75 : 0;
+      m.emissiveIntensity = this.hero.hitFlash > 0 ? 0.75 : 0;
     }
 
     // Hero Flickering Lantern Light + Warm Floor Glow Pool + Rising Ember Trail + 4pc Set Aura
@@ -7851,39 +7435,39 @@ export class EmbervaultEngine {
       Math.sin(this.elapsed * 14.3) * 2.4 +
       Math.sin(this.elapsed * 29.7) * 1.4 +
       Math.cos(this.elapsed * 8.1) * 1.6;
-    const lanternBoost = 1 + this.relicStats.lanternGlowPct / 100;
+    const lanternBoost = 1 + this.hero.relicStats.lanternGlowPct / 100;
     this.heroLight.intensity = (56.0 + flicker) * lanternBoost;
-    this.heroLight.distance = 11.2 * (1 + (this.relicStats.lanternGlowPct / 100) * 0.45);
-    const lanternOffX = Math.sin(this.heroFacing - 0.55) * 0.65;
-    const lanternOffZ = Math.cos(this.heroFacing - 0.55) * 0.65;
+    this.heroLight.distance = 11.2 * (1 + (this.hero.relicStats.lanternGlowPct / 100) * 0.45);
+    const lanternOffX = Math.sin(this.hero.facing - 0.55) * 0.65;
+    const lanternOffZ = Math.cos(this.hero.facing - 0.55) * 0.65;
     // Mage: lift the light well above her head so the pale robe/hair isn't blown out at close range
-    const lightRise = this.isMage() ? 1.25 : 1;
+    const lightRise = this.hero.isMage() ? 1.25 : 1;
     this.heroLight.position.set(
-      this.heroX + lanternOffX * lightRise,
-      this.isMage() ? 2.9 : 1.85,
-      this.heroZ + lanternOffZ * lightRise
+      this.hero.x + lanternOffX * lightRise,
+      this.hero.isMage() ? 2.9 : 1.85,
+      this.hero.z + lanternOffZ * lightRise
     );
-    this.heroFloorGlow.position.set(this.heroX + lanternOffX * 0.5, 0.022, this.heroZ + lanternOffZ * 0.5);
+    this.heroFloorGlow.position.set(this.hero.x + lanternOffX * 0.5, 0.022, this.hero.z + lanternOffZ * 0.5);
     (this.heroFloorGlow.material as THREE.MeshBasicMaterial).opacity = 0.36 + flicker * 0.008;
 
-    if (this.heroSetAura && this.heroSetAura.group.visible) {
-      this.heroSetAura.outerRing.rotation.z += dt * 1.1;
-      this.heroSetAura.innerRing.rotation.z -= dt * 1.9;
+    if (this.hero.setAura && this.hero.setAura.group.visible) {
+      this.hero.setAura.outerRing.rotation.z += dt * 1.1;
+      this.hero.setAura.innerRing.rotation.z -= dt * 1.9;
       const pulse = 0.96 + Math.sin(this.elapsed * 4.2) * 0.08;
-      this.heroSetAura.group.scale.setScalar(pulse);
+      this.hero.setAura.group.scale.setScalar(pulse);
     }
 
-    this.emberSpawnTimer -= dt;
-    if (this.emberSpawnTimer <= 0) {
-      this.emberSpawnTimer = 0.085;
+    this.hero.emberSpawnTimer -= dt;
+    if (this.hero.emberSpawnTimer <= 0) {
+      this.hero.emberSpawnTimer = 0.085;
       this.spawnParticle(
-        this.heroX + lanternOffX + (Math.random() - 0.5) * 0.18,
+        this.hero.x + lanternOffX + (Math.random() - 0.5) * 0.18,
         1.25,
-        this.heroZ + lanternOffZ + (Math.random() - 0.5) * 0.18,
+        this.hero.z + lanternOffZ + (Math.random() - 0.5) * 0.18,
         (Math.random() - 0.5) * 0.45,
         0.9 + Math.random() * 0.9,
         (Math.random() - 0.5) * 0.45,
-        this.isMage()
+        this.hero.isMage()
           ? Math.random() < 0.75
             ? 0xbff4ff
             : 0xffe066
@@ -7897,11 +7481,11 @@ export class EmbervaultEngine {
     }
 
     // Keep global rim shadow camera centered on hero
-    this.rimLight.position.set(this.heroX - 10, 22, this.heroZ - 8);
-    this.rimLight.target.position.set(this.heroX, 0, this.heroZ);
+    this.rimLight.position.set(this.hero.x - 10, 22, this.hero.z - 8);
+    this.rimLight.target.position.set(this.hero.x, 0, this.hero.z);
 
     // Explore fog-of-war on minimap
-    const heroG = worldToGrid(this.heroX, this.heroZ);
+    const heroG = worldToGrid(this.hero.x, this.hero.z);
     this.markExplored(heroG.gx, heroG.gz);
 
     // 4. Key Pickup, Locked Gate Unlock, Stairwell Descent (dungeon only)
@@ -7926,7 +7510,7 @@ export class EmbervaultEngine {
 
     // 9. Smooth Isometric Camera Follow + Screen Shake
     const camDist = 14.5 * this.camZoom;
-    _camGoal.set(this.heroX + camDist, camDist * 1.16, this.heroZ + camDist);
+    _camGoal.set(this.localHero.x + camDist, camDist * 1.16, this.localHero.z + camDist);
     this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, _camGoal.x, 5.5, dt);
     this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, _camGoal.y, 5.5, dt);
     this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, _camGoal.z, 5.5, dt);
@@ -7941,9 +7525,9 @@ export class EmbervaultEngine {
     }
 
     _camTarget.set(
-      THREE.MathUtils.damp(_camTarget.x, this.heroX, 7, dt) + shakeX,
+      THREE.MathUtils.damp(_camTarget.x, this.hero.x, 7, dt) + shakeX,
       0.65 + shakeY,
-      THREE.MathUtils.damp(_camTarget.z, this.heroZ, 7, dt)
+      THREE.MathUtils.damp(_camTarget.z, this.hero.z, 7, dt)
     );
     this.camera.lookAt(_camTarget);
 
@@ -7956,7 +7540,7 @@ export class EmbervaultEngine {
 
     // Periodic HUD / Minimap refresh (faster while Pommel Strike CD is ticking)
     this.hudSyncTimer += dt;
-    const hudInterval = this.pommelCooldown > 0 ? 0.1 : 0.25;
+    const hudInterval = this.hero.pommelCooldown > 0 ? 0.1 : 0.25;
     if (this.hudSyncTimer > hudInterval) {
       this.hudSyncTimer = 0;
       this.emitHud();
@@ -7975,7 +7559,7 @@ export class EmbervaultEngine {
       this.keyPedestal.keyMesh.position.y = 1.05 + Math.sin(this.elapsed * 3.4) * 0.14;
 
       const kw = gridToWorld(this.dungeon.keyPos.gx, this.dungeon.keyPos.gz);
-      if (Math.hypot(this.heroX - kw.x, this.heroZ - kw.z) < 1.45) {
+      if (Math.hypot(this.hero.x - kw.x, this.hero.z - kw.z) < 1.45) {
         this.hasKey = true;
         this.keyPedestal.keyMesh.visible = false;
         this.keyPedestal.halo.visible = false;
@@ -7997,7 +7581,7 @@ export class EmbervaultEngine {
             4.5
           );
         }
-        this.aiPath = [];
+        this.hero.ai.path = [];
         this.emitHud();
       }
     }
@@ -8006,7 +7590,7 @@ export class EmbervaultEngine {
     if (this.gateRig) {
       const dw = gridToWorld(this.dungeon.doorPos.gx, this.dungeon.doorPos.gz);
       if (this.hasKey && !this.doorUnlocked) {
-        if (Math.hypot(this.heroX - dw.x, this.heroZ - dw.z) < 2.85) {
+        if (Math.hypot(this.hero.x - dw.x, this.hero.z - dw.z) < 2.85) {
           this.doorUnlocked = true;
           this.gateRig.lockGlow.visible = false;
           this.audio.playDoorUnlock();
@@ -8026,7 +7610,7 @@ export class EmbervaultEngine {
               3.5
             );
           }
-          this.aiPath = [];
+          this.hero.ai.path = [];
           this.emitHud();
         }
       }
@@ -8042,10 +7626,10 @@ export class EmbervaultEngine {
     // Stairwell Descent
     if (this.doorUnlocked && this.transitionState === 'none') {
       const sw = gridToWorld(this.dungeon.stairsPos.gx, this.dungeon.stairsPos.gz);
-      if (Math.hypot(this.heroX - sw.x, this.heroZ - sw.z) < 1.25) {
+      if (Math.hypot(this.hero.x - sw.x, this.hero.z - sw.z) < 1.25) {
         this.audio.playDescend();
         this.beginTransition(() => {
-          this.hp = Math.min(this.getEffectiveMaxHp(), this.hp + 20);
+          this.hero.hp = Math.min(this.hero.getEffectiveMaxHp(), this.hero.hp + 20);
           this.buildLevel(this.depth + 1, { tickBuffFloor: true });
         });
       }
@@ -8091,8 +7675,8 @@ export class EmbervaultEngine {
           this.dungeon,
           e.x,
           e.z,
-          this.heroX,
-          this.heroZ,
+          this.hero.x,
+          this.hero.z,
           this.doorUnlocked,
           0.35
         );
@@ -8154,8 +7738,8 @@ export class EmbervaultEngine {
 
           if (skill === 'targeted_blast') {
             // Lock psychic/arcane blast circle directly under the hero's current spot
-            tx = this.heroX;
-            tz = this.heroZ;
+            tx = this.hero.x;
+            tz = this.hero.z;
             tRad = 2.25;
           } else if (skill === 'charge_slam') {
             // Find farthest unobstructed landing spot along line toward hero (up to 4.6u)
@@ -8326,7 +7910,7 @@ export class EmbervaultEngine {
           this.addScreenShake(0.4, 0.24);
           emitShockwave(e.x, e.z, rad, cfg.telegraphColor);
 
-          const heroDistToImpact = Math.hypot(this.heroX - e.x, this.heroZ - e.z);
+          const heroDistToImpact = Math.hypot(this.hero.x - e.x, this.hero.z - e.z);
           if (heroDistToImpact <= rad) {
             this.damageHero(
               cfg.damage * 0.95 * this.getDepthDamageScale(),
@@ -8335,7 +7919,7 @@ export class EmbervaultEngine {
               this.getEnemyLabel(e)
             );
           } else if (heroDistToImpact <= rad + 3.2) {
-            this.emitFloatingText(this.heroX, 1.95, this.heroZ, 'DODGED!', 'info');
+            this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
           }
         }
       } else if (!e.bossHitApplied) {
@@ -8389,7 +7973,7 @@ export class EmbervaultEngine {
           this.addScreenShake(0.38, 0.22);
           emitShockwave(tx, tz, rad, cfg.telegraphColor);
 
-          const heroDistToImpact = Math.hypot(this.heroX - tx, this.heroZ - tz);
+          const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
           if (heroDistToImpact <= rad * 0.92) {
             this.damageHero(
               cfg.damage * 0.9 * this.getDepthDamageScale(),
@@ -8398,7 +7982,7 @@ export class EmbervaultEngine {
               this.getEnemyLabel(e)
             );
           } else if (heroDistToImpact <= rad + 3.0) {
-            this.emitFloatingText(this.heroX, 1.95, this.heroZ, 'DODGED!', 'info');
+            this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
           }
 
           const orbCount = this.depth >= 21 ? 8 : 6;
@@ -8432,7 +8016,7 @@ export class EmbervaultEngine {
           this.addScreenShake(0.42, 0.24);
           emitShockwave(tx, tz, rad, cfg.telegraphColor);
 
-          const heroDistToImpact = Math.hypot(this.heroX - tx, this.heroZ - tz);
+          const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
           if (heroDistToImpact <= rad) {
             this.damageHero(
               cfg.damage * this.getDepthDamageScale(),
@@ -8441,7 +8025,7 @@ export class EmbervaultEngine {
               this.getEnemyLabel(e)
             );
           } else if (heroDistToImpact <= rad + 3.4) {
-            this.emitFloatingText(this.heroX, 1.95, this.heroZ, 'DODGED!', 'info');
+            this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
           }
         }
       }
@@ -8694,7 +8278,7 @@ export class EmbervaultEngine {
       }
 
       // Hero collision (hero can dash through projectiles!)
-      if (this.dashTimer <= 0 && Math.hypot(p.x - this.heroX, p.z - this.heroZ) < 0.58) {
+      if (this.hero.dashTimer <= 0 && Math.hypot(p.x - this.hero.x, p.z - this.hero.z) < 0.58) {
         this.damageHero(p.damage, p.x - p.vx * 0.05, p.z - p.vz * 0.05, p.sourceLabel);
         for (let k = 0; k < 8; k++) {
           this.spawnParticle(
@@ -8726,7 +8310,7 @@ export class EmbervaultEngine {
 
     const clearLOS =
       dist < aggroRange &&
-      hasLineOfSight(this.dungeon, e.x, e.z, this.heroX, this.heroZ, this.doorUnlocked, 0.24);
+      hasLineOfSight(this.dungeon, e.x, e.z, this.hero.x, this.hero.z, this.doorUnlocked, 0.24);
 
     if (dist < aggroRange) {
       const dirX = dx / (dist || 1);
@@ -8928,8 +8512,8 @@ export class EmbervaultEngine {
         e.rig.body.rotation.z = 0;
       }
 
-      const dx = this.heroX - e.x;
-      const dz = this.heroZ - e.z;
+      const dx = this.hero.x - e.x;
+      const dz = this.hero.z - e.z;
       const dist = Math.hypot(dx, dz);
 
       if (e.isBoss) {
@@ -9107,14 +8691,14 @@ export class EmbervaultEngine {
   }
 
   private tryAutoEquipBetterRelic(item: RelicItem): boolean {
-    if (this.equippedRelics.length < 4) return false;
+    if (this.hero.equippedRelics.length < 4) return false;
 
-    const currentScore = evaluateRelicLoadoutScore(this.equippedRelics);
+    const currentScore = evaluateRelicLoadoutScore(this.hero.equippedRelics);
     let bestSlot = -1;
     let bestScore = currentScore;
 
-    for (let i = 0; i < this.equippedRelics.length; i++) {
-      const candidate = [...this.equippedRelics];
+    for (let i = 0; i < this.hero.equippedRelics.length; i++) {
+      const candidate = [...this.hero.equippedRelics];
       candidate[i] = item;
       const score = evaluateRelicLoadoutScore(candidate);
       if (score > bestScore + 3) {
@@ -9125,16 +8709,16 @@ export class EmbervaultEngine {
 
     if (bestSlot < 0) return false;
 
-    const replaced = this.equippedRelics[bestSlot];
-    this.equippedRelics[bestSlot] = item;
-    if (this.relicBag.length < this.relicBagCap) {
-      this.relicBag.unshift(replaced);
+    const replaced = this.hero.equippedRelics[bestSlot];
+    this.hero.equippedRelics[bestSlot] = item;
+    if (this.hero.relicBag.length < this.hero.relicBagCap) {
+      this.hero.relicBag.unshift(replaced);
     } else {
       // Bag full fallback: convert replaced piece into gold
-      this.gold += replaced.sellValue;
-      this.totalGoldEarned += replaced.sellValue;
+      this.hero.gold += replaced.sellValue;
+      this.hero.totalGoldEarned += replaced.sellValue;
     }
-    this.recomputeRelicStats(true);
+    this.hero.recomputeRelicStats(true);
     return true;
   }
 
@@ -9174,8 +8758,8 @@ export class EmbervaultEngine {
       }
 
       // Gentle magnetic pull toward hero (respects relic viewing delay)
-      const dx = this.heroX - l.x;
-      const dz = this.heroZ - l.z;
+      const dx = this.hero.x - l.x;
+      const dz = this.hero.z - l.z;
       const dist = Math.hypot(dx, dz);
       const minCollectAge = l.pickupDelay ?? 0.22;
       const pullRange = l.type === 'relic' ? 1.35 : 2.4;
@@ -9221,18 +8805,18 @@ export class EmbervaultEngine {
         l.collected = true;
         l.mesh.visible = false;
         if (l.type === 'gold') {
-          const gained = Math.max(1, Math.round(l.value * (1 + this.relicStats.goldPct / 100)));
-          this.gold += gained;
-          this.totalGoldEarned += gained;
+          const gained = Math.max(1, Math.round(l.value * (1 + this.hero.relicStats.goldPct / 100)));
+          this.hero.gold += gained;
+          this.hero.totalGoldEarned += gained;
           this.audio.playCoin();
           this.emitFloatingText(l.x, 1.3, l.z, `+${gained}G`, 'gold');
         } else if (l.type === 'potion') {
-          this.potions += 1;
+          this.hero.potions += 1;
           this.audio.playPotion();
           this.emitFloatingText(l.x, 1.3, l.z, '+1 ELIXIR', 'heal');
         } else if (l.type === 'relic' && l.relic) {
           const item = l.relic;
-          this.discoveredRelicIds.add(item.templateId);
+          this.hero.discoveredRelicIds.add(item.templateId);
           const tone: FloatingLabelData['tone'] =
             item.rarity === 'orange'
               ? 'relicOrange'
@@ -9242,22 +8826,22 @@ export class EmbervaultEngine {
               ? 'relicYellow'
               : 'relicBlue';
 
-          if (this.equippedRelics.length < 4) {
-            this.equippedRelics.push(item);
-            this.recomputeRelicStats(true);
+          if (this.hero.equippedRelics.length < 4) {
+            this.hero.equippedRelics.push(item);
+            this.hero.recomputeRelicStats(true);
             this.audio.playRelicEquip();
             this.emitFloatingText(l.x, 1.65, l.z, `已裝備：${item.name}`, tone);
-          } else if (this.controlMode === 'auto' && this.tryAutoEquipBetterRelic(item)) {
+          } else if (this.hero.controlMode === 'auto' && this.tryAutoEquipBetterRelic(item)) {
             this.audio.playRelicEquip();
             this.emitFloatingText(l.x, 1.75, l.z, `自動換裝：${item.name}`, tone);
-          } else if (this.relicBag.length < this.relicBagCap) {
-            this.relicBag.unshift(item);
+          } else if (this.hero.relicBag.length < this.hero.relicBagCap) {
+            this.hero.relicBag.unshift(item);
             this.audio.playRelicEquip();
             this.emitFloatingText(l.x, 1.65, l.z, `獲得：${item.name}`, tone);
           } else {
             // Bag full fallback: auto-convert to gold so loot is never wasted
-            this.gold += item.sellValue;
-            this.totalGoldEarned += item.sellValue;
+            this.hero.gold += item.sellValue;
+            this.hero.totalGoldEarned += item.sellValue;
             this.audio.playRelicSell();
             this.emitFloatingText(
               l.x,
@@ -9308,7 +8892,7 @@ export class EmbervaultEngine {
 
     const maxLightDist = this.inTown ? 30 : 22;
     for (const lp of this.lightProps) {
-      const dist = Math.hypot(lp.x - this.heroX, lp.z - this.heroZ);
+      const dist = Math.hypot(lp.x - this.hero.x, lp.z - this.hero.z);
       if (lp.kind === 'key' && this.hasKey) continue;
       if (lp.kind === 'gate' && this.doorUnlocked) continue;
       if (dist > maxLightDist) continue;
@@ -9378,8 +8962,8 @@ export class EmbervaultEngine {
             -0.15
           );
         }
-        const effMax = this.getEffectiveMaxHp();
-        if (!lp.used && dist < 1.1 && this.hp < effMax) {
+        const effMax = this.hero.getEffectiveMaxHp();
+        if (!lp.used && dist < 1.1 && this.hero.hp < effMax) {
           lp.used = true;
           if (lp.crystal) lp.crystal.visible = false;
           if (lp.halo) lp.halo.visible = false;
@@ -9404,7 +8988,7 @@ export class EmbervaultEngine {
               1.5
             );
           }
-          this.hp = Math.min(effMax, this.hp + 20);
+          this.hero.hp = Math.min(effMax, this.hero.hp + 20);
           this.audio.playPotion();
           this.emitFloatingText(lp.x, 1.7, lp.z, 'SANCTUM +20 HP', 'info');
           this.emitHud();
@@ -9416,7 +9000,7 @@ export class EmbervaultEngine {
           lp.halo.scale.set(hs, hs, 1);
         }
         if (lp.decal) lp.decal.rotation.z += dt * 0.25;
-        if (this.stashOpen && this.stashRig) {
+        if (this.hero.stashOpen && this.stashRig) {
           this.stashRig.lid.rotation.x = THREE.MathUtils.lerp(this.stashRig.lid.rotation.x, -1.15, Math.min(1, dt * 8));
         } else if (this.stashRig) {
           this.stashRig.lid.rotation.x = THREE.MathUtils.lerp(this.stashRig.lid.rotation.x, 0, Math.min(1, dt * 8));
@@ -9537,7 +9121,7 @@ export class EmbervaultEngine {
       );
       sp.rig.warningMat.emissiveIntensity = isWarning ? 1.1 : isUp ? 1.5 : 0.15;
 
-      if (isUp && Math.hypot(this.heroX - sp.x, this.heroZ - sp.z) < 0.72) {
+      if (isUp && Math.hypot(this.hero.x - sp.x, this.hero.z - sp.z) < 0.72) {
         this.damageHero(6 * this.getDepthDamageScale(), sp.x, sp.z, '尖刺陷阱');
       }
     }
@@ -9554,8 +9138,8 @@ export class EmbervaultEngine {
 
     for (let i = 0; i < this.wallTiles.length; i++) {
       const t = this.wallTiles[i];
-      const dx = t.wx - this.heroX;
-      const dz = t.wz - this.heroZ;
+      const dx = t.wx - this.hero.x;
+      const dz = t.wz - this.hero.z;
       const fwd = (dx + dz) * 0.70710678;
       if (fwd <= fwdMin || fwd >= fwdMax) continue;
       const side = Math.abs(dx - dz) * 0.70710678;
@@ -9572,8 +9156,8 @@ export class EmbervaultEngine {
       const candidates: Array<{ tile: WallOcclusionTile; score: number }> = [];
       for (let i = 0; i < this.wallTiles.length; i++) {
         const t = this.wallTiles[i];
-        const dx = t.wx - this.heroX;
-        const dz = t.wz - this.heroZ;
+        const dx = t.wx - this.hero.x;
+        const dz = t.wz - this.hero.z;
         const fwd = (dx + dz) * 0.70710678;
         if (fwd <= -0.35 || fwd >= 6.4) continue;
         const side = Math.abs(dx - dz) * 0.70710678;
