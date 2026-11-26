@@ -143,6 +143,12 @@ export class Hero {
   public shieldSpeedUpgrades = 0;
   public autoNextUpgrade: UpgradeKind = 'hp';
 
+  /**
+   * True while this hero stands in the (local) town instead of the dungeon (P4-C). Only the local hero ever sets it;
+   * the dungeon simulation ignores such a hero completely (no targeting, pickups, rescue or objectives).
+   */
+  public inTown = false;
+
   // Downed state & portal
   public isDead = false;
   public slainBy = '地城陷阱';
@@ -233,6 +239,7 @@ export class Hero {
    * stats / loadout are applied). Class-dependent stats are set by applyClassStats afterwards.
    */
   public resetForNewRun(): void {
+    this.inTown = false;
     this.isDead = false;
     this.portal = null;
     this.rescueTargetId = null;

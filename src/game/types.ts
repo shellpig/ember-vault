@@ -280,6 +280,10 @@ export interface HudState {
   discoveredRelicIds: string[];
   inTown: boolean;
   nearPortal: boolean;
+  /** Doors the town gate can lead to (own portal, teammates' portals, or the floor entrance). Empty outside town. */
+  portalOptions: TownPortalOption[];
+  /** In town: teammates are still fighting in the dungeon (it keeps running, monsters will not respawn). */
+  dungeonRunning: boolean;
   nearAngel: boolean;
   townReturnCost: number;
   angelBuff: AngelBuff | null;
@@ -297,4 +301,13 @@ export interface HudState {
   mobilityName: string;
   /** Altar upgrade rows for the current class, already formatted. */
   upgradeOptions: UpgradeOptionView[];
+}
+
+/** One selectable dungeon portal in the town gate menu (spec §3.1: any hero may use anybody's portal). */
+export interface TownPortalOption {
+  /** Id of the hero who owns the portal; `'entrance'` stands for the floor entrance when no portal exists. */
+  id: string;
+  label: string;
+  isOwn: boolean;
+  downed: boolean;
 }

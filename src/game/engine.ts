@@ -82,6 +82,7 @@ import {
   RunSummary,
   TerrainTheme,
   TileType,
+  TownPortalOption,
 } from './types';
 
 export type { CharacterLoadout } from './hero';
@@ -610,6 +611,45 @@ interface SavedDungeonSnapshot {
   brokenBreakableKeys: Set<string>;
 }
 
+/**
+ * Everything that belongs to "the level the engine is currently looking at" (P4-C). The engine code works on one
+ * set of fields (`this.dungeon`, `this.enemies` ...). The dungeon and the town each own such a set: while the local
+ * hero is in town the dungeon's set is parked in `dungeonCtx` and swapped in only for the background simulation.
+ */
+type StationRig = {
+  root: THREE.Group;
+  crystal: THREE.Group;
+  ring: THREE.Mesh;
+  halo: THREE.Sprite;
+};
+
+interface LevelCtx {
+  dungeon: DungeonData;
+  enemies: EnemyEntity[];
+  projectiles: ProjectileEntity[];
+  heroProjectiles: HeroProjectileEntity[];
+  loots: LootEntity[];
+  breakables: BreakableEntity[];
+  lightProps: AnimatedLightProp[];
+  spikes: SpikeInstance[];
+  keyPedestal: { root: THREE.Group; keyMesh: THREE.Group; halo: THREE.Sprite } | null;
+  altarRig: StationRig | null;
+  shopRig: StationRig | null;
+  gateRig: GateRig | null;
+  gateOpenProgress: number;
+  wallOpaqueMeshes: THREE.InstancedMesh[];
+  wallFadeMeshes: THREE.InstancedMesh[];
+  capOpaqueMesh: THREE.InstancedMesh | null;
+  capFadeMesh: THREE.InstancedMesh | null;
+  wallTiles: WallOcclusionTile[];
+  wallOcclusionActive: boolean;
+  textures: DungeonTextureSet | null;
+  extraTextures: THREE.Texture[];
+  hasKey: boolean;
+  doorUnlocked: boolean;
+  heroPortalRigs: Map<string, TownPortalRig>;
+}
+
 interface WallOcclusionTile {
   gx: number;
   gz: number;
@@ -651,9 +691,16 @@ export class EmbervaultEngine {
   private isSoftwareGl = false;
 
   // Groups
+  // The dungeon owns these three groups, the town owns `townGroup` (P4-C). Only the group set of the level the local
+  // hero stands in is visible, so the other level costs nothing to render.
   private levelGroup = new THREE.Group();
   private dynamicGroup = new THREE.Group();
   private debrisGroup = new THREE.Group();
+  /**
+   * Built without touching the global RNG: THREE draws object UUIDs from Math.random, and keeping the draw order of
+   * the dungeon identical to before P4-C is what lets the deterministic regression run compare 0 differences.
+   */
+  private townGroup = EmbervaultEngine.createQuietGroup();
 
   /**
    * Every hero in the run: the local player first, then the bot teammates (`?bots=N`, P4-B).
@@ -699,24 +746,25 @@ export class EmbervaultEngine {
   private spikes: SpikeInstance[] = [];
   private keyPedestal: { root: THREE.Group; keyMesh: THREE.Group; halo: THREE.Sprite } | null =
     null;
-  private altarRig: {
-    root: THREE.Group;
-    crystal: THREE.Group;
-    ring: THREE.Mesh;
-    halo: THREE.Sprite;
-  } | null = null;
-  private shopRig: {
-    root: THREE.Group;
-    crystal: THREE.Group;
-    ring: THREE.Mesh;
-    halo: THREE.Sprite;
-  } | null = null;
+  private altarRig: StationRig | null = null;
+  private shopRig: StationRig | null = null;
   private gateRig: GateRig | null = null;
   private gateOpenProgress = 0;
 
   // Sanctuary Town & Angel Blessing State
   private inTown = false;
+  /** Set while the local hero is in town and the dungeon is frozen (nobody alive in it): monsters respawn on return. */
   private savedDungeon: SavedDungeonSnapshot | null = null;
+  /** The dungeon's own level fields, parked here while the local hero is in town and teammates keep it running. */
+  private dungeonCtx: LevelCtx | null = null;
+  /** True while the town scene exists (the local hero is in it or is on the way). */
+  private townBuilt = false;
+  /** True while the dungeon is simulated in the background (local hero in town): nothing may touch the screen. */
+  private bgSim = false;
+  /** Where the bots wait while the local hero is away from the dungeon (the hero's last spot / portal). */
+  private awayAnchor: { x: number; z: number } | null = null;
+  /** Depth of a floor change that happened while the local hero was in town (shown as a town banner). */
+  private pendingAwayFloor: number | null = null;
   /** Town-side gate (walk in to return to the dungeon). */
   private townGatePos: { x: number; z: number } | null = null;
   private angelPos: { x: number; z: number } | null = null;
@@ -795,6 +843,19 @@ export class EmbervaultEngine {
   // Heroes[] plumbing (P4-B): actor switching, bots, rescue
   // ---------------------------------------------------------------------------------------------------------
 
+  private static createQuietGroup(): THREE.Group {
+    const real = Math.random;
+    Math.random = () => 0.5;
+    let g: THREE.Group;
+    try {
+      g = new THREE.Group();
+    } finally {
+      Math.random = real;
+    }
+    g.uuid = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : g.uuid;
+    return g;
+  }
+
   /** `?bots=N` (0-3, default 0): number of local bot teammates. Works on every build (handy for testing). */
   private static readBotCount(): number {
     try {
@@ -814,14 +875,119 @@ export class EmbervaultEngine {
   /** Makes `h` the hero that the per-hero engine code operates on (bots are silent). */
   private setActor(h: Hero): void {
     this.hero = h;
-    this.audio.suppressed = h.isBot;
+    this.audio.suppressed = h.isBot || this.bgSim;
+  }
+
+  /** A hero that is part of the dungeon simulation: on its feet and not away in the local town. */
+  private isInDungeonAlive(h: Hero): boolean {
+    return !h.isDead && !h.inTown;
+  }
+
+  // ---------------------------------------------------------------------------------------------------------
+  // Level contexts (P4-C): the dungeon and the town each own a set of level fields; swap them in and out
+  // ---------------------------------------------------------------------------------------------------------
+
+  /** A fresh, empty level field set (the town starts from it). Key / gate flags carry over for the HUD. */
+  private blankCtx(): LevelCtx {
+    return {
+      dungeon: this.dungeon,
+      enemies: [],
+      projectiles: [],
+      heroProjectiles: [],
+      loots: [],
+      breakables: [],
+      lightProps: [],
+      spikes: [],
+      keyPedestal: null,
+      altarRig: null,
+      shopRig: null,
+      gateRig: null,
+      gateOpenProgress: 0,
+      wallOpaqueMeshes: [],
+      wallFadeMeshes: [],
+      capOpaqueMesh: null,
+      capFadeMesh: null,
+      wallTiles: [],
+      wallOcclusionActive: false,
+      textures: null,
+      extraTextures: [],
+      hasKey: this.hasKey,
+      doorUnlocked: this.doorUnlocked,
+      heroPortalRigs: new Map(),
+    };
+  }
+
+  private captureCtx(): LevelCtx {
+    return {
+      dungeon: this.dungeon,
+      enemies: this.enemies,
+      projectiles: this.projectiles,
+      heroProjectiles: this.heroProjectiles,
+      loots: this.loots,
+      breakables: this.breakables,
+      lightProps: this.lightProps,
+      spikes: this.spikes,
+      keyPedestal: this.keyPedestal,
+      altarRig: this.altarRig,
+      shopRig: this.shopRig,
+      gateRig: this.gateRig,
+      gateOpenProgress: this.gateOpenProgress,
+      wallOpaqueMeshes: this.wallOpaqueMeshes,
+      wallFadeMeshes: this.wallFadeMeshes,
+      capOpaqueMesh: this.capOpaqueMesh,
+      capFadeMesh: this.capFadeMesh,
+      wallTiles: this.wallTiles,
+      wallOcclusionActive: this.wallOcclusionActive,
+      textures: this.textures,
+      extraTextures: this.extraTextures,
+      hasKey: this.hasKey,
+      doorUnlocked: this.doorUnlocked,
+      heroPortalRigs: this.heroPortalRigs,
+    };
+  }
+
+  private applyCtx(c: LevelCtx): void {
+    this.dungeon = c.dungeon;
+    this.enemies = c.enemies;
+    this.projectiles = c.projectiles;
+    this.heroProjectiles = c.heroProjectiles;
+    this.loots = c.loots;
+    this.breakables = c.breakables;
+    this.lightProps = c.lightProps;
+    this.spikes = c.spikes;
+    this.keyPedestal = c.keyPedestal;
+    this.altarRig = c.altarRig;
+    this.shopRig = c.shopRig;
+    this.gateRig = c.gateRig;
+    this.gateOpenProgress = c.gateOpenProgress;
+    this.wallOpaqueMeshes = c.wallOpaqueMeshes;
+    this.wallFadeMeshes = c.wallFadeMeshes;
+    this.capOpaqueMesh = c.capOpaqueMesh;
+    this.capFadeMesh = c.capFadeMesh;
+    this.wallTiles = c.wallTiles;
+    this.wallOcclusionActive = c.wallOcclusionActive;
+    this.textures = c.textures;
+    this.extraTextures = c.extraTextures;
+    this.hasKey = c.hasKey;
+    this.doorUnlocked = c.doorUnlocked;
+    this.heroPortalRigs = c.heroPortalRigs;
+  }
+
+  /** Shows the group set of the level the local hero is in (the other one is not rendered at all). */
+  private setViewGroups(town: boolean): void {
+    this.levelGroup.visible = !town;
+    this.dynamicGroup.visible = !town;
+    this.debrisGroup.visible = !town;
+    this.townGroup.visible = town;
+    // Teammates live in the dungeon scene graph root: hide them while the camera is in town
+    for (const h of this.heroes) if (h.isBot) h.rig.root.visible = !town;
   }
 
   /** Runs `fn` once for every living hero with that hero as the actor, then restores the previous actor. */
   private forEachLiveHero(fn: (h: Hero) => void): void {
     const prev = this.hero;
     for (const h of this.heroes) {
-      if (h.isDead) continue;
+      if (h.isDead || h.inTown) continue;
       this.setActor(h);
       fn(h);
     }
@@ -833,7 +999,7 @@ export class EmbervaultEngine {
     let best: Hero | null = null;
     let bestD = Infinity;
     for (const h of this.heroes) {
-      if (h.isDead) continue;
+      if (h.isDead || h.inTown) continue;
       const d = (h.x - x) * (h.x - x) + (h.z - z) * (h.z - z);
       if (d < bestD) {
         bestD = d;
@@ -976,13 +1142,15 @@ export class EmbervaultEngine {
   }
 
   /**
-   * Puts the teammates next to (cx, cz) and brings downed ones back on their feet. P4-B only: the town shares the
-   * dungeon scene, so bots travel with the local hero (P4-C replaces this with the per-player town of spec §3.4).
+   * New floor (spec §3.4 / §5.3): every hero that is in the dungeon gets back on their feet (downed ones at full
+   * health) and teammates are put around (cx, cz), the floor entrance. The local hero positions themself, and a
+   * local hero who is in town is not part of the dungeon: they stay where they are.
    */
   private placeTeamAround(cx: number, cz: number): void {
     const local = this.localHero;
     let slot = 0;
     for (const h of this.heroes) {
+      if (h.inTown) continue;
       if (h.isDead) {
         h.isDead = false;
         h.restoreAfterDowned();
@@ -1064,7 +1232,7 @@ export class EmbervaultEngine {
     }
     const local = this.localHero;
     for (const h of this.heroes) {
-      if (h.isDead) {
+      if (h.isDead || h.inTown) {
         h.rescueTargetId = null;
         h.rescueProgress = 0;
         continue;
@@ -1311,6 +1479,8 @@ export class EmbervaultEngine {
     this.scene.add(this.levelGroup);
     this.scene.add(this.dynamicGroup);
     this.scene.add(this.debrisGroup);
+    this.townGroup.visible = false;
+    this.scene.add(this.townGroup);
   }
 
   private initParticlePool(): void {
@@ -1351,6 +1521,7 @@ export class EmbervaultEngine {
     maxLife: number,
     gravity = 0
   ): void {
+    if (this.bgSim) return; // the background dungeon is not on screen
     for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
       if (!p.active) {
@@ -1374,29 +1545,33 @@ export class EmbervaultEngine {
     }
   }
 
-  private clearLevel(): void {
-    const disposeGroup = (group: THREE.Group) => {
-      group.traverse((obj) => {
-        if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
-          obj.geometry.dispose();
-          if (Array.isArray(obj.material)) {
-            obj.material.forEach((m) => m.dispose());
-          } else {
-            obj.material.dispose();
-          }
-        } else if (obj instanceof THREE.Sprite) {
-          obj.material.map?.dispose();
+  private disposeGroupContents(group: THREE.Group): void {
+    group.traverse((obj) => {
+      if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
+        obj.geometry.dispose();
+        if (Array.isArray(obj.material)) {
+          obj.material.forEach((m) => m.dispose());
+        } else {
           obj.material.dispose();
         }
-      });
-      while (group.children.length > 0) {
-        group.remove(group.children[0]);
+      } else if (obj instanceof THREE.Sprite) {
+        obj.material.map?.dispose();
+        obj.material.dispose();
       }
-    };
+    });
+    while (group.children.length > 0) {
+      group.remove(group.children[0]);
+    }
+  }
 
-    disposeGroup(this.levelGroup);
-    disposeGroup(this.dynamicGroup);
-    disposeGroup(this.debrisGroup);
+  /**
+   * Throws away the dungeon level the engine currently holds (its fields must be the active ones): scene groups,
+   * textures, entities and the per-level bits of every hero's AI. The town is untouched (see clearTown).
+   */
+  private clearLevel(): void {
+    this.disposeGroupContents(this.levelGroup);
+    this.disposeGroupContents(this.dynamicGroup);
+    this.disposeGroupContents(this.debrisGroup);
 
     if (this.textures) {
       this.textures.dispose();
@@ -1419,14 +1594,7 @@ export class EmbervaultEngine {
     this.shopRig = null;
     this.gateRig = null;
     this.gateOpenProgress = 0;
-    this.angelRig = null;
-    this.townPortalRig = null;
-    this.heroPortalRigs.clear();
-    this.townGatePos = null;
-    this.angelPos = null;
-    this.stashPos = null;
-    this.stashRig = null;
-    for (const h of this.heroes) h.stashOpen = false;
+    this.heroPortalRigs = new Map();
     this.wallOpaqueMeshes = [];
     this.wallFadeMeshes = [];
     this.capOpaqueMesh = null;
@@ -1449,19 +1617,73 @@ export class EmbervaultEngine {
     }
   }
 
+  /** Disposes the town scene (the town's level fields must be the active ones). Safe when no town exists. */
+  private clearTown(): void {
+    this.disposeGroupContents(this.townGroup);
+    if (this.textures) {
+      this.textures.dispose();
+      this.textures = null;
+    }
+    if (this.extraTextures.length > 0) {
+      this.extraTextures.forEach((t) => t.dispose());
+      this.extraTextures = [];
+    }
+    this.lightProps = [];
+    this.altarRig = null;
+    this.shopRig = null;
+    this.angelRig = null;
+    this.townPortalRig = null;
+    this.townGatePos = null;
+    this.angelPos = null;
+    this.stashPos = null;
+    this.stashRig = null;
+    for (const h of this.heroes) h.stashOpen = false;
+    this.townBuilt = false;
+  }
+
+  /**
+   * Leaves the town view for good (new floor / new run): disposes the town, then disposes (or re-activates, so the
+   * caller can dispose) the parked dungeon. Afterwards the dungeon's fields are the active ones.
+   */
+  private leaveTownScene(): void {
+    if (this.townBuilt) {
+      this.clearTown();
+      if (this.dungeonCtx) {
+        this.applyCtx(this.dungeonCtx);
+        this.dungeonCtx = null;
+      } else {
+        this.applyCtx(this.blankCtx());
+      }
+    }
+    this.inTown = false;
+    for (const h of this.heroes) h.inTown = false;
+    this.setViewGroups(false);
+  }
+
   private buildLevel(
     depth: number,
     options?: { savedSnapshot?: SavedDungeonSnapshot; tickBuffFloor?: boolean }
   ): void {
+    // `bg`: a floor change that happens while the local hero is in town (a teammate took the stairs). The dungeon's
+    // fields are swapped in for it, and nothing may touch the screen, the camera or the local hero.
+    const bg = this.bgSim;
+    if (!bg) this.leaveTownScene();
     this.clearLevel();
     this.inTown = false;
     this.depth = depth;
-    if (depth > this.hero.maxDepthReached) this.hero.maxDepthReached = depth;
-    for (const h of this.heroes) if (h !== this.hero && depth > h.maxDepthReached) h.maxDepthReached = depth;
-    if (!options?.savedSnapshot) this.requestSave('floor');
+    // maxDepth only moves for heroes that actually stand in the dungeon (a local hero in town reaches the new floor
+    // later, see enterDungeonFromTown). Raising it is a save point; restoring a frozen floor is not.
+    let localDepthRaised = false;
+    for (const h of this.heroes) {
+      if (h.inTown || depth <= h.maxDepthReached) continue;
+      h.maxDepthReached = depth;
+      if (h === this.localHero) localDepthRaised = true;
+    }
+    if (!bg && (!options?.savedSnapshot || localDepthRaised)) this.requestSave('floor');
 
     let buffExpired = false;
     for (const h of this.heroes) {
+      if (h.inTown) continue;
       if (options?.tickBuffFloor && h.angelBuff) {
         h.angelBuff.floorsLeft -= 1;
         if (h.angelBuff.floorsLeft <= 0) {
@@ -1476,8 +1698,8 @@ export class EmbervaultEngine {
     if (snap) {
       this.hasKey = snap.hasKey;
       this.doorUnlocked = snap.doorUnlocked;
-      this.hero.chronosUsedThisFloor = snap.chronosUsedThisFloor;
-      this.hero.floorKills = snap.floorKills;
+      this.localHero.chronosUsedThisFloor = snap.chronosUsedThisFloor;
+      this.localHero.floorKills = snap.floorKills;
       this.dungeon = snap.dungeon;
     } else {
       this.hasKey = false;
@@ -1489,18 +1711,9 @@ export class EmbervaultEngine {
       this.dungeon = generateDungeon(depth);
     }
     const biome = this.dungeon.biome;
-    const isAlienDeck = biome.terrainTheme === 'alien';
 
     // Update scene atmosphere to match biome (bright blue-silver sci-fi lighting for Alien Starship Deck!)
-    this.scene.background = new THREE.Color(biome.fogColor);
-    this.scene.fog = new THREE.Fog(biome.fogColor, isAlienDeck ? 38 : 32, isAlienDeck ? 62 : 54);
-    this.hemiLight.color.setHex(biome.hemiSky);
-    this.hemiLight.groundColor.setHex(biome.hemiGround);
-    this.hemiLight.intensity = isAlienDeck ? 0.96 : 0.12;
-    this.rimLight.color.setHex(isAlienDeck ? 0xd8f3ff : 0x6c8cc4);
-    this.rimLight.intensity = isAlienDeck ? 0.62 : 0.09;
-    this.scene.environmentIntensity = isAlienDeck ? 0.45 : 0.07;
-    this.heroLight.color.setHex(this.hero.isMage() ? 0x9fe6ff : biome.torchColor);
+    if (!bg) this.applyDungeonAtmosphere();
 
     this.textures = createDungeonTextures(
       biome,
@@ -2070,36 +2283,44 @@ export class EmbervaultEngine {
     const spawnW = snap
       ? { x: snap.returnX, z: snap.returnZ }
       : gridToWorld(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
-    this.hero.x = spawnW.x;
-    this.hero.z = spawnW.z;
-    this.hero.ai.progressAnchorX = this.hero.x;
-    this.hero.ai.progressAnchorZ = this.hero.z;
-    this.hero.vx = 0;
-    this.hero.vz = 0;
-    this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
-    this.heroLight.position.set(this.hero.x, 2.0, this.hero.z);
-    // P4-B (temporary, see §3.4 / P4-C): the town shares this scene, so the bots arrive together with the
-    // local hero - at the entrance of a new floor, or at the portal when coming back from town.
-    this.placeTeamAround(this.hero.x, this.hero.z);
+    const local = this.localHero;
+    if (!local.inTown) {
+      local.x = spawnW.x;
+      local.z = spawnW.z;
+      local.ai.progressAnchorX = local.x;
+      local.ai.progressAnchorZ = local.z;
+      local.vx = 0;
+      local.vz = 0;
+      local.rig.root.position.set(local.x, 0, local.z);
+      this.heroLight.position.set(local.x, 2.0, local.z);
+    }
+    if (!snap) {
+      // New floor: everybody in the dungeon starts at the entrance (downed ones back on their feet). Teammates that
+      // were left behind in a frozen / running floor stay where they are when the local hero comes back (snap).
+      this.placeTeamAround(spawnW.x, spawnW.z);
+    }
 
-    // Floor change clears everybody's portal; returning through it re-places the landmark at the exact spot
-    for (const h of this.heroes) h.portal = null;
-    if (snap) this.placeHeroPortal(this.hero, snap.returnX, snap.returnZ, snap.depth);
+    // Floor change clears everybody's portal; returning through a portal keeps all of them (frozen floors rebuild
+    // the landmarks, teammates' included, at their exact spots)
+    if (!snap) for (const h of this.heroes) h.portal = null;
+    else for (const h of this.heroes) if (h.portal && h.portal.depth === depth) this.placeHeroPortal(h, h.portal.x, h.portal.z, depth);
 
     // Snap camera immediately to new floor spawn
-    const camOffset = 14.5 * this.camZoom;
-    this.camera.position.set(this.hero.x + camOffset, camOffset * 1.16, this.hero.z + camOffset);
-    _camTarget.set(this.hero.x, 0.7, this.hero.z);
-    this.camera.lookAt(_camTarget);
+    if (!bg && !local.inTown) {
+      const camOffset = 14.5 * this.camZoom;
+      this.camera.position.set(local.x + camOffset, camOffset * 1.16, local.z + camOffset);
+      _camTarget.set(local.x, 0.7, local.z);
+      this.camera.lookAt(_camTarget);
+    }
 
     // 9. Spawn Enemies across non-start rooms (protect Town Portal safe zone when returning)
     this.portalSafePos = snap ? { x: snap.returnX, z: snap.returnZ } : null;
     this.spawnEnemies();
     this.portalSafePos = null;
-    const spawnG = worldToGrid(this.hero.x, this.hero.z);
+    const spawnG = worldToGrid(spawnW.x, spawnW.z);
     this.markExplored(spawnG.gx, spawnG.gz);
 
-    if (!this.isSoftwareGl && depth === 1 && !snap) {
+    if (!this.isSoftwareGl && depth === 1 && !snap && !bg) {
       this.renderer.compile(this.scene, this.camera);
     }
 
@@ -2107,7 +2328,12 @@ export class EmbervaultEngine {
       this.emitFloatingText(this.hero.x, 2.25, this.hero.z, '天使祝福已消散', 'info');
     }
 
-    if (snap) {
+    if (bg) {
+      // The waiting teammates now wait at the entrance of the new floor
+      this.awayAnchor = { x: spawnW.x, z: spawnW.z };
+      // The local hero is in town: tell them once the screen is theirs again (see runDungeonBackground)
+      this.pendingAwayFloor = depth;
+    } else if (snap) {
       this.pushBanner(`返回第 ${depth} 層`, '怪物已復活 · 傳送門周圍安全');
     } else if (depth % 5 === 0) {
       const bossKind = getBossForDepth(depth, biome.terrainTheme);
@@ -2128,13 +2354,42 @@ export class EmbervaultEngine {
     } else {
       this.pushBanner(`DEPTH ${depth}`, biome.name);
     }
-    this.updateWallOcclusion();
+    if (!bg) this.updateWallOcclusion();
     this.emitHud();
     this.emitMinimap();
   }
 
+  /** Scene atmosphere (background, fog, ambient / rim light, lantern colour) of the dungeon floor in `this.dungeon`. */
+  private applyDungeonAtmosphere(): void {
+    const biome = this.dungeon.biome;
+    const isAlienDeck = biome.terrainTheme === 'alien';
+    this.scene.background = new THREE.Color(biome.fogColor);
+    this.scene.fog = new THREE.Fog(biome.fogColor, isAlienDeck ? 38 : 32, isAlienDeck ? 62 : 54);
+    this.hemiLight.color.setHex(biome.hemiSky);
+    this.hemiLight.groundColor.setHex(biome.hemiGround);
+    this.hemiLight.intensity = isAlienDeck ? 0.96 : 0.12;
+    this.rimLight.color.setHex(isAlienDeck ? 0xd8f3ff : 0x6c8cc4);
+    this.rimLight.intensity = isAlienDeck ? 0.62 : 0.09;
+    this.scene.environmentIntensity = isAlienDeck ? 0.45 : 0.07;
+    this.heroLight.color.setHex(this.localHero.isMage() ? 0x9fe6ff : biome.torchColor);
+  }
+
+  /** Moody dusk-night town atmosphere: low ambient lighting so facility & lantern lights drive the mood. */
+  private applyTownAtmosphere(): void {
+    this.scene.background = new THREE.Color(0x090c14);
+    this.scene.fog = new THREE.Fog(0x090c14, 36, 72);
+    this.hemiLight.color.setHex(0x6c88b8);
+    this.hemiLight.groundColor.setHex(0x201a14);
+    this.hemiLight.intensity = 0.18;
+    this.rimLight.color.setHex(0x9eb8df);
+    this.rimLight.intensity = 0.14;
+    this.scene.environmentIntensity = 0.08;
+    this.heroLight.color.setHex(0xffbe66);
+  }
+
   private buildTown(): void {
-    this.clearLevel();
+    // The caller has already parked or disposed the dungeon and activated an empty level field set for the town.
+    this.townBuilt = true;
     this.inTown = true;
 
     // 4x total plaza area (2x width x 2x length: 23x23 walkable tiles vs previous 11x11)
@@ -2200,16 +2455,7 @@ export class EmbervaultEngine {
       biome: townBiome,
     };
 
-    // Moody dusk-night town atmosphere: low ambient lighting so facility & lantern lights drive the mood
-    this.scene.background = new THREE.Color(0x090c14);
-    this.scene.fog = new THREE.Fog(0x090c14, 36, 72);
-    this.hemiLight.color.setHex(0x6c88b8);
-    this.hemiLight.groundColor.setHex(0x201a14);
-    this.hemiLight.intensity = 0.18;
-    this.rimLight.color.setHex(0x9eb8df);
-    this.rimLight.intensity = 0.14;
-    this.scene.environmentIntensity = 0.08;
-    this.heroLight.color.setHex(0xffbe66);
+    this.applyTownAtmosphere();
 
     this.textures = createDungeonTextures(
       townBiome,
@@ -2242,7 +2488,7 @@ export class EmbervaultEngine {
     meadow.rotation.x = -Math.PI / 2;
     meadow.position.set(13 * TILE_SIZE, -0.06, 13 * TILE_SIZE);
     meadow.receiveShadow = true;
-    this.levelGroup.add(meadow);
+    this.townGroup.add(meadow);
 
     // 2. Dark Weathered Slate-Gray Cobblestone Village Plaza (gx 2..24, gz 2..24)
     const cobbleCanvas = document.createElement('canvas');
@@ -2297,7 +2543,7 @@ export class EmbervaultEngine {
     });
     plazaMesh.instanceMatrix.needsUpdate = true;
     if (plazaMesh.instanceColor) plazaMesh.instanceColor.needsUpdate = true;
-    this.levelGroup.add(plazaMesh);
+    this.townGroup.add(plazaMesh);
 
     // Low weathered wooden fence edging the 4x plaza perimeter
     const fenceMat = new THREE.MeshStandardMaterial({ color: 0x453120, roughness: 0.92 });
@@ -2317,7 +2563,7 @@ export class EmbervaultEngine {
         const rail = new THREE.Mesh(railGeo, fenceMat);
         rail.position.set(fx, 0.48, fz);
         rail.rotation.y = rot;
-        this.levelGroup.add(post, rail);
+        this.townGroup.add(post, rail);
       }
     }
 
@@ -2326,7 +2572,7 @@ export class EmbervaultEngine {
     const tavern = createTownHouse('tavern', this.textures.glowMap);
     tavern.position.set(4.6 * TILE_SIZE, 0, 10.5 * TILE_SIZE);
     tavern.rotation.y = Math.PI / 2; // Long timber porch, barrels & tavern sign face +X into the plaza
-    this.levelGroup.add(tavern);
+    this.townGroup.add(tavern);
     this.lightProps.push({
       color: 0xffaa44,
       baseIntensity: 52,
@@ -2343,7 +2589,7 @@ export class EmbervaultEngine {
     const cottage = createTownHouse('cottage', this.textures.glowMap);
     cottage.position.set(10.5 * TILE_SIZE, 0, 4.65 * TILE_SIZE);
     cottage.rotation.y = 0; // Stone portico & turret face +Z into the plaza
-    this.levelGroup.add(cottage);
+    this.townGroup.add(cottage);
     this.lightProps.push({
       color: 0xffb454,
       baseIntensity: 48,
@@ -2360,14 +2606,14 @@ export class EmbervaultEngine {
     const well = createCentralWell();
     well.position.set(13 * TILE_SIZE, 0, 13 * TILE_SIZE);
     well.rotation.y = Math.PI / 4;
-    this.levelGroup.add(well);
+    this.townGroup.add(well);
 
     // 5. Beautiful White-Robed Female Angel at (10, 10) framed between the two buildings & well
     const angel = createAngelModel(this.sharedShadowMap, this.textures.glowMap);
     const angelW = gridToWorld(10, 10);
     angel.root.position.set(angelW.x, 0, angelW.z);
     angel.root.rotation.y = Math.PI / 4;
-    this.levelGroup.add(angel.root);
+    this.townGroup.add(angel.root);
     this.angelRig = angel;
     this.angelPos = { x: angelW.x, z: angelW.z };
     this.lightProps.push({
@@ -2387,7 +2633,7 @@ export class EmbervaultEngine {
       const sw = gridToWorld(8, 17);
       const shop = createPotionShop(this.textures.glowMap);
       shop.root.position.set(sw.x, 0, sw.z);
-      this.levelGroup.add(shop.root);
+      this.townGroup.add(shop.root);
       this.shopRig = shop;
       this.lightProps.push({
         color: 0xff5a7e,
@@ -2410,7 +2656,7 @@ export class EmbervaultEngine {
       const aw = gridToWorld(11, 20);
       const altar = createUpgradeAltar(this.textures.glowMap);
       altar.root.position.set(aw.x, 0, aw.z);
-      this.levelGroup.add(altar.root);
+      this.townGroup.add(altar.root);
       this.altarRig = altar;
       this.lightProps.push({
         color: 0xffd25c,
@@ -2434,7 +2680,7 @@ export class EmbervaultEngine {
       const portal = createTownPortal(this.textures.glowMap);
       portal.root.position.set(pw.x, 0, pw.z);
       portal.root.rotation.y = Math.PI / 4;
-      this.levelGroup.add(portal.root);
+      this.townGroup.add(portal.root);
       this.townPortalRig = portal;
       this.townGatePos = { x: pw.x, z: pw.z };
       this.lightProps.push({
@@ -2457,7 +2703,7 @@ export class EmbervaultEngine {
       const chest = createStashChest(this.textures.glowMap);
       chest.root.position.set(cw.x, 0, cw.z);
       chest.root.rotation.y = Math.PI / 4; // front faces the camera side
-      this.levelGroup.add(chest.root);
+      this.townGroup.add(chest.root);
       this.stashRig = chest;
       this.stashPos = { x: cw.x, z: cw.z };
       tiles[cg.gz][cg.gx] = 2; // solid footprint so the hero walks around it
@@ -2490,7 +2736,7 @@ export class EmbervaultEngine {
     for (const [lx, lz] of lampCoords) {
       const lamp = createVillageLampPost(this.textures.glowMap);
       lamp.position.set(lx * TILE_SIZE, 0, lz * TILE_SIZE);
-      this.levelGroup.add(lamp);
+      this.townGroup.add(lamp);
       this.lightProps.push({
         color: 0xffb24c,
         baseIntensity: 42,
@@ -2533,7 +2779,7 @@ export class EmbervaultEngine {
       const tree = createVillageTree(sc);
       tree.position.set(tx * TILE_SIZE, 0, tz * TILE_SIZE);
       tree.rotation.y = (tx * 1.7 + tz * 2.3) % (Math.PI * 2);
-      this.levelGroup.add(tree);
+      this.townGroup.add(tree);
     }
 
     // 10. Place Hero in front of Central Well facing the Angel & Buildings
@@ -2546,9 +2792,6 @@ export class EmbervaultEngine {
     this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
     this.hero.rig.body.rotation.y = this.hero.facing;
     this.heroLight.position.set(this.hero.x, 2.0, this.hero.z);
-    // P4-B (temporary): bots come along to the town; P4-C gives every player their own town scene instead.
-    this.placeTeamAround(this.hero.x, this.hero.z);
-
     const camOffset = 14.5 * this.camZoom;
     this.camera.position.set(this.hero.x + camOffset, camOffset * 1.16, this.hero.z + camOffset);
     _camTarget.set(this.hero.x, 0.7, this.hero.z);
@@ -3310,6 +3553,34 @@ export class EmbervaultEngine {
     });
   }
 
+  /** True while some other hero is alive in the dungeon, i.e. the dungeon keeps running without the local hero. */
+  private partyHoldsDungeon(): boolean {
+    const local = this.localHero;
+    return this.heroes.some((h) => h !== local && this.isInDungeonAlive(h));
+  }
+
+  /**
+   * The local hero walks into the town (runs at the black of the fade; spec §3.4). If a teammate is still alive
+   * in the dungeon it is parked and keeps being simulated; otherwise it is frozen exactly like the single player
+   * flow (saved, discarded, rebuilt with fresh monsters when somebody comes back).
+   */
+  private enterTownFromDungeon(): void {
+    const local = this.localHero;
+    this.awayAnchor = { x: local.x, z: local.z };
+    if (this.partyHoldsDungeon()) {
+      this.dungeonCtx = this.captureCtx();
+      this.savedDungeon = null;
+    } else {
+      this.savedDungeon = this.snapshotDungeon({ x: local.x, z: local.z });
+      this.clearLevel();
+      this.dungeonCtx = null;
+    }
+    local.inTown = true;
+    this.applyCtx(this.blankCtx());
+    this.setViewGroups(true);
+    this.buildTown();
+  }
+
   /**
    * Death flow, step 2 (the player pressed 回到城鎮 on the death screen): pay the portal toll
    * (`depth * 10`, floored at 0 gold), refill HP/shield and go through the portal opened at the downed spot.
@@ -3321,13 +3592,12 @@ export class EmbervaultEngine {
     this.hero.portal = portal;
     const cost = this.getTownReturnCost();
     this.hero.gold = Math.max(0, this.hero.gold - cost);
-    this.savedDungeon = this.snapshotDungeon(portal);
     this.audio.playPortal();
     this.hero.input.keys.clear();
     this.beginTransition(() => {
       this.hero.isDead = false;
       this.hero.restoreAfterDowned();
-      this.buildTown();
+      this.enterTownFromDungeon();
       this.requestSave('town');
     });
   }
@@ -3376,11 +3646,16 @@ export class EmbervaultEngine {
     this.hero.gold = Math.max(0, this.hero.gold - cost);
 
     // A normal return opens a fresh portal under the hero (replacing any older one)
-    this.hero.portal = { x: this.hero.x, z: this.hero.z, depth: this.depth };
-    this.savedDungeon = this.snapshotDungeon(this.hero.portal);
+    const partyStays = this.partyHoldsDungeon();
+    if (partyStays) {
+      // The floor keeps running: the portal is a real, lasting landmark right now
+      this.placeHeroPortal(this.hero, this.hero.x, this.hero.z, this.depth);
+    } else {
+      this.hero.portal = { x: this.hero.x, z: this.hero.z, depth: this.depth };
+    }
 
     // Spawn instantaneous glowing portal at current spot before fading into Sanctuary Town
-    if (this.textures) {
+    if (!partyStays && this.textures) {
       const departPortal = createTownPortal(this.textures.glowMap);
       departPortal.root.position.set(this.hero.x, 0, this.hero.z);
       departPortal.root.rotation.y = Math.PI / 4;
@@ -3414,15 +3689,104 @@ export class EmbervaultEngine {
     this.emitHud();
 
     this.beginTransition(() => {
-      this.buildTown();
+      this.enterTownFromDungeon();
       this.requestSave('town');
     });
   }
 
-  public returnToDungeon(): void {
-    if (this.hero.isDead || !this.inTown || !this.savedDungeon || this.transitionState !== 'none') {
+  /** The dungeon data behind the town gate (parked while running, kept in the frozen snapshot otherwise). */
+  private getParkedDungeon(): DungeonData | null {
+    return this.dungeonCtx?.dungeon ?? this.savedDungeon?.dungeon ?? null;
+  }
+
+  /**
+   * Doors the town gate can lead to (spec §3.1): everybody's portal on the current floor, the local hero's first.
+   * No portal at all (e.g. after a floor change): the floor entrance (spec §5.3).
+   */
+  private getTownPortalOptions(): TownPortalOption[] {
+    if (!this.inTown) return [];
+    const local = this.localHero;
+    const opts: TownPortalOption[] = [];
+    for (const h of this.heroes) {
+      if (!h.portal || h.portal.depth !== this.depth) continue;
+      opts.push({
+        id: h.id,
+        label: h === local ? '我的傳送門' : h.isBot ? `Bot ${h.botIndex} 的傳送門` : '隊友的傳送門',
+        isOwn: h === local,
+        downed: h.isDead,
+      });
+    }
+    if (opts.length === 0) {
+      opts.push({ id: 'entrance', label: `第 ${this.depth} 層入口`, isOwn: false, downed: false });
+    }
+    return opts;
+  }
+
+  private resolveGateTarget(portalId?: string): { x: number; z: number } | null {
+    const opts = this.getTownPortalOptions();
+    const pick = opts.find((o) => o.id === portalId) ?? opts[0];
+    if (!pick) return null;
+    if (pick.id !== 'entrance') {
+      const owner = this.heroById(pick.id);
+      if (owner?.portal) return { x: owner.portal.x, z: owner.portal.z };
+    }
+    const d = this.getParkedDungeon();
+    if (!d) return null;
+    return gridToWorld(d.spawn.gx, d.spawn.gz);
+  }
+
+  /** The local hero steps out of the town gate into the dungeon (runs at the black of the fade). */
+  private enterDungeonFromTown(target: { x: number; z: number }): void {
+    const snap = this.savedDungeon;
+    if (snap) {
+      // Frozen floor: rebuild it with fresh monsters around the chosen portal (spec §3.4)
+      this.savedDungeon = null;
+      snap.returnX = target.x;
+      snap.returnZ = target.z;
+      this.buildLevel(snap.depth, { savedSnapshot: snap });
       return;
     }
+    if (!this.dungeonCtx) return;
+    // Running floor: nothing is rebuilt, the local hero simply steps back in
+    const local = this.localHero;
+    this.leaveTownScene();
+    this.applyDungeonAtmosphere();
+    local.x = target.x;
+    local.z = target.z;
+    local.vx = 0;
+    local.vz = 0;
+    local.dashTimer = 0;
+    local.invuln = Math.max(local.invuln, 1.0);
+    local.ai.path = [];
+    local.ai.combatPath = [];
+    local.ai.progressAnchorX = local.x;
+    local.ai.progressAnchorZ = local.z;
+    local.ai.noProgressTimer = 0;
+    local.rig.root.position.set(local.x, 0, local.z);
+    local.rig.body.rotation.y = local.facing;
+    this.heroLight.position.set(local.x, 2.0, local.z);
+    if (this.depth > local.maxDepthReached) {
+      local.maxDepthReached = this.depth;
+      this.requestSave('floor');
+    }
+    const camOffset = 14.5 * this.camZoom;
+    this.camera.position.set(local.x + camOffset, camOffset * 1.16, local.z + camOffset);
+    _camTarget.set(local.x, 0.7, local.z);
+    this.camera.lookAt(_camTarget);
+    const g = worldToGrid(local.x, local.z);
+    this.markExplored(g.gx, g.gz);
+    this.pushBanner(`返回第 ${this.depth} 層`, '隊友仍在戰鬥 · 怪物沒有重生');
+    this.updateWallOcclusion();
+    this.emitHud();
+    this.emitMinimap();
+  }
+
+  /** Walks through the town gate. `portalId` picks one of `getTownPortalOptions()` (default: the first). */
+  public returnToDungeon(portalId?: string): void {
+    if (this.hero.isDead || !this.inTown || this.transitionState !== 'none') return;
+    if (!this.savedDungeon && !this.dungeonCtx) return;
+    const target = this.resolveGateTarget(portalId);
+    if (!target) return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playPortal();
     this.hero.input.keys.clear();
@@ -3443,11 +3807,9 @@ export class EmbervaultEngine {
       );
     }
 
-    const snap = this.savedDungeon;
-    this.savedDungeon = null;
     this.requestSave('leaveTown');
     this.beginTransition(() => {
-      this.buildLevel(snap.depth, { savedSnapshot: snap });
+      this.enterDungeonFromTown(target);
     });
   }
 
@@ -3544,6 +3906,8 @@ export class EmbervaultEngine {
       this.hero.resetForNewRun();
       this.inTown = false;
       this.savedDungeon = null;
+      this.awayAnchor = null;
+      this.pendingAwayFloor = null;
       this.portalSafePos = null;
       this.loadingRun = true;
       this.persistRun = Boolean(loadout);
@@ -3576,7 +3940,8 @@ export class EmbervaultEngine {
 
   /** Snapshot of the persistent character state (gold, upgrades, relics, potions, max depth) for saving. */
   public exportCharacterState(): CharacterLoadout {
-    return this.hero.exportLoadout(this.depth);
+    // A local hero in town has not reached a floor a teammate may have descended to meanwhile
+    return this.hero.exportLoadout(this.localHero.inTown ? this.localHero.maxDepthReached : this.depth);
   }
 
   private requestSave(reason: SaveCheckpointReason): void {
@@ -5377,6 +5742,7 @@ export class EmbervaultEngine {
     // Loot chance from crates/urns (boosted by Drop Rate). Every hero gets their own independent roll (spec §5.2).
     const breaker = this.hero;
     for (const h of this.heroes) {
+      if (h.inTown) continue;
       this.setActor(h);
       const dropMult = 1 + this.hero.relicStats.dropRatePct / 100;
       if (Math.random() < 0.72) {
@@ -5456,6 +5822,7 @@ export class EmbervaultEngine {
       const goldScale = this.getDepthGoldScale();
       const bossKiller = this.hero;
       for (const h of this.heroes) {
+        if (h.inTown) continue;
         this.setActor(h);
         for (let i = 0; i < 12; i++) {
           const a = (i / 12) * Math.PI * 2 + Math.random() * 0.3;
@@ -5660,6 +6027,7 @@ export class EmbervaultEngine {
     // Every hero rolls their own drops (spec §5.2); the killer is the actor again afterwards
     const killer = this.hero;
     for (const h of this.heroes) {
+      if (h.inTown) continue;
       this.setActor(h);
       const extraCoins =
         (this.hero.hasSet4pc('syndicate') ? 1 : 0) +
@@ -6256,14 +6624,14 @@ export class EmbervaultEngine {
   }
 
   private addScreenShake(magnitude: number, duration: number): void {
-    if (this.hero.isBot) return; // only the local player feels the shake
+    if (this.bgSim || this.hero.isBot) return; // only the local player feels the shake
     this.shakeMag = Math.max(this.shakeMag, magnitude);
     this.shakeTime = Math.max(this.shakeTime, duration);
   }
 
   /** Bot actions stay quiet unless `force` (team-wide events like the key / gate / boss kill). */
   private pushBanner(title: string, subtitle?: string, force = false): void {
-    if (this.hero.isBot && !force) return;
+    if (this.bgSim || (this.hero.isBot && !force)) return;
     this.callbacks.onBanner({ id: this.nextId++, title, subtitle });
   }
 
@@ -6275,7 +6643,7 @@ export class EmbervaultEngine {
     tone: FloatingLabelData['tone'],
     force = false
   ): void {
-    if (!this.camera || !this.renderer) return;
+    if (!this.camera || !this.renderer || this.bgSim) return;
     if (this.hero.isBot && !force) return;
     _projVec.set(wx, wy, wz).project(this.camera);
     if (_projVec.z > 1) return;
@@ -6293,7 +6661,7 @@ export class EmbervaultEngine {
   }
 
   private emitHud(): void {
-    if (this.hero.isBot) return; // the HUD only ever shows the local hero
+    if (this.bgSim || this.hero.isBot) return; // the HUD only ever shows the local hero
     const lh = this.localHero;
     const rescueHud = this.getRescueHud();
     const activeBoss = this.enemies.find(
@@ -6329,6 +6697,8 @@ export class EmbervaultEngine {
       hasShopOnFloor: Boolean(this.dungeon.shopPos),
       inTown: this.inTown,
       nearPortal: this.isHeroNearPortal(),
+      portalOptions: this.getTownPortalOptions(),
+      dungeonRunning: this.inTown && this.dungeonCtx !== null,
       nearAngel: this.isHeroNearAngel(),
       townReturnCost: this.getTownReturnCost(),
       angelBuff: lh.angelBuff ? { ...lh.angelBuff } : null,
@@ -6378,7 +6748,7 @@ export class EmbervaultEngine {
   }
 
   private emitMinimap(): void {
-    if (this.hero.isBot) return;
+    if (this.bgSim || this.hero.isBot) return;
     const lh = this.localHero;
     const heroG = worldToGrid(lh.x, lh.z);
     this.callbacks.onMinimapUpdate({
@@ -7159,8 +7529,12 @@ export class EmbervaultEngine {
     let priorityRanged: EnemyEntity | null = null;
     let priorityRangedDist = Infinity;
 
+    // Local hero away in town: bots hold the post. They only fight what comes within 8 of the post and give up
+    // any target once they have been pulled more than 10 away from it (they never explore or chase).
+    const away = this.isAwayMode(this.hero);
     for (const e of this.enemies) {
       if (e.dead) continue;
+      if (away && (!this.withinLeash(this.hero.x, this.hero.z, 10) || !this.withinLeash(e.x, e.z, 8))) continue;
       const skipUntil = this.hero.ai.skipEnemyUntil.get(e.id);
       if (skipUntil !== undefined && this.elapsed < skipUntil) continue;
 
@@ -7363,6 +7737,9 @@ export class EmbervaultEngine {
         return { moveX: 0, moveZ: 0 };
       }
     }
+
+    // Away mode: nothing else interests a bot (no key, loot, crates, runes, shops or stairs): back to the post
+    if (away) return this.aiFollowLeader(dt);
 
     // 2b. No active threats in room: if the Relic Key is in sight nearby, claim it immediately!
     if (!this.hasKey && !this.hero.isBot) {
@@ -7755,8 +8132,10 @@ export class EmbervaultEngine {
     if (this.inTown) return null;
     let target: Hero | null = null;
     let bestD = Infinity;
+    const away = this.isAwayMode(me);
     for (const o of this.heroes) {
       if (o === me || !o.isDead) continue;
+      if (away && !this.withinLeash(o.x, o.z, 10)) continue;
       const d = Math.hypot(o.x - me.x, o.z - me.z);
       if (d < bestD) {
         bestD = d;
@@ -7799,23 +8178,40 @@ export class EmbervaultEngine {
     return { moveX: dx / bestD, moveZ: dz / bestD };
   }
 
-  /** Bot teammates: keep within a few tiles of the local hero; hold still (no stuck-detector churn) when close. */
+  /** Bot while the local hero is in town (spec §3.4): wait at the post the local hero left from. */
+  private isAwayMode(me: Hero): boolean {
+    return me.isBot && this.localHero.inTown;
+  }
+
+  private withinLeash(x: number, z: number, radius: number): boolean {
+    const a = this.awayAnchor;
+    if (!a) return true;
+    return Math.hypot(x - a.x, z - a.z) <= radius;
+  }
+
+  /**
+   * Bot teammates: keep within a few tiles of the local hero (or, while the local hero is in town, of the post
+   * they left from); hold still (no stuck-detector churn) when close.
+   */
   private aiFollowLeader(dt: number): { moveX: number; moveZ: number } {
     const me = this.hero;
     const ai = me.ai;
-    const leader = this.localHero;
+    const away = this.isAwayMode(me);
+    const leader: { x: number; z: number } =
+      away && this.awayAnchor ? this.awayAnchor : this.localHero;
     if (leader === me) return { moveX: 0, moveZ: 0 };
     const dx = leader.x - me.x;
     const dz = leader.z - me.z;
     const dist = Math.hypot(dx, dz);
-    const slot = 1.8 + (me.botIndex % 3) * 0.9;
+    // Waiting bots stand spread out within ~3 of the post
+    const slot = away ? 0.9 + (me.botIndex % 3) * 0.6 : 1.8 + (me.botIndex % 3) * 0.9;
     if (dist > 36) {
       // Hopelessly separated (e.g. snagged behind the gate): catch up instantly
       this.warpHeroNear(me, leader.x, leader.z, me.botIndex - 1);
       return { moveX: 0, moveZ: 0 };
     }
-    if (dist <= slot + 1.2) {
-      ai.status = 'Following Leader';
+    if (dist <= slot + (away ? 0.6 : 1.2)) {
+      ai.status = away ? 'Holding Post' : 'Following Leader';
       ai.progressAnchorX = me.x;
       ai.progressAnchorZ = me.z;
       ai.noProgressTimer = 0;
@@ -7908,15 +8304,24 @@ export class EmbervaultEngine {
 
     // Per-hero simulation (cooldowns, input / AI, movement, rig). Downed heroes sit still.
     const localHero = this.localHero;
-    for (const h of this.heroes) {
-      if (h.isDead) continue;
-      this.setActor(h);
-      this.updateHeroFrame(dt, h === localHero);
-    }
-    this.setActor(localHero);
-    this.updateRescue(dt);
-    if (this.botMarkers.size > 0) {
-      for (const h of this.heroes) if (h.isBot) this.refreshBotPlate(h);
+    if (this.inTown) {
+      // The camera is in the town: only the local hero lives here; the dungeon (if teammates are still in it)
+      // is simulated without being shown (spec §3.4)
+      this.setActor(localHero);
+      this.updateHeroFrame(dt, true);
+      this.updateRescue(dt);
+      this.runDungeonBackground(dt);
+    } else {
+      for (const h of this.heroes) {
+        if (h.isDead || h.inTown) continue;
+        this.setActor(h);
+        this.updateHeroFrame(dt, h === localHero);
+      }
+      this.setActor(localHero);
+      this.updateRescue(dt);
+      if (this.botMarkers.size > 0) {
+        for (const h of this.heroes) if (h.isBot) this.refreshBotPlate(h);
+      }
     }
 
     // 4. Key Pickup, Locked Gate Unlock, Stairwell Descent (dungeon only)
@@ -7984,7 +8389,86 @@ export class EmbervaultEngine {
   }
 
   /**
-   * One frame of one living hero (the actor must already be set to it): timers, input or AI, movement, rig animation.
+   * Spec §3.4: while the local hero is in town and a teammate is alive in the dungeon, the dungeon keeps running
+   * (enemies, bot fights, projectiles, objectives) without being rendered. Its level fields are swapped in for the
+   * step and nothing may reach the screen (HUD, particles, floating text, sounds ...). When nobody is left alive
+   * there the floor is frozen the same way a single player return freezes it.
+   */
+  private runDungeonBackground(dt: number): void {
+    if (!this.dungeonCtx) return;
+    if (!this.heroes.some((h) => this.isInDungeonAlive(h))) {
+      this.freezeDungeonAway();
+      return;
+    }
+    const local = this.localHero;
+    const townCtx = this.captureCtx();
+    const arcsBefore = this.slashArcs.length;
+    this.applyCtx(this.dungeonCtx);
+    this.inTown = false;
+    this.bgSim = true;
+    this.audio.suppressed = true;
+    try {
+      for (const h of this.heroes) {
+        if (!this.isInDungeonAlive(h)) continue;
+        this.setActor(h);
+        this.updateHeroFrame(dt, false);
+      }
+      this.setActor(local);
+      this.updateRescue(dt);
+      this.updateObjectives(dt);
+      this.updateEnemies(dt);
+      this.updateProjectiles(dt);
+      this.updateHeroProjectiles(dt);
+      this.updateEnvironmentBackground();
+    } finally {
+      this.dungeonCtx = this.captureCtx();
+      this.applyCtx(townCtx);
+      this.inTown = true;
+      this.bgSim = false;
+      this.setActor(local);
+      for (let i = arcsBefore; i < this.slashArcs.length; i++) this.slashArcs[i].mesh.visible = false;
+      for (const bar of this.rescueBars.values()) bar.group.visible = false;
+      this.rescueHudActive = false;
+    }
+    if (this.pendingAwayFloor !== null) {
+      const depth = this.pendingAwayFloor;
+      this.pendingAwayFloor = null;
+      this.pushBanner(`隊伍已前往第 ${depth} 層`, '傳送門已消失 · 從城鎮傳送門回到新樓層入口');
+      this.emitHud();
+    }
+  }
+
+  /** The last teammate in the dungeon went down while the local hero is in town: freeze the floor (spec §3.4). */
+  private freezeDungeonAway(): void {
+    if (!this.dungeonCtx) return;
+    const townCtx = this.captureCtx();
+    this.applyCtx(this.dungeonCtx);
+    this.dungeonCtx = null;
+    const sp = gridToWorld(this.dungeon.spawn.gx, this.dungeon.spawn.gz);
+    this.savedDungeon = this.snapshotDungeon(sp);
+    this.clearLevel();
+    this.applyCtx(townCtx);
+    this.emitHud();
+  }
+
+  /** The parts of updateEnvironment that change the game (not the looks): rune wells and spike traps. */
+  private updateEnvironmentBackground(): void {
+    for (const lp of this.lightProps) {
+      if (lp.kind === 'rune' && !lp.used) this.tryRuneDrink(lp);
+    }
+    for (const sp of this.spikes) {
+      const cycle = (this.elapsed + sp.phaseOffset) % 3.6;
+      if (cycle > 2.35 && cycle <= 3.15) {
+        this.forEachLiveHero(() => {
+          if (Math.hypot(this.hero.x - sp.x, this.hero.z - sp.z) < 0.72) {
+            this.damageHero(6 * this.getDepthDamageScale(), sp.x, sp.z, '尖刺陷阱');
+          }
+        });
+      }
+    }
+  }
+
+  /** One frame of one living hero (the actor must already be set to it): timers, input or AI, movement, rig animation.
    * Camera / light / minimap work only happens for the local hero.
    */
   private updateHeroFrame(dt: number, isLocal: boolean): void {
@@ -8244,7 +8728,7 @@ export class EmbervaultEngine {
       const kw = gridToWorld(this.dungeon.keyPos.gx, this.dungeon.keyPos.gz);
       // The key (and the gate / hasKey flag) belong to the whole team: any living hero can claim it
       for (const h of this.heroes) {
-        if (h.isDead || Math.hypot(h.x - kw.x, h.z - kw.z) >= 1.45) continue;
+        if (h.isDead || h.inTown || Math.hypot(h.x - kw.x, h.z - kw.z) >= 1.45) continue;
         this.setActor(h);
         this.hasKey = true;
         this.keyPedestal.keyMesh.visible = false;
@@ -8278,7 +8762,7 @@ export class EmbervaultEngine {
     if (this.gateRig) {
       const dw = gridToWorld(this.dungeon.doorPos.gx, this.dungeon.doorPos.gz);
       const opener = this.hasKey && !this.doorUnlocked
-        ? this.heroes.find((h) => !h.isDead && Math.hypot(h.x - dw.x, h.z - dw.z) < 2.85)
+        ? this.heroes.find((h) => !h.isDead && !h.inTown && Math.hypot(h.x - dw.x, h.z - dw.z) < 2.85)
         : undefined;
       if (this.hasKey && !this.doorUnlocked) {
         if (opener) {
@@ -8320,14 +8804,21 @@ export class EmbervaultEngine {
     if (this.doorUnlocked && this.transitionState === 'none') {
       const sw = gridToWorld(this.dungeon.stairsPos.gx, this.dungeon.stairsPos.gz);
       // Taking the stairs moves the whole team (any living hero can trigger it)
-      if (this.heroes.some((h) => !h.isDead && Math.hypot(h.x - sw.x, h.z - sw.z) < 1.25)) {
-        this.audio.playDescend();
-        this.beginTransition(() => {
+      if (this.heroes.some((h) => !h.isDead && !h.inTown && Math.hypot(h.x - sw.x, h.z - sw.z) < 1.25)) {
+        const descend = () => {
           for (const h of this.heroes) {
+            if (h.inTown) continue;
             h.hp = Math.min(h.getEffectiveMaxHp(), h.hp + 20);
           }
           this.buildLevel(this.depth + 1, { tickBuffFloor: true });
-        });
+        };
+        if (this.bgSim) {
+          // A teammate took the stairs while the local hero is in town: no fade, the town just gets a notice
+          descend();
+        } else {
+          this.audio.playDescend();
+          this.beginTransition(descend);
+        }
       }
     }
   }
@@ -8981,7 +9472,7 @@ export class EmbervaultEngine {
 
       // Hero collision (any standing hero; heroes can dash through projectiles!)
       const struck = this.heroes.find(
-        (h) => !h.isDead && h.dashTimer <= 0 && Math.hypot(p.x - h.x, p.z - h.z) < 0.58
+        (h) => !h.isDead && !h.inTown && h.dashTimer <= 0 && Math.hypot(p.x - h.x, p.z - h.z) < 0.58
       );
       if (struck) {
         this.setActor(struck);
@@ -9607,6 +10098,53 @@ export class EmbervaultEngine {
     }
   }
 
+  /** The first living hero that is hurt and stands in an unused rune well drinks from it. */
+  private tryRuneDrink(lp: AnimatedLightProp): void {
+    // The first living hero that is hurt and stands in the circle drinks from it
+    const drinker = lp.used
+      ? undefined
+      : this.heroes.find(
+          (h) =>
+            !h.isDead &&
+            !h.inTown &&
+            Math.hypot(lp.x - h.x, lp.z - h.z) < 1.1 &&
+            h.hp < h.getEffectiveMaxHp()
+        );
+    if (drinker) {
+      this.setActor(drinker);
+      const effMax = this.hero.getEffectiveMaxHp();
+      lp.used = true;
+      if (lp.crystal) lp.crystal.visible = false;
+      if (lp.halo) lp.halo.visible = false;
+      if (lp.decal) {
+        (lp.decal.material as THREE.MeshBasicMaterial).opacity = 0.46;
+      }
+      if (lp.pool) {
+        (lp.pool.material as THREE.MeshBasicMaterial).opacity = 0.12;
+      }
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2;
+        this.spawnParticle(
+          lp.x + Math.cos(a) * 0.2,
+          0.78,
+          lp.z + Math.sin(a) * 0.2,
+          Math.cos(a) * 2.2,
+          1.6 + Math.random() * 1.4,
+          Math.sin(a) * 2.2,
+          lp.color,
+          0.85,
+          0.55,
+          1.5
+        );
+      }
+      this.hero.hp = Math.min(effMax, this.hero.hp + 20);
+      this.audio.playPotion();
+      this.emitFloatingText(lp.x, 1.7, lp.z, 'SANCTUM +20 HP', 'info');
+      this.setActor(this.localHero);
+      this.emitHud();
+    }
+  }
+
   private updateEnvironment(dt: number): void {
     // Animate props and collect active light candidates sorted by proximity to hero
     const activeLights: Array<{ prop: AnimatedLightProp; dist: number; intensity: number }> = [];
@@ -9683,48 +10221,7 @@ export class EmbervaultEngine {
             -0.15
           );
         }
-        // The first living hero that is hurt and stands in the circle drinks from it
-        const drinker = lp.used
-          ? undefined
-          : this.heroes.find(
-              (h) =>
-                !h.isDead &&
-                Math.hypot(lp.x - h.x, lp.z - h.z) < 1.1 &&
-                h.hp < h.getEffectiveMaxHp()
-            );
-        if (drinker) {
-          this.setActor(drinker);
-          const effMax = this.hero.getEffectiveMaxHp();
-          lp.used = true;
-          if (lp.crystal) lp.crystal.visible = false;
-          if (lp.halo) lp.halo.visible = false;
-          if (lp.decal) {
-            (lp.decal.material as THREE.MeshBasicMaterial).opacity = 0.46;
-          }
-          if (lp.pool) {
-            (lp.pool.material as THREE.MeshBasicMaterial).opacity = 0.12;
-          }
-          for (let i = 0; i < 14; i++) {
-            const a = (i / 14) * Math.PI * 2;
-            this.spawnParticle(
-              lp.x + Math.cos(a) * 0.2,
-              0.78,
-              lp.z + Math.sin(a) * 0.2,
-              Math.cos(a) * 2.2,
-              1.6 + Math.random() * 1.4,
-              Math.sin(a) * 2.2,
-              lp.color,
-              0.85,
-              0.55,
-              1.5
-            );
-          }
-          this.hero.hp = Math.min(effMax, this.hero.hp + 20);
-          this.audio.playPotion();
-          this.emitFloatingText(lp.x, 1.7, lp.z, 'SANCTUM +20 HP', 'info');
-          this.setActor(this.localHero);
-          this.emitHud();
-        }
+        this.tryRuneDrink(lp);
       } else if (lp.kind === 'stash') {
         intensity = lp.baseIntensity + Math.sin(this.elapsed * 2.2 + lp.phase) * 3.5;
         if (lp.halo) {
@@ -10089,6 +10586,7 @@ export class EmbervaultEngine {
       this.renderer.domElement.removeEventListener('webglcontextlost', this.handleContextLost);
     }
 
+    this.leaveTownScene();
     this.clearLevel();
     for (const h of this.heroes) if (h.isBot) this.disposeBot(h);
     for (const bar of this.rescueBars.values()) {
