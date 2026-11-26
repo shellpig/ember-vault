@@ -4219,6 +4219,12 @@ export function createStashChest(glowMap: THREE.Texture): StashChestRig {
   lidMesh.position.set(0, 0, 0.54);
   lidMesh.castShadow = true;
   lid.add(lidMesh);
+  // Flat underside plank: the half-cylinder is open underneath, so without this the lid
+  // looks hollow/invisible once it swings open toward the camera.
+  const lidUnderside = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.05, 1.08), darkWoodMat);
+  lidUnderside.position.set(0, 0.025, 0.54);
+  lidUnderside.castShadow = true;
+  lid.add(lidUnderside);
   for (const bx of [-0.62, 0.62]) {
     const lidBand = new THREE.Mesh(
       new THREE.CylinderGeometry(0.565, 0.565, 0.14, 14, 1, false, 0, Math.PI),
