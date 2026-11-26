@@ -4909,49 +4909,410 @@ export function createVillageLampPost(glowMap: THREE.Texture): THREE.Group {
 // ===========================================================================
 
 export function createFrostMageModel(shadowMap: THREE.Texture): HeroRig {
-  // STUB — replaced by the real model (light-blue robed female mage, yellow accents).
-  return createHeroModel(shadowMap);
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+  addContactShadow(root, shadowMap, 0.62);
+
+  const flashMaterials: THREE.MeshStandardMaterial[] = [];
+  const makeMat = (params: THREE.MeshStandardMaterialParameters) => {
+    const m = new THREE.MeshStandardMaterial(params);
+    flashMaterials.push(m);
+    return m;
+  };
+  const box = (w: number, h: number, d: number, mat: THREE.Material, x: number, y: number, z: number, shadow = false) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    m.castShadow = shadow;
+    return m;
+  };
+
+  const coatMat = makeMat({ color: 0x8fd8ff, metalness: 0.1, roughness: 0.7 });
+  const coatLightMat = makeMat({ color: 0xeef8ff, metalness: 0.05, roughness: 0.75 });
+  const coatDarkMat = makeMat({ color: 0x5aa9e6, metalness: 0.12, roughness: 0.7 });
+  const goldMat = makeMat({ color: 0xffd84a, metalness: 0.85, roughness: 0.25 });
+  const skinMat = makeMat({ color: 0xffe3d0, metalness: 0, roughness: 0.8 });
+  const hairMat = makeMat({ color: 0xcfeeff, metalness: 0.05, roughness: 0.6 });
+  const hairDarkMat = makeMat({ color: 0x9fd6f5, metalness: 0.05, roughness: 0.6 });
+  const staffMat = makeMat({ color: 0xe6f4ff, metalness: 0.3, roughness: 0.4 });
+
+  // Legs (pivot at hip y=0.42): dark-blue leggings, light boots with gold cuffs
+  const makeLeg = (x: number) => {
+    const leg = new THREE.Group();
+    leg.position.set(x, 0.42, 0);
+    leg.add(box(0.15, 0.3, 0.17, coatDarkMat, 0, -0.15, 0, true));
+    leg.add(box(0.17, 0.14, 0.22, coatLightMat, 0, -0.35, 0.01, true));
+    leg.add(box(0.18, 0.04, 0.19, goldMat, 0, -0.27, 0));
+    body.add(leg);
+    return leg;
+  };
+  const leftLeg = makeLeg(-0.12);
+  const rightLeg = makeLeg(0.12);
+
+  // Torso: fitted coat with white front panel and gold belt
+  body.add(box(0.4, 0.46, 0.27, coatMat, 0, 0.7, 0, true));
+  body.add(box(0.14, 0.44, 0.285, coatLightMat, 0, 0.7, 0.005));
+  body.add(box(0.44, 0.06, 0.3, goldMat, 0, 0.5, 0));
+  body.add(box(0.07, 0.09, 0.04, goldMat, 0, 0.5, 0.16));
+  // Gold collar trim + shoulder mantle
+  body.add(box(0.34, 0.06, 0.24, goldMat, 0, 0.94, 0));
+  // Short flared coat skirt (front/sides) over the hips
+  const skirtFront = box(0.46, 0.22, 0.05, coatMat, 0, 0.38, 0.14, true);
+  skirtFront.rotation.x = -0.12;
+  const skirtSideL = box(0.05, 0.22, 0.3, coatMat, -0.22, 0.38, 0, true);
+  skirtSideL.rotation.z = 0.12;
+  const skirtSideR = box(0.05, 0.22, 0.3, coatMat, 0.22, 0.38, 0, true);
+  skirtSideR.rotation.z = -0.12;
+  const skirtTrim = box(0.48, 0.035, 0.06, goldMat, 0, 0.275, 0.16);
+  body.add(skirtFront, skirtSideL, skirtSideR, skirtTrim);
+  // Fur-like frosted mantle on shoulders
+  body.add(box(0.2, 0.1, 0.3, coatLightMat, -0.28, 0.9, 0, true));
+  body.add(box(0.2, 0.1, 0.3, coatLightMat, 0.28, 0.9, 0, true));
+  body.add(box(0.07, 0.07, 0.07, goldMat, 0.0, 0.87, 0.15));
+
+  // Head
+  body.add(box(0.34, 0.34, 0.32, skinMat, 0, 1.13, 0, true));
+  // Hair: top cap, back, side locks, bangs
+  body.add(box(0.38, 0.12, 0.38, hairMat, 0, 1.33, -0.01, true));
+  body.add(box(0.38, 0.34, 0.1, hairMat, 0, 1.17, -0.17, true));
+  body.add(box(0.07, 0.3, 0.3, hairMat, -0.2, 1.17, -0.02));
+  body.add(box(0.07, 0.3, 0.3, hairMat, 0.2, 1.17, -0.02));
+  body.add(box(0.14, 0.08, 0.06, hairMat, -0.1, 1.28, 0.17));
+  body.add(box(0.14, 0.08, 0.06, hairMat, 0.1, 1.28, 0.17));
+  body.add(box(0.08, 0.14, 0.05, hairDarkMat, 0.0, 1.25, 0.18));
+  // Long ponytail (segmented, tapering), attached to the body so it follows facing
+  const ponytail = new THREE.Group();
+  ponytail.position.set(0.06, 1.3, -0.22);
+  ponytail.rotation.x = 0.28;
+  ponytail.add(box(0.1, 0.1, 0.1, goldMat, 0, 0, 0));
+  ponytail.add(box(0.14, 0.26, 0.12, hairMat, 0, -0.16, -0.02, true));
+  ponytail.add(box(0.12, 0.26, 0.1, hairDarkMat, 0, -0.4, -0.04, true));
+  ponytail.add(box(0.08, 0.2, 0.08, hairMat, 0, -0.62, -0.05));
+  body.add(ponytail);
+  // Gold circlet with small ice gem
+  body.add(box(0.4, 0.04, 0.38, goldMat, 0, 1.285, -0.005));
+  const gem = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.05, 0),
+    new THREE.MeshBasicMaterial({ color: 0xbff4ff })
+  );
+  gem.scale.set(0.8, 1.3, 0.8);
+  gem.position.set(0, 1.285, 0.2);
+  body.add(gem);
+  // Pointed hair ornament (gold) at the ponytail tie
+  const orn = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.12, 4), goldMat);
+  orn.position.set(0.06, 1.38, -0.2);
+  body.add(orn);
+
+  // Eyes: emissive ice-blue boxes
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x7fe6ff });
+  body.add(box(0.06, 0.05, 0.03, eyeMat, -0.075, 1.12, 0.165));
+  body.add(box(0.06, 0.05, 0.03, eyeMat, 0.075, 1.12, 0.165));
+  body.add(box(0.04, 0.02, 0.02, makeMat({ color: 0xff9aa8, roughness: 0.9 }), 0, 1.05, 0.165));
+
+  // Cape / robe tail (pivots at the upper back; engine rotates x)
+  const cape = new THREE.Group();
+  cape.position.set(0, 0.92, -0.15);
+  const capeMesh = box(0.4, 0.78, 0.06, coatDarkMat, 0, -0.38, -0.04, true);
+  capeMesh.rotation.x = 0.12;
+  cape.add(capeMesh);
+  const capeInner = box(0.2, 0.7, 0.065, coatLightMat, 0, -0.38, -0.035);
+  capeInner.rotation.x = 0.12;
+  cape.add(capeInner);
+  const tailL = box(0.12, 0.14, 0.06, coatDarkMat, -0.14, -0.82, -0.06);
+  tailL.rotation.x = 0.12;
+  const tailR = box(0.12, 0.14, 0.06, coatDarkMat, 0.14, -0.82, -0.06);
+  tailR.rotation.x = 0.12;
+  const capeTrim = box(0.41, 0.045, 0.07, goldMat, 0, -0.76, -0.07);
+  capeTrim.rotation.x = 0.12;
+  cape.add(tailL, tailR, capeTrim);
+  body.add(cape);
+
+  // Right arm + ice staff
+  const rightArm = new THREE.Group();
+  rightArm.position.set(0.3, 0.84, 0.02);
+  const rArm = box(0.13, 0.38, 0.14, coatMat, 0, -0.16, 0, true);
+  rightArm.add(rArm);
+  rightArm.add(box(0.145, 0.05, 0.155, goldMat, 0, -0.3, 0));
+  rightArm.add(box(0.11, 0.09, 0.12, skinMat, 0, -0.36, 0.01));
+
+  const swordGroup = new THREE.Group();
+  swordGroup.position.set(0, -0.32, 0.12);
+  swordGroup.rotation.x = Math.PI * 0.42;
+  // Shaft along +Y (grip near origin)
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.036, 1.1, 6), staffMat);
+  shaft.position.y = 0.4;
+  shaft.castShadow = true;
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.14, 6), goldMat);
+  grip.position.y = 0.0;
+  const butt = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.12, 6), goldMat);
+  butt.position.y = -0.2;
+  butt.rotation.x = Math.PI;
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.07, 6), goldMat);
+  collar.position.y = 0.92;
+  swordGroup.add(shaft, grip, butt, collar);
+  // Gold prongs cradling the crystal
+  const prongGeo = new THREE.BoxGeometry(0.035, 0.3, 0.035);
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    const prong = new THREE.Mesh(prongGeo, goldMat);
+    prong.position.set(Math.cos(a) * 0.075, 1.08, Math.sin(a) * 0.075);
+    prong.rotation.set(Math.sin(a) * 0.35, 0, -Math.cos(a) * 0.35);
+    prong.castShadow = true;
+    swordGroup.add(prong);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.09, 4), goldMat);
+    tip.position.set(Math.cos(a) * 0.13, 1.25, Math.sin(a) * 0.13);
+    swordGroup.add(tip);
+  }
+  const crystalMat = new THREE.MeshBasicMaterial({ color: 0xbff4ff });
+  const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.1, 0), crystalMat);
+  crystal.scale.set(0.8, 1.5, 0.8);
+  crystal.position.y = 1.1;
+  swordGroup.add(crystal);
+  const crystalHalo = new THREE.Mesh(
+    new THREE.SphereGeometry(0.2, 8, 8),
+    new THREE.MeshBasicMaterial({
+      color: 0x7fe6ff,
+      transparent: true,
+      opacity: 0.4,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  crystalHalo.position.y = 1.1;
+  swordGroup.add(crystalHalo);
+  rightArm.add(swordGroup);
+  body.add(rightArm);
+
+  // Left arm + floating ice orb
+  const leftArm = new THREE.Group();
+  leftArm.position.set(-0.3, 0.84, 0.04);
+  leftArm.add(box(0.13, 0.36, 0.14, coatMat, 0, -0.14, 0, true));
+  leftArm.add(box(0.145, 0.05, 0.155, goldMat, 0, -0.28, 0));
+  leftArm.add(box(0.11, 0.09, 0.12, skinMat, 0, -0.34, 0.01));
+
+  const lanternPivot = new THREE.Group();
+  lanternPivot.position.set(-0.02, -0.5, 0.22);
+  const lanternCore = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.1, 0),
+    new THREE.MeshBasicMaterial({ color: 0xdff9ff })
+  );
+  lanternCore.scale.set(0.9, 1.25, 0.9);
+  lanternCore.position.y = 0.12;
+  const orbHalo = new THREE.Mesh(
+    new THREE.SphereGeometry(0.26, 10, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0x6fe0ff,
+      transparent: true,
+      opacity: 0.4,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  orbHalo.position.y = 0.12;
+  const orbRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.17, 0.016, 4, 12),
+    new THREE.MeshBasicMaterial({ color: 0xffd84a })
+  );
+  orbRing.position.y = 0.12;
+  orbRing.rotation.x = Math.PI / 2.4;
+  lanternPivot.add(lanternCore, orbHalo, orbRing);
+  leftArm.add(lanternPivot);
+  body.add(leftArm);
+
+  return {
+    root,
+    body,
+    leftLeg,
+    rightLeg,
+    leftArm,
+    rightArm,
+    swordGroup,
+    cape,
+    lanternCore,
+    lanternPivot,
+    flashMaterials,
+  };
 }
 
 export function createIceSpikeMesh(empowered: boolean): THREE.Group {
-  // STUB
   const g = new THREE.Group();
-  const spike = new THREE.Mesh(
-    new THREE.ConeGeometry(empowered ? 0.13 : 0.09, empowered ? 0.9 : 0.6, 5),
-    new THREE.MeshBasicMaterial({ color: empowered ? 0xbff4ff : 0x8fe3ff })
-  );
+  const len = empowered ? 0.9 : 0.6;
+  const r = empowered ? 0.12 : 0.075;
+  const mainMat = new THREE.MeshBasicMaterial({ color: empowered ? 0xdff9ff : 0x9fe6ff });
+  // Pointed cone along +Z (tip at +Z end)
+  const spike = new THREE.Mesh(new THREE.ConeGeometry(r, len * 0.78, 5), mainMat);
   spike.rotation.x = Math.PI / 2;
+  spike.position.z = len * 0.5 - len * 0.39;
   g.add(spike);
+  // Short tail shard behind
+  const tail = new THREE.Mesh(
+    new THREE.ConeGeometry(r * 0.7, len * 0.3, 5),
+    new THREE.MeshBasicMaterial({ color: empowered ? 0x8fe3ff : 0x5aa9e6 })
+  );
+  tail.rotation.x = -Math.PI / 2;
+  tail.position.z = -len * 0.5 + len * 0.15 - 0.02;
+  g.add(tail);
+  // Glowing core
+  const core = new THREE.Mesh(
+    new THREE.OctahedronGeometry(r * 0.7, 0),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  );
+  core.scale.set(1, 1, 2.2);
+  core.position.z = -len * 0.08;
+  g.add(core);
+  if (empowered) {
+    const sideMat = new THREE.MeshBasicMaterial({ color: 0xbff4ff });
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const shard = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.26, 4), sideMat);
+      shard.rotation.x = Math.PI / 2;
+      shard.rotation.y = 0;
+      shard.position.set(Math.cos(a) * 0.14, Math.sin(a) * 0.14, -0.12 + (i % 2) * 0.12);
+      // tilt outward
+      const holder = new THREE.Group();
+      holder.add(shard);
+      shard.position.set(0, 0, 0);
+      holder.position.set(Math.cos(a) * 0.14, Math.sin(a) * 0.14, -0.12 + (i % 2) * 0.14);
+      holder.rotation.set(-Math.sin(a) * 0.3, Math.cos(a) * 0.3, 0);
+      g.add(holder);
+    }
+    // Yellow accent ring
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(r * 1.05, 0.012, 4, 10),
+      new THREE.MeshBasicMaterial({ color: 0xffd84a })
+    );
+    ring.position.z = -len * 0.18;
+    g.add(ring);
+  }
+  const glow = new THREE.Mesh(
+    new THREE.SphereGeometry(empowered ? 0.24 : 0.14, 8, 6),
+    new THREE.MeshBasicMaterial({
+      color: 0x6fe0ff,
+      transparent: true,
+      opacity: empowered ? 0.35 : 0.25,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  glow.scale.set(1, 1, empowered ? 2.4 : 2.2);
+  g.add(glow);
   return g;
 }
 
 export function createFrozenShell(): THREE.Group {
-  // STUB
   const g = new THREE.Group();
-  const block = new THREE.Mesh(
-    new THREE.BoxGeometry(0.9, 1.0, 0.9),
-    new THREE.MeshBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: 0.35, depthWrite: false })
-  );
-  block.position.y = 0.5;
-  g.add(block);
+  const bodyMat = new THREE.MeshBasicMaterial({
+    color: 0x9fe8ff,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const edgeMat = new THREE.MeshBasicMaterial({
+    color: 0xe6fbff,
+    transparent: true,
+    opacity: 0.6,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  // Central jagged block
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.42, 0.9, 6), bodyMat);
+  core.position.y = 0.45;
+  core.rotation.y = 0.3;
+  g.add(core);
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.2, 6), bodyMat);
+  cap.position.y = 1.0;
+  cap.rotation.y = 0.3;
+  g.add(cap);
+  // Outer crystals leaning outward
+  const shards: Array<[number, number, number, number, number]> = [
+    // angle, dist, height, radius, lean
+    [0.2, 0.36, 0.95, 0.1, 0.22],
+    [1.5, 0.38, 0.7, 0.09, 0.3],
+    [2.6, 0.34, 1.0, 0.11, 0.2],
+    [3.7, 0.4, 0.65, 0.09, 0.32],
+    [4.8, 0.36, 0.85, 0.1, 0.25],
+    [5.7, 0.4, 0.55, 0.08, 0.35],
+  ];
+  shards.forEach(([a, d, h, r, lean], i) => {
+    const holder = new THREE.Group();
+    holder.position.set(Math.cos(a) * d, 0, Math.sin(a) * d);
+    const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 4), i % 2 === 0 ? edgeMat : bodyMat);
+    m.position.y = h / 2;
+    holder.add(m);
+    holder.rotation.set(Math.sin(a) * lean, 0, -Math.cos(a) * lean);
+    g.add(holder);
+  });
+  // Bright edge slabs at the base
+  for (let i = 0; i < 3; i++) {
+    const a = 0.9 + i * 2.1;
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, 0.12), edgeMat);
+    slab.position.set(Math.cos(a) * 0.42, 0.11, Math.sin(a) * 0.42);
+    slab.rotation.y = -a;
+    g.add(slab);
+  }
   return g;
 }
 
 export function createSlowMarker(): THREE.Group {
-  // STUB
   const g = new THREE.Group();
-  const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.6, 0.85, 24),
+  const mk = (color: number, opacity: number) =>
     new THREE.MeshBasicMaterial({
-      color: 0x7fdcff,
+      color,
       transparent: true,
-      opacity: 0.55,
+      opacity,
       side: THREE.DoubleSide,
       depthWrite: false,
-    })
-  );
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.05;
-  g.add(ring);
+    });
+  const flat = (mesh: THREE.Mesh, y: number) => {
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = y;
+    g.add(mesh);
+    return mesh;
+  };
+  // Soft disc + outer ring
+  flat(new THREE.Mesh(new THREE.CircleGeometry(0.85, 24), mk(0x8fe3ff, 0.16)), 0.045);
+  flat(new THREE.Mesh(new THREE.RingGeometry(0.76, 0.88, 28), mk(0x9fe8ff, 0.6)), 0.05);
+  flat(new THREE.Mesh(new THREE.RingGeometry(0.44, 0.48, 24), mk(0xe6fbff, 0.45)), 0.052);
+  // Six-armed snowflake: arms + side branches (flat boxes on the XZ plane)
+  const armMat = mk(0xe6fbff, 0.75);
+  const branchMat = mk(0xbff4ff, 0.7);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const arm = new THREE.Group();
+    arm.rotation.y = a;
+    const stem = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.05), armMat);
+    stem.rotation.x = -Math.PI / 2;
+    stem.position.set(0.34, 0.055, 0);
+    arm.add(stem);
+    for (const t of [0.38, 0.58]) {
+      for (const sgn of [-1, 1]) {
+        const br = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.035), branchMat);
+        br.rotation.x = -Math.PI / 2;
+        br.rotation.z = sgn * 0.75;
+        br.position.set(t + 0.07, 0.056, sgn * 0.07);
+        arm.add(br);
+      }
+    }
+    g.add(arm);
+  }
+  // Yellow centre dot
+  flat(new THREE.Mesh(new THREE.CircleGeometry(0.07, 8), mk(0xffd84a, 0.9)), 0.058);
+  // Floating ice bits
+  const bitMat = new THREE.MeshBasicMaterial({ color: 0xdff9ff, transparent: true, opacity: 0.9, depthWrite: false });
+  const bitGeo = new THREE.OctahedronGeometry(0.06, 0);
+  const bits: Array<[number, number, number]> = [
+    [0.55, 0.65, 0.2],
+    [-0.45, 0.95, 0.4],
+    [0.1, 1.2, -0.55],
+    [-0.3, 0.8, -0.5],
+  ];
+  bits.forEach(([x, y, z], i) => {
+    const b = new THREE.Mesh(bitGeo, i === 2 ? new THREE.MeshBasicMaterial({ color: 0xffd84a }) : bitMat);
+    b.position.set(x, y, z);
+    b.scale.set(0.8, 1.4, 0.8);
+    b.rotation.set(i, i * 1.3, 0);
+    g.add(b);
+  });
   return g;
 }
