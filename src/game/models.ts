@@ -4820,8 +4820,9 @@ export function createAngelModel(
 
   // 2x enlarged angelic nameplate featuring her feminine angel name (Seraphina / 瑟拉菲娜)
   const nameTag = createEliteNameSprite('瑟拉菲娜', false);
-  nameTag.scale.set(5.2, 1.16, 1);
-  nameTag.position.y = 2.78;
+  // Exactly 2x the default nameplate size (4.38, 0.99); raised so it clears the halo
+  nameTag.scale.set(8.76, 1.98, 1);
+  nameTag.position.y = 3.3;
   root.add(nameTag);
 
   return { root, body, leftWing, rightWing, haloRing, lightOrb, auraPool, haloSprite };

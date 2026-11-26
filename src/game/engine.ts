@@ -2222,8 +2222,9 @@ export class EmbervaultEngine {
 
     // Fast small swarm pack size: always >= 2, scaling up with depth to max 4
     const rollSwarmPackSize = (): number => {
-      const minPack = this.depth >= 15 ? 4 : this.depth >= 8 ? 3 : 2;
-      const maxPack = this.depth >= 11 ? 4 : this.depth >= 4 ? 3 : 2;
+      // 1-9: 2 | 10-16: 2-3 | 17-25: 3 | 26+: 3-4
+      const minPack = this.depth >= 17 ? 3 : 2;
+      const maxPack = this.depth >= 26 ? 4 : this.depth >= 10 ? 3 : 2;
       return minPack + Math.floor(Math.random() * (maxPack - minPack + 1));
     };
 
@@ -2365,6 +2366,10 @@ export class EmbervaultEngine {
 
   private getDepthDamageScale(): number {
     return 1 + (this.depth - 1) * 0.12;
+  }
+
+  private getSwarmDepthDamageScale(): number {
+    return 1 + (this.depth - 1) * 0.06;
   }
 
   private getDepthGoldScale(): number {
@@ -4076,11 +4081,13 @@ export class EmbervaultEngine {
       enemy.kind === 'cavern_golem' ||
       enemy.kind === 'cavern_spitter' ||
       enemy.kind === 'cavern_warden' ||
+      enemy.kind === 'cavern_mite' ||
       enemy.kind === 'flesh_spiner' ||
       enemy.kind === 'flesh_brute' ||
       enemy.kind === 'alien_trooper' ||
       enemy.kind === 'alien_gunner' ||
-      enemy.kind === 'alien_mech'
+      enemy.kind === 'alien_mech' ||
+      enemy.kind === 'alien_nanobot'
     ) {
       this.audio.playSkeletonDeath();
       const isCavernStone =
@@ -7333,8 +7340,10 @@ export class EmbervaultEngine {
       if (dist < attackReach && e.attackCooldown <= 0) {
         e.attackCooldown = isSwarm ? 0.5 : isGuard ? 1.15 : 1.05; // Swarm bites 2 times per second!
         const baseMelee = isGuard ? 9 : isSwarm ? 1.25 + Math.random() * 0.65 : 5;
+        // Swarm critters scale gentler with depth (+6%/floor instead of +12%)
+        const depthScale = isSwarm ? this.getSwarmDepthDamageScale() : this.getDepthDamageScale();
         this.damageHero(
-          baseMelee * this.getDepthDamageScale() * e.damageMult,
+          baseMelee * depthScale * e.damageMult,
           e.x,
           e.z,
           this.getEnemyLabel(e),
