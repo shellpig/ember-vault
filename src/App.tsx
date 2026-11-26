@@ -1578,6 +1578,31 @@ export default function App() {
           </div>
         )}
 
+        {!hud.inTown && hud.nearPortal && !hud.nearAltar && !hud.nearShop && !hud.rescuePrompt && (
+          <div className="mb-2.5 bg-[#0c0e14]/95 border border-[#49c8f0] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2">
+            <div className="flex items-center justify-between gap-3 border-b border-[#1f3b4a] pb-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <DoorOpen className="w-4 h-4 text-[#66e3ff] shrink-0" />
+                <span className="font-display text-xs font-bold tracking-[0.12em] text-[#ccf6ff] whitespace-nowrap">
+                  城鎮傳送門 · TOWN PORTAL
+                </span>
+              </div>
+              <span className="font-hud text-[11px] text-[#7ed7eb] whitespace-nowrap">按 F 穿越</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => engineRef.current?.useDungeonPortal()}
+              className="w-full flex items-center justify-between gap-2 px-3 py-2 border border-[#3d94b3] bg-[#0e202c] hover:border-[#7ee6ff] hover:bg-[#143042] text-[#d6f8ff] font-hud text-xs font-semibold transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <DoorOpen className="w-4 h-4 text-[#5ce1ff] shrink-0" />
+                <span>穿越傳送門返回城鎮</span>
+              </div>
+              <span className="font-hud text-[11px] text-[#8effb8] whitespace-nowrap">免費</span>
+            </button>
+          </div>
+        )}
+
         {hud.inTown && hud.nearPortal && !hud.nearAltar && !hud.nearShop && (
           <div className="mb-2.5 bg-[#0c0e14]/95 border border-[#49c8f0] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2.5">
             <div className="flex items-center justify-between gap-3 border-b border-[#1f3b4a] pb-2">

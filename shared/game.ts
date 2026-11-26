@@ -82,8 +82,8 @@ export type CommandPayload =
   | { c: 'sellc'; y?: 0 | 1 }
   | { c: 'up'; kind: string }
   | { c: 'buy' }
-  /** Back to town (B). */
-  | { c: 'town' }
+  /** Back to town (B, or free = 1 when walking through an existing dungeon portal). */
+  | { c: 'town'; free?: 1 }
   /** The "回到城鎮" button on the downed screen. */
   | { c: 'death' };
 

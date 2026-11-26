@@ -3571,13 +3571,25 @@ export class EmbervaultEngine {
     if (this.hero.stashOpen) return;
     const code = e.code;
 
-    // Hotkey F: interact with the town stash chest; in the dungeon, hold it next to a downed teammate to revive them
+    // Hotkey F: interact with the town stash chest; in the dungeon, revive downed teammate or step through a nearby portal
     if (code === 'KeyF' && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (this.inTown && this.isHeroNearStash()) {
         e.preventDefault();
         this.openStash();
       } else if (!this.inTown) {
-        this.hero.input.keys.add('KeyF');
+        const nearDowned = this.heroes.some(
+          (other) =>
+            other.id !== this.hero.id &&
+            other.isDead &&
+            !other.inTown &&
+            Math.hypot(other.x - this.hero.x, other.z - this.hero.z) <= 1.5
+        );
+        if (!nearDowned && this.findNearbyDungeonPortal(this.hero)) {
+          e.preventDefault();
+          this.useDungeonPortal();
+        } else {
+          this.hero.input.keys.add('KeyF');
+        }
       }
       return;
     }
@@ -3919,33 +3931,71 @@ export class EmbervaultEngine {
     return this.depth * 10;
   }
 
-  public returnToTown(): void {
+  /** Removes a hero's dungeon portal data and 3D rig (used when the owner returns from town). */
+  private clearHeroPortal(hero: Hero): void {
+    hero.portal = null;
+    for (const map of [this.heroPortalRigs, this.dungeonCtx?.heroPortalRigs]) {
+      const rig = map?.get(hero.id);
+      if (!rig) continue;
+      rig.root.parent?.remove(rig.root);
+      rig.root.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+          else obj.material.dispose();
+        }
+      });
+      map?.delete(hero.id);
+    }
+  }
+
+  /** Returns the owner of a nearby active dungeon portal on the current floor, or null. */
+  private findNearbyDungeonPortal(hero: Hero = this.hero): Hero | null {
+    if (this.inTown) return null;
+    for (const h of this.heroes) {
+      if (!h.portal || h.portal.depth !== this.depth) continue;
+      if (Math.hypot(hero.x - h.portal.x, hero.z - h.portal.z) < 2.25) return h;
+    }
+    return null;
+  }
+
+  /** Steps through an existing dungeon portal (own or teammate's) back to town for free (spec §3.1). */
+  public useDungeonPortal(): void {
+    if (this.hero.isDead || this.inTown || this.transitionState !== 'none' || this.tradeLocked) return;
+    if (!this.findNearbyDungeonPortal(this.hero)) return;
+    this.returnToTown(true);
+  }
+
+  public returnToTown(viaExistingPortal = false): void {
     if (this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     if (this.mp?.role === 'guest') {
-      this.mpGuestAskTown(false);
+      this.mpGuestAskTown(false, viaExistingPortal);
       return;
     }
 
-    const cost = this.getTownReturnCost();
+    const cost = viaExistingPortal ? 0 : this.getTownReturnCost();
     const spent = Math.min(this.hero.gold, cost);
     this.hero.gold = Math.max(0, this.hero.gold - cost);
 
-    // A normal return opens a fresh portal under the hero (replacing any older one)
+    // A normal return opens a fresh portal under the hero (replacing any older one);
+    // stepping through an existing portal reuses it without opening a new one.
     const partyStays = this.partyHoldsDungeon();
-    if (partyStays) {
-      // The floor keeps running: the portal is a real, lasting landmark right now
-      this.placeHeroPortal(this.hero, this.hero.x, this.hero.z, this.depth);
-    } else {
-      this.hero.portal = { x: this.hero.x, z: this.hero.z, depth: this.depth };
-    }
+    if (!viaExistingPortal) {
+      if (partyStays) {
+        // The floor keeps running: the portal is a real, lasting landmark right now
+        this.placeHeroPortal(this.hero, this.hero.x, this.hero.z, this.depth);
+      } else {
+        this.hero.portal = { x: this.hero.x, z: this.hero.z, depth: this.depth };
+      }
 
-    // Spawn instantaneous glowing portal at current spot before fading into Sanctuary Town
-    if (!partyStays && this.textures) {
-      const departPortal = createTownPortal(this.textures.glowMap);
-      departPortal.root.position.set(this.hero.x, 0, this.hero.z);
-      departPortal.root.rotation.y = Math.PI / 4;
-      this.dynamicGroup.add(departPortal.root);
+      // Spawn instantaneous glowing portal at current spot before fading into Sanctuary Town
+      if (!partyStays && this.textures) {
+        const departPortal = createTownPortal(this.textures.glowMap);
+        departPortal.root.position.set(this.hero.x, 0, this.hero.z);
+        departPortal.root.rotation.y = Math.PI / 4;
+        this.dynamicGroup.add(departPortal.root);
+      }
     }
     for (let i = 0; i < 20; i++) {
       const a = (i / 20) * Math.PI * 2;
@@ -4030,6 +4080,8 @@ export class EmbervaultEngine {
 
   /** The local hero steps out of the town gate into the dungeon (runs at the black of the fade). */
   private enterDungeonFromTown(target: { x: number; z: number }): void {
+    // Owner returning from town closes their own portal (teammates' portals stay open)
+    this.clearHeroPortal(this.localHero);
     const snap = this.savedDungeon;
     if (snap) {
       // Frozen floor: rebuild it with fresh monsters around the chosen portal (spec §3.4)
@@ -4523,8 +4575,11 @@ export class EmbervaultEngine {
   }
 
   private isHeroNearPortal(): boolean {
-    if (!this.inTown || !this.townGatePos) return false;
-    return Math.hypot(this.hero.x - this.townGatePos.x, this.hero.z - this.townGatePos.z) < 2.25;
+    if (this.inTown) {
+      if (!this.townGatePos) return false;
+      return Math.hypot(this.hero.x - this.townGatePos.x, this.hero.z - this.townGatePos.z) < 2.25;
+    }
+    return this.findNearbyDungeonPortal(this.localHero) !== null;
   }
 
   private isHeroNearStash(): boolean {
@@ -12227,7 +12282,10 @@ export class EmbervaultEngine {
           this.purchasePotion();
           break;
         case 'town':
-          if (!h.isDead) this.mpHostSendToTown(h, false);
+          if (!h.isDead) {
+            const viaExisting = cmd.free === 1 && this.findNearbyDungeonPortal(h) !== null;
+            this.mpHostSendToTown(h, false, viaExisting);
+          }
           break;
         case 'death':
           if (h.isDead) this.mpHostSendToTown(h, true);
@@ -12240,9 +12298,9 @@ export class EmbervaultEngine {
   }
 
   /** `h` (a remote hero) goes to the town: it leaves the simulation and receives its final state. */
-  private mpHostSendToTown(h: Hero, fromDeath: boolean): void {
+  private mpHostSendToTown(h: Hero, fromDeath: boolean, viaExistingPortal = false): void {
     const mp = this.mp!;
-    const cost = this.getTownReturnCost();
+    const cost = viaExistingPortal ? 0 : this.getTownReturnCost();
     const spent = Math.min(h.gold, cost);
     h.gold = Math.max(0, h.gold - cost);
     void spent;
@@ -12250,9 +12308,11 @@ export class EmbervaultEngine {
       h.isDead = false;
       h.restoreAfterDowned();
     }
-    const active = !this.inTown || this.dungeonCtx !== null;
-    if (active && this.textures) this.placeHeroPortal(h, h.x, h.z, this.depth);
-    else h.portal = { x: h.x, z: h.z, depth: this.depth };
+    if (!viaExistingPortal) {
+      const active = !this.inTown || this.dungeonCtx !== null;
+      if (active && this.textures) this.placeHeroPortal(h, h.x, h.z, this.depth);
+      else h.portal = { x: h.x, z: h.z, depth: this.depth };
+    }
     h.inTown = true;
     h.input.keys.clear();
     h.input.leftMouseHeld = false;
@@ -12301,6 +12361,8 @@ export class EmbervaultEngine {
       tx = sp.x;
       tz = sp.z;
     }
+    // Owner returning from town closes their own portal (other heroes' portals stay open)
+    this.clearHeroPortal(h);
     h.inTown = false;
     h.isDead = false;
     h.x = tx;
@@ -13868,15 +13930,15 @@ export class EmbervaultEngine {
     if (mp?.role === 'guest') mp.send('cmd', cmd, mp.hostId);
   }
 
-  /** Guest in the dungeon asked for town (B / death screen): hold at black until the host's reply arrives. */
-  private mpGuestAskTown(death: boolean): void {
+  /** Guest in the dungeon asked for town (B / death screen / existing portal): hold at black until the host's reply arrives. */
+  private mpGuestAskTown(death: boolean, viaExistingPortal = false): void {
     const mp = this.mp!;
     this.mpHold('town', '正在返回城鎮…');
     this.audio.playPortal();
     this.localHero.input.keys.clear();
     this.localHero.input.leftMouseHeld = false;
     this.beginTransition(() => undefined);
-    this.mpGuestCmd(death ? { c: 'death' } : { c: 'town' });
+    this.mpGuestCmd(death ? { c: 'death' } : viaExistingPortal ? { c: 'town', free: 1 } : { c: 'town' });
   }
 
   public dispose(): void {
