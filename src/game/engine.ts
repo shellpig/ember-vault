@@ -6156,6 +6156,14 @@ export class EmbervaultEngine {
     const nx = moveX / len;
     const nz = moveZ / len;
 
+    // Mage: only blink when already heading that way (within ~15°), so it never zig-zags
+    if (mage) {
+      let diff = Math.atan2(nx, nz) - this.heroFacing;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      if (Math.abs(diff) > 0.26) return;
+    }
+
     // Only dash in confirmed safe zones (no nearby enemies or active projectiles)
     for (const e of this.enemies) {
       if (!e.dead && Math.hypot(e.x - this.heroX, e.z - this.heroZ) < 9.0) {
@@ -6212,7 +6220,25 @@ export class EmbervaultEngine {
         d > 1.2 &&
         hasLineOfSight(this.dungeon, this.heroX, this.heroZ, tw.x, tw.z, this.doorUnlocked, 0.44)
       ) {
-        return { moveX: dx / d, moveZ: dz / d, distToGoal };
+        const dirX = dx / d;
+        const dirZ = dz / d;
+        if (!this.isMage()) return { moveX: dirX, moveZ: dirZ, distToGoal };
+        // Mage: Blink only along a genuinely straight stretch of the path. Report how far the
+        // path keeps going in this exact direction (waypoints within 0.6 of the line, in LOS),
+        // so tryAutoTravelDash refuses to blink around bends.
+        let straightRun = 0;
+        for (const wp of path) {
+          const ww = gridToWorld(wp.gx, wp.gz);
+          const vx = ww.x - this.heroX;
+          const vz = ww.z - this.heroZ;
+          const along = vx * dirX + vz * dirZ;
+          const off = Math.abs(vx * dirZ - vz * dirX);
+          if (along < 0) continue;
+          if (off > 0.6) break;
+          if (!hasLineOfSight(this.dungeon, this.heroX, this.heroZ, ww.x, ww.z, this.doorUnlocked, 0.44)) break;
+          straightRun = Math.max(straightRun, along);
+        }
+        return { moveX: dirX, moveZ: dirZ, distToGoal: Math.min(distToGoal, straightRun) };
       }
     }
     return { moveX: fallback.moveX, moveZ: fallback.moveZ, distToGoal };
