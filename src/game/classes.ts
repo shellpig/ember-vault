@@ -43,6 +43,8 @@ export interface HeroClassDef {
   highlights: string[];
   baseHp: number;
   baseShield: number;
+  /** Multiplier applied to base potion heal (40 HP). */
+  potionHealMult: number;
   skillName: string;
   skillCooldown: number;
   mobilityName: string;
@@ -57,10 +59,11 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClassDef> = {
     id: 'warrior',
     name: '燈守戰士',
     title: 'Lantern Warden',
-    description: '手持符文巨劍與魂燈的近戰鬥士。厚實血量與護甲，三段連斬第三擊大範圍橫掃。',
-    highlights: ['近戰三段連斬', '右鍵：劍柄重擊（暈眩）', '高血量＋護甲減傷'],
+    description: '手持符文巨劍與魂燈的近戰鬥士。厚實血量與護甲，三段連斬第三擊大範圍橫掃，藥水回復量為1.5倍。',
+    highlights: ['近戰三段連斬', '右鍵：劍柄重擊（暈眩）', '高血量＋護甲減傷，藥水回復量為1.5倍'],
     baseHp: 60,
     baseShield: 0,
+    potionHealMult: 1.5,
     skillName: '劍柄重擊',
     skillCooldown: 8.0,
     mobilityName: '衝刺',
@@ -76,6 +79,7 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClassDef> = {
     highlights: ['遠程冰尖彈，命中小範圍爆炸', '右鍵：冰霜新星 全螢幕冰爆', '護盾 3 秒未受擊自動回充'],
     baseHp: 20,
     baseShield: 30,
+    potionHealMult: 1.0,
     skillName: '冰霜新星',
     skillCooldown: 10.0,
     mobilityName: '閃現',

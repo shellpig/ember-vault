@@ -4650,7 +4650,10 @@ export class EmbervaultEngine {
     }
 
     const noodleBonus = this.hero.hasUnique('noodle_elixir_boost') ? 15 : 0;
-    const baseHeal = Math.round(40 * (1 + this.hero.relicStats.potionHealPct / 100)) + noodleBonus;
+    const classPotionMult = HERO_CLASSES[this.hero.classId].potionHealMult;
+    const baseHeal =
+      Math.round(40 * classPotionMult * (1 + this.hero.relicStats.potionHealPct / 100)) +
+      noodleBonus;
     const heal = Math.min(baseHeal, effMax - this.hero.hp);
     this.hero.hp = Math.min(effMax, this.hero.hp + heal);
     this.audio.playPotion();
@@ -6272,8 +6275,8 @@ export class EmbervaultEngine {
         2.1,
         enemy.z,
         enemy.isSpecialElite && enemy.customName
-          ? `★ ${enemy.customName} 討伐 · 掉落×1.2`
-          : 'ELITE SLAIN · 3x LOOT',
+          ? `★ ${enemy.customName} 討伐 · 3.6× 掉落`
+          : '菁英討伐 · 3× 掉落',
         enemy.isSpecialElite ? 'relicOrange' : 'key'
       );
       for (let i = 0; i < 22; i++) {
@@ -9861,17 +9864,19 @@ export class EmbervaultEngine {
             e.damageMult,
             this.getEnemyLabel(e)
           );
+          const eliteAtkSpeed = e.isElite ? 1.25 : 1;
           if (isArcher) {
             this.audio.playBowShot();
-            e.attackCooldown = 1.55 + Math.random() * 0.25;
+            e.attackCooldown = (1.55 + Math.random() * 0.25) / eliteAtkSpeed;
           } else {
             this.audio.playMageCast();
-            e.attackCooldown = 1.85 + Math.random() * 0.25;
+            e.attackCooldown = (1.85 + Math.random() * 0.25) / eliteAtkSpeed;
           }
         }
       } else if (clearLOS && dist <= fireRange && e.attackCooldown <= 0) {
         // Begin short readable draw/cast windup before firing
-        e.windupTimer = isArcher ? 0.32 : 0.42;
+        const eliteAtkSpeed = e.isElite ? 1.25 : 1;
+        e.windupTimer = (isArcher ? 0.32 : 0.42) / eliteAtkSpeed;
       } else if (!clearLOS) {
         // Flank sideways around pillars/corners so ranged enemies don't glue themselves behind cover
         const side = e.id % 2 === 0 ? 1 : -1;
@@ -10107,9 +10112,10 @@ export class EmbervaultEngine {
 
       // Enemy Attack on Hero
       const isGuard = isGuardianEnemy(e.kind);
-      const attackReach = isGuard ? 1.45 : e.isElite ? 1.25 : isSwarm ? 1.05 : 1.12;
+      const attackReach = isGuard ? 1.45 : e.isElite ? 1.4 : isSwarm ? 1.05 : 1.12;
       if (dist < attackReach && e.attackCooldown <= 0) {
-        e.attackCooldown = isSwarm ? 0.5 : isGuard ? 1.15 : 1.05; // Swarm bites 2 times per second!
+        const eliteAtkSpeed = e.isElite ? 1.25 : 1;
+        e.attackCooldown = (isSwarm ? 0.5 : isGuard ? 1.15 : 1.05) / eliteAtkSpeed; // Swarm bites 2 times per second!
         const baseMelee = isGuard ? 9 : isSwarm ? 1.25 + Math.random() * 0.65 : 5;
         // Swarm critters scale gentler with depth (+6%/floor instead of +12%)
         const depthScale = isSwarm ? this.getSwarmDepthDamageScale() : this.getDepthDamageScale();
