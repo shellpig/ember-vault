@@ -1,5 +1,11 @@
 import type { CharacterUpgrades } from '../../shared/character';
-import { FROST_MAGE, HERO_CLASSES, getShieldSpeedFactor, splitRelicMaxHpForMage } from './classes';
+import {
+  FROST_MAGE,
+  HERO_CLASSES,
+  WARRIOR,
+  getShieldSpeedFactor,
+  splitRelicMaxHpForMage,
+} from './classes';
 import type { HeroClassId, UpgradeKind } from './classes';
 import type { HeroRig, createHeroSetAura } from './models';
 import { computeRelicSummary } from './relics';
@@ -135,7 +141,8 @@ export class Hero {
   // Health (HP scaled 10x: 60 start, 300 cap)
   public hp = 60;
   public maxHp = 60;
-  public readonly maxHpCap = 300;
+  public readonly maxHpCap =
+    HERO_CLASSES.warrior.baseHp + WARRIOR.hpPerUpgrade * WARRIOR.maxHpUpgrades;
   public shield = 0;
   public baseMaxShield = 0;
   /** Seconds since the hero last took damage (drives shield regen delay). */
@@ -145,10 +152,11 @@ export class Hero {
   public classId: HeroClassId = 'warrior';
   public hpUpgrades = 0;
   public atkUpgrades = 0;
+  public readonly maxAtkUpgrades = WARRIOR.maxAtkUpgrades;
   public armorUpgrades = 0;
-  public readonly maxArmorUpgrades = 5;
+  public readonly maxArmorUpgrades = WARRIOR.maxArmorUpgrades;
   public critUpgrades = 0;
-  public readonly maxCritUpgrades = 10;
+  public readonly maxCritUpgrades = WARRIOR.maxCritUpgrades;
   public hpShieldUpgrades = 0;
   public shieldSpeedUpgrades = 0;
   public autoNextUpgrade: UpgradeKind = 'hp';
@@ -407,9 +415,9 @@ export class Hero {
     }
     switch (kind) {
       case 'hp':
-        return Math.round((this.maxHpCap - HERO_CLASSES.warrior.baseHp) / 10);
+        return WARRIOR.maxHpUpgrades;
       case 'atk':
-        return 999; // warrior attack upgrades are uncapped
+        return this.maxAtkUpgrades;
       case 'armor':
         return this.maxArmorUpgrades;
       case 'crit':
@@ -527,10 +535,13 @@ export class Hero {
         HERO_CLASSES.frost_mage.baseShield + FROST_MAGE.shieldPerUpgrade * this.hpShieldUpgrades;
     } else {
       this.hpUpgrades = lvl(up.hp, this.getUpgradeMax('hp'));
-      this.atkUpgrades = lvl(up.atk, 999);
+      this.atkUpgrades = lvl(up.atk, this.maxAtkUpgrades);
       this.armorUpgrades = lvl(up.armor, this.maxArmorUpgrades);
       this.critUpgrades = lvl(up.crit, this.maxCritUpgrades);
-      this.maxHp = Math.min(this.maxHpCap, HERO_CLASSES.warrior.baseHp + 10 * this.hpUpgrades);
+      this.maxHp = Math.min(
+        this.maxHpCap,
+        HERO_CLASSES.warrior.baseHp + WARRIOR.hpPerUpgrade * this.hpUpgrades
+      );
     }
     this.gold = Math.max(0, Math.floor(l.gold));
     this.potions = Math.max(0, Math.floor(l.potions));

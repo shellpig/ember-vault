@@ -91,6 +91,18 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClassDef> = {
 export const SELECTABLE_CLASS_IDS: HeroClassId[] = ['warrior', 'frost_mage'];
 
 // ---------------------------------------------------------------------------
+// Warrior tuning
+// ---------------------------------------------------------------------------
+export const WARRIOR = {
+  // Altar upgrades (total 60)
+  hpPerUpgrade: 12,
+  maxHpUpgrades: 20, // 60 + 20 * 12 = 300 HP
+  maxAtkUpgrades: 20,
+  maxArmorUpgrades: 5,
+  maxCritUpgrades: 15,
+} as const;
+
+// ---------------------------------------------------------------------------
 // Frost Mage tuning
 // ---------------------------------------------------------------------------
 export const FROST_MAGE = {
@@ -125,12 +137,12 @@ export const FROST_MAGE = {
   shieldRefillBase: 5.0, // seconds to refill from 0 to full
   shieldSpeedStep: 0.12, // each upgrade shortens BOTH by 12% of base (additive)
 
-  // Altar upgrades
+  // Altar upgrades (total 60)
   hpPerUpgrade: 3,
   shieldPerUpgrade: 7,
   maxHpShieldUpgrades: 20,
-  maxAtkUpgrades: 10,
-  maxCritUpgrades: 10,
+  maxAtkUpgrades: 20,
+  maxCritUpgrades: 15,
   maxShieldSpeedUpgrades: 5,
 
   // Relic "max HP" stat split for the mage

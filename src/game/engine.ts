@@ -124,6 +124,7 @@ import {
   HeroClassId,
   UpgradeKind,
   UpgradeOptionView,
+  WARRIOR,
 } from './classes';
 import {
   BannerEvent,
@@ -4352,13 +4353,19 @@ export class EmbervaultEngine {
       ];
     }
     return [
-      row('hp', 'hp', '+10 Max HP', 'HP MAXED', `${this.hero.maxHp} / ${this.hero.maxHpCap} HP`),
+      row(
+        'hp',
+        'hp',
+        `+${WARRIOR.hpPerUpgrade} Max HP`,
+        'HP MAXED',
+        `${this.hero.maxHp} / ${this.hero.maxHpCap} HP`
+      ),
       row(
         'atk',
         'atk',
         '+10% Attack',
         'ATK MAXED',
-        `+${this.hero.atkUpgrades * 10}% → +${this.hero.atkUpgrades * 10 + 10}% DMG`
+        `+${this.hero.atkUpgrades * 10}% / +${this.hero.maxAtkUpgrades * 10}% DMG`
       ),
       row(
         'armor',
@@ -4505,9 +4512,15 @@ export class EmbervaultEngine {
       );
     } else if (kind === 'hp') {
       this.hero.hpUpgrades += 1;
-      this.hero.maxHp = Math.min(this.hero.maxHpCap, this.hero.maxHp + 10);
+      this.hero.maxHp = Math.min(this.hero.maxHpCap, this.hero.maxHp + WARRIOR.hpPerUpgrade);
       this.hero.hp = this.hero.getEffectiveMaxHp();
-      this.emitFloatingText(this.hero.x, 2.0, this.hero.z, '+10 MAX HP · FULL HP', 'heal');
+      this.emitFloatingText(
+        this.hero.x,
+        2.0,
+        this.hero.z,
+        `+${WARRIOR.hpPerUpgrade} MAX HP · FULL HP`,
+        'heal'
+      );
     } else if (kind === 'armor') {
       this.hero.armorUpgrades += 1;
       this.hero.hp = effMax;
