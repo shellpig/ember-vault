@@ -182,7 +182,12 @@ function createRng(seed: number): () => number {
   };
 }
 
-export function generateDungeon(depth: number): DungeonData {
+/**
+ * `seed` (multiplayer only): the host picks it, every client regenerates the identical map from it. Without it (single
+ * player, attract mode) the random part is drawn from Math.random exactly as before, so the global RNG sequence of a
+ * single player run is unchanged. The value used is stored in `genSeed` so the host can announce it.
+ */
+export function generateDungeon(depth: number, seed?: number): DungeonData {
   // Expand dungeon dimensions by ~20% after every 5 completed floors (34 -> 41 -> 49 -> 59 -> 68 max)
   const tier = Math.floor((depth - 1) / 5);
   const size = Math.min(68, Math.round(34 * Math.pow(1.2, tier)));
@@ -199,7 +204,8 @@ export function generateDungeon(depth: number): DungeonData {
       ? FLESH_BIOMES
       : ALIEN_BIOMES;
   const biome = zonePool[Math.floor(((depth - 1) % 10) / 2) % zonePool.length];
-  const rand = createRng(depth * 7919 + Math.floor(Math.random() * 100000));
+  const genSeed = seed ?? Math.floor(Math.random() * 100000);
+  const rand = createRng(depth * 7919 + genSeed);
 
   const tiles: TileType[][] = Array.from({ length: height }, () =>
     Array.from({ length: width }, () => 0 as TileType)
@@ -629,6 +635,7 @@ export function generateDungeon(depth: number): DungeonData {
     altarPos,
     shopPos,
     biome,
+    genSeed,
   };
 }
 

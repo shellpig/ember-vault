@@ -70,7 +70,7 @@ export type CommandPayload =
   | { c: 'eq'; id: string; s?: number }
   | { c: 'uneq'; s: number }
   | { c: 'sell'; id: string }
-  | { c: 'sellc' }
+  | { c: 'sellc'; y?: 0 | 1 }
   | { c: 'up'; kind: string }
   | { c: 'buy' }
   /** Back to town (B). */
@@ -91,19 +91,16 @@ export interface HandbackPayload {
 // --- Host -> teammates -------------------------------------------------------------------------------------------
 /** The state of ONE hero that only its owner needs (everybody else sees position / HP only). */
 export interface PrivatePayload {
-  gold: number;
-  potions: number;
-  eq: RelicItem[];
-  bag: RelicItem[];
-  up: { hp: number; atk: number; armor: number; crit: number; hpShield: number; shieldSpeed: number };
-  mh: number;
-  bs: number;
+  /** gold, potions, upgrades, equipped / bag relics, max depth (the shape of a character save; the stash never travels). */
+  ld: CharacterLoadout;
+  /** Angel blessing. */
   ab: AngelBuff | null;
   /** kills, normal, elite, boss, goldEarned, damage, crits, potionsUsed */
   st: [number, number, number, number, number, number, number, number];
-  sl: string;
   /** Chronos hourglass used on this floor. */
   ch: 0 | 1;
+  /** Name of what downed this hero (death screen). */
+  sl: string;
 }
 
 export interface RosterEntry {
@@ -177,10 +174,10 @@ export type DoorSnap = [string, number, number, number];
 export interface WorldSnap {
   k: 0 | 1;
   u: 0 | 1;
-  /** "gx,gz" of used rune wells */
-  ru: string[];
-  /** "gx,gz" of broken crates / urns */
-  br: string[];
+  /** Indices (in build order) of the rune wells that were used up */
+  ru: number[];
+  /** Indices (in build order) of the broken crates / urns */
+  br: number[];
 }
 
 /**
@@ -221,6 +218,9 @@ export interface SnapshotPayload {
 
 export interface TownPayload {
   priv: PrivatePayload;
+  /** The hero's HP / shield when leaving the dungeon. */
+  hp: number;
+  sh: number;
 }
 
 export function q100(v: number): number {

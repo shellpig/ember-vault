@@ -70,6 +70,8 @@ export interface DungeonData {
   altarPos?: { gx: number; gz: number };
   shopPos?: { gx: number; gz: number };
   biome: BiomeConfig;
+  /** The random part of the generator seed (multiplayer: the host announces it so every client builds the same map). */
+  genSeed?: number;
 }
 
 export type EnemyKind =
