@@ -127,6 +127,9 @@ const INITIAL_HUD: HudState = {
   boss: null,
   isDead: false,
   runSummary: null,
+  beingRescued: 0,
+  rescuePrompt: null,
+  partySize: 1,
   equippedRelics: [],
   relicBag: [],
   relicBagCap: 30,
@@ -812,6 +815,21 @@ export default function App() {
         </div>
       )}
 
+      {/* Rescue prompt: standing next to a downed teammate (hold F for 3 seconds) */}
+      {screen === 'playing' && !hud.isDead && hud.rescuePrompt && (
+        <div
+          data-testid="rescue-prompt"
+          className="pointer-events-none absolute bottom-28 left-1/2 z-30 -translate-x-1/2 border border-[#7dffb0]/70 bg-[#0c0e14]/92 px-4 py-2 text-center font-hud text-xs text-[#d9ffe8] shadow-[0_8px_28px_rgba(0,0,0,0.75)]"
+        >
+          按住 <span className="font-bold text-[#7dffb0]">F</span> 救援 {hud.rescuePrompt.name}
+          {hud.rescuePrompt.progress > 0 && (
+            <span className="ml-2 tabular-nums text-[#7dffb0]">
+              {Math.round(hud.rescuePrompt.progress * 100)}%
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Top-Center Event Notification Banner */}
       {!hud.isDead && banner && (
         <div
@@ -1433,6 +1451,18 @@ export default function App() {
               <div className="mt-1.5 font-hud text-xs text-[#d67880]">
                 最終擊倒者：{hud.runSummary.slainBy}
               </div>
+              {hud.partySize > 1 && (
+                <div data-testid="death-rescue" className="mt-2 font-hud text-xs text-[#9fe9c0]">
+                  {hud.beingRescued > 0
+                    ? `隊友正在救你… ${Math.round(hud.beingRescued * 100)}%`
+                    : '隊友可以按住 F 3 秒把你救起來（地城仍在進行）'}
+                  {hud.beingRescued > 0 && (
+                    <div className="mx-auto mt-1 h-1.5 w-40 bg-[#1c2230]">
+                      <div className="h-full bg-[#7dffb0]" style={{ width: `${Math.round(hud.beingRescued * 100)}%` }} />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Core Run Metrics */}

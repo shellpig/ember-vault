@@ -83,6 +83,11 @@ export interface HeroAiState {
 export class Hero {
   public readonly id: string;
 
+  /** Local AI teammate (P4-B): never saved, never talks to the API, no HUD / camera / input binding. */
+  public isBot = false;
+  /** 1-based index shown on a bot's nameplate ("Bot 1"). */
+  public botIndex = 0;
+
   // Visual rig (owned by the hero; the engine adds it to the scene)
   public rig!: HeroRig;
   public setAura!: ReturnType<typeof createHeroSetAura>;
@@ -146,6 +151,9 @@ export class Hero {
    * A new portal replaces the old one; it is cleared on every floor change.
    */
   public portal: HeroPortal | null = null;
+  /** Rescue (spec §3.3): the downed hero this hero is currently reviving, and the seconds held so far. */
+  public rescueTargetId: string | null = null;
+  public rescueProgress = 0;
 
   // Economy
   public gold = 0;
@@ -227,6 +235,8 @@ export class Hero {
   public resetForNewRun(): void {
     this.isDead = false;
     this.portal = null;
+    this.rescueTargetId = null;
+    this.rescueProgress = 0;
     this.angelBuff = null;
     this.attackCooldown = 0;
     this.dashCooldown = 0;
