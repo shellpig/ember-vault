@@ -129,8 +129,8 @@ const INITIAL_HUD: HudState = {
   shield: 0,
   maxShield: 0,
   shieldRegenerating: false,
-  skillName: 'Pommel Strike',
-  mobilityName: 'Dash',
+  skillName: '劍柄重擊',
+  mobilityName: '衝刺',
   upgradeOptions: [],
 };
 
@@ -261,7 +261,8 @@ function ClassSelectOverlay({
                     {c.title}
                   </div>
                 </div>
-                <p className="font-hud text-[12px] leading-relaxed text-[#cfc9ba] self-stretch">
+                {/* Reserve 3 lines so the HP row and everything below line up across cards */}
+                <p className="font-hud text-[12px] leading-relaxed text-[#cfc9ba] self-stretch min-h-[4.875em]">
                   {c.description}
                 </p>
                 <div className="flex items-center justify-center gap-4 font-hud text-xs tabular-nums">

@@ -820,8 +820,8 @@ const FROST_MAGE_UNIQUE_DESC: Partial<Record<UniqueEffectId, string>> = {
   cat_paw_swat: '每第 3 次普攻命中追加一記超快「喵！」連擊貓掌，造成額外傷害與擊退。',
   storm_cleave_lightning:
     '每第 3 發強化冰尖彈爆炸時釋放雷電，連鎖電擊附近最多 3 名敵人造成 20% 額外傷害。',
-  phantom_dash_crit: '閃現（Blink）後的 2 秒內，下一次攻擊必定暴擊且額外造成 +25% 傷害。',
-  phoenix_dash_nova: '每次閃現（Blink）時在起點與終點爆開烈焰火環，灼燒周圍敵人並造成擊退。',
+  phantom_dash_crit: '閃現後的 2 秒內，下一次攻擊必定暴擊且額外造成 +25% 傷害。',
+  phoenix_dash_nova: '每次閃現時在起點與終點爆開烈焰火環，灼燒周圍敵人並造成擊退。',
 };
 
 export function getUniqueEffectDescForClass(effectId: UniqueEffectId, classId: HeroClassId): string {
