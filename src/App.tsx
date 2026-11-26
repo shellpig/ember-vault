@@ -12,7 +12,6 @@ import {
   Home,
   KeyRound,
   LogOut,
-  RotateCcw,
   Shield,
   Skull,
   Snowflake,
@@ -441,7 +440,7 @@ export default function App() {
     engineRef.current?.setInputLocked(screen !== 'playing');
   }, [screen]);
 
-  // The attract-mode hero may die behind the menus: just start another demo run.
+  // The attract-mode hero may die behind the menus: just start another demo run (never saves: no SaveManager, persistRun=false).
   useEffect(() => {
     if (screen === 'playing' || !hud.isDead) return;
     const t = window.setTimeout(() => engineRef.current?.restartRun('warrior'), 1500);
@@ -1419,7 +1418,7 @@ export default function App() {
                 id="run-summary-title"
                 className="font-display text-2xl font-bold tracking-[0.14em] text-[#f3e1b4]"
               >
-                冒險終結
+                你倒下了
               </h2>
               <div className="mt-2 font-display text-sm tracking-[0.2em] text-[#d9c28a]">
                 {HERO_CLASSES[hud.runSummary.heroClass].name}
@@ -1536,14 +1535,27 @@ export default function App() {
               </span>
             </div>
 
-            {/* Player-Controlled Restart Button */}
+            {/* Portal toll + return-to-town (death no longer ends the run) */}
+            <div
+              data-testid="death-toll"
+              className="mb-3 border border-[#3a3428] bg-[#12141c] px-3 py-2 text-center font-hud text-xs text-[#b9b4a4]"
+            >
+              傳送門已在倒下處開啟。回城將扣除{' '}
+              <span className="font-bold text-[#ffd479] tabular-nums">
+                {Math.min(hud.gold, hud.townReturnCost).toLocaleString()} G
+              </span>
+              {hud.gold < hud.townReturnCost && (
+                <span className="text-[#8d93a6]">（金幣不足，最多扣到 0；原價 {hud.townReturnCost} G）</span>
+              )}
+            </div>
             <button
               type="button"
-              onClick={() => engineRef.current && engineRef.current.restartRun(hud.heroClass, engineRef.current.exportCharacterState())}
+              data-testid="death-return-town"
+              onClick={() => engineRef.current?.confirmDeathReturn()}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-[#d6b25e] bg-[#2a2110] text-sm font-display font-bold tracking-[0.16em] text-[#ffe7a8] hover:bg-[#3a2d15] hover:border-[#f0cf7b] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#f0cf7b] transition-colors cursor-pointer whitespace-nowrap"
             >
-              <RotateCcw className="w-4 h-4 shrink-0" />
-              <span>再次出發</span>
+              <Home className="w-4 h-4 shrink-0" />
+              <span>回到城鎮</span>
             </button>
             <button
               type="button"
