@@ -708,7 +708,13 @@ export class EmbervaultEngine {
   // Sanctuary Town & Angel Blessing State
   private inTown = false;
   private savedDungeon: SavedDungeonSnapshot | null = null;
-  private townPortalPos: { x: number; z: number } | null = null;
+  /** Town-side gate (walk in to return to the dungeon). */
+  private townGatePos: { x: number; z: number } | null = null;
+  /**
+   * The hero's own dungeon portal (spec §3.1): opened by a normal town return or when the hero is downed.
+   * A new portal replaces the old one; it is cleared on every floor change. Becomes `hero.portal` in P4.
+   */
+  private heroPortal: { x: number; z: number; depth: number } | null = null;
   private angelPos: { x: number; z: number } | null = null;
   private angelRig: AngelRig | null = null;
   private townPortalRig: TownPortalRig | null = null;
@@ -1151,7 +1157,7 @@ export class EmbervaultEngine {
     this.gateOpenProgress = 0;
     this.angelRig = null;
     this.townPortalRig = null;
-    this.townPortalPos = null;
+    this.townGatePos = null;
     this.angelPos = null;
     this.stashPos = null;
     this.stashRig = null;
@@ -1801,25 +1807,9 @@ export class EmbervaultEngine {
     this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
     this.heroLight.position.set(this.heroX, 2.0, this.heroZ);
 
-    // If returning from Town, place the lingering Town Portal landmark at the exact return spot
-    if (snap) {
-      const dPortal = createTownPortal(this.textures.glowMap);
-      dPortal.root.position.set(snap.returnX, 0, snap.returnZ);
-      dPortal.root.rotation.y = Math.PI / 4;
-      this.levelGroup.add(dPortal.root);
-      this.townPortalRig = dPortal;
-      this.lightProps.push({
-        color: 0x35a8db,
-        baseIntensity: 21,
-        distance: 8.2,
-        decay: 2.05,
-        phase: 0.4,
-        x: snap.returnX,
-        y: 1.4,
-        z: snap.returnZ,
-        kind: 'portal',
-      });
-    }
+    // Floor change clears the hero's portal; returning through it re-places the landmark at the exact spot
+    this.heroPortal = null;
+    if (snap) this.placeHeroPortal(snap.returnX, snap.returnZ, snap.depth);
 
     // Snap camera immediately to new floor spawn
     const camOffset = 14.5 * this.camZoom;
@@ -2171,7 +2161,7 @@ export class EmbervaultEngine {
       portal.root.rotation.y = Math.PI / 4;
       this.levelGroup.add(portal.root);
       this.townPortalRig = portal;
-      this.townPortalPos = { x: pw.x, z: pw.z };
+      this.townGatePos = { x: pw.x, z: pw.z };
       this.lightProps.push({
         color: 0x35a8db,
         baseIntensity: 24,
@@ -2947,18 +2937,8 @@ export class EmbervaultEngine {
     });
   }
 
-  public getTownReturnCost(): number {
-    return this.depth * 10;
-  }
-
-  public returnToTown(): void {
-    if (this.isDead || this.inTown || this.transitionState !== 'none') return;
-    if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
-
-    const cost = this.getTownReturnCost();
-    const spent = Math.min(this.gold, cost);
-    this.gold = Math.max(0, this.gold - cost);
-
+  /** Freezes the current floor so the town portal can bring the hero back to `portal`. */
+  private snapshotDungeon(portal: { x: number; z: number }): SavedDungeonSnapshot {
     // Record consumed rune wells & broken crates so the floor stays consistent on return
     const usedRuneKeys = new Set<string>();
     for (const lp of this.lightProps) {
@@ -2974,19 +2954,116 @@ export class EmbervaultEngine {
         brokenBreakableKeys.add(`${g.gx},${g.gz}`);
       }
     }
-
-    this.savedDungeon = {
+    return {
       depth: this.depth,
       dungeon: this.dungeon,
       hasKey: this.hasKey,
       doorUnlocked: this.doorUnlocked,
       chronosUsedThisFloor: this.chronosUsedThisFloor,
       floorKills: this.floorKills,
-      returnX: this.heroX,
-      returnZ: this.heroZ,
+      returnX: portal.x,
+      returnZ: portal.z,
       usedRuneKeys,
       brokenBreakableKeys,
     };
+  }
+
+  /** Places the lingering portal landmark (replacing any previous one) in the current dungeon floor. */
+  private placeHeroPortal(x: number, z: number, depth: number): void {
+    if (!this.textures) return;
+    if (this.townPortalRig) {
+      const old = this.townPortalRig.root;
+      old.parent?.remove(old);
+      old.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose();
+          if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+          else obj.material.dispose();
+        } else if (obj instanceof THREE.Sprite) {
+          obj.material.dispose(); // keep the shared glow texture alive
+        }
+      });
+      this.townPortalRig = null;
+    }
+    this.lightProps = this.lightProps.filter((lp) => lp.kind !== 'portal');
+    const portal = createTownPortal(this.textures.glowMap);
+    portal.root.position.set(x, 0, z);
+    portal.root.rotation.y = Math.PI / 4;
+    this.levelGroup.add(portal.root);
+    this.townPortalRig = portal;
+    this.heroPortal = { x, z, depth };
+    this.lightProps.push({
+      color: 0x35a8db,
+      baseIntensity: 21,
+      distance: 8.2,
+      decay: 2.05,
+      phase: 0.4,
+      x,
+      y: 1.4,
+      z,
+      kind: 'portal',
+    });
+  }
+
+  /**
+   * Death flow, step 2 (the player pressed 回到城鎮 on the death screen): pay the portal toll
+   * (`depth * 10`, floored at 0 gold), refill HP/shield and go through the portal opened at the downed spot.
+   */
+  public confirmDeathReturn(): void {
+    if (!this.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
+    const portal = this.heroPortal ?? { x: this.heroX, z: this.heroZ, depth: this.depth };
+    this.heroPortal = portal;
+    const cost = this.getTownReturnCost();
+    this.gold = Math.max(0, this.gold - cost);
+    this.savedDungeon = this.snapshotDungeon(portal);
+    this.audio.playPortal();
+    this.keysPressed.clear();
+    this.beginTransition(() => {
+      this.isDead = false;
+      this.restoreHeroAfterDowned();
+      this.buildTown();
+      this.requestSave('town');
+    });
+  }
+
+  /**
+   * Gets a downed hero back on their feet at full health, in place, without any toll. The portal stays.
+   * Nothing calls this yet: P4 (heroes[] + rescue by a teammate) will.
+   */
+  public reviveHero(): void {
+    if (!this.isDead || this.transitionState !== 'none') return;
+    this.isDead = false;
+    this.restoreHeroAfterDowned();
+    this.heroInvuln = 1.5;
+    this.emitFloatingText(this.heroX, 2.1, this.heroZ, '被救起！', 'heal');
+    this.emitHud();
+  }
+
+  private restoreHeroAfterDowned(): void {
+    this.hp = this.getEffectiveMaxHp();
+    this.shield = this.getEffectiveMaxShield();
+    this.heroRig.body.rotation.z = 0;
+    this.heroRig.body.position.y = 0;
+    this.heroVx = 0;
+    this.heroVz = 0;
+  }
+
+  public getTownReturnCost(): number {
+    return this.depth * 10;
+  }
+
+  public returnToTown(): void {
+    if (this.isDead || this.inTown || this.transitionState !== 'none') return;
+    if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
+
+    const cost = this.getTownReturnCost();
+    const spent = Math.min(this.gold, cost);
+    this.gold = Math.max(0, this.gold - cost);
+
+    // A normal return opens a fresh portal under the hero (replacing any older one)
+    this.heroPortal = { x: this.heroX, z: this.heroZ, depth: this.depth };
+    this.savedDungeon = this.snapshotDungeon(this.heroPortal);
 
     // Spawn instantaneous glowing portal at current spot before fading into Sanctuary Town
     if (this.textures) {
@@ -3173,6 +3250,7 @@ export class EmbervaultEngine {
       this.isDead = false;
       this.inTown = false;
       this.savedDungeon = null;
+      this.heroPortal = null;
       this.angelBuff = null;
       this.portalSafePos = null;
       this.loadingRun = true;
@@ -3610,8 +3688,8 @@ export class EmbervaultEngine {
   }
 
   private isHeroNearPortal(): boolean {
-    if (!this.inTown || !this.townPortalPos) return false;
-    return Math.hypot(this.heroX - this.townPortalPos.x, this.heroZ - this.townPortalPos.z) < 2.25;
+    if (!this.inTown || !this.townGatePos) return false;
+    return Math.hypot(this.heroX - this.townGatePos.x, this.heroZ - this.townGatePos.z) < 2.25;
   }
 
   private isHeroNearStash(): boolean {
@@ -6023,6 +6101,24 @@ export class EmbervaultEngine {
       this.isDead = true;
       this.requestSave('death');
       this.slainBy = sourceLabel;
+      // Downed: open the hero's portal right where they fell (replaces any older one)
+      this.placeHeroPortal(this.heroX, this.heroZ, this.depth);
+      this.audio.playPortal();
+      for (let i = 0; i < 20; i++) {
+        const a = (i / 20) * Math.PI * 2;
+        this.spawnParticle(
+          this.heroX + Math.cos(a) * 0.35,
+          0.7,
+          this.heroZ + Math.sin(a) * 0.35,
+          Math.cos(a) * 2.4,
+          2.2 + Math.random() * 1.4,
+          Math.sin(a) * 2.4,
+          i % 2 === 0 ? 0x56e4ff : 0xd9fbff,
+          1.1,
+          0.65,
+          -0.4
+        );
+      }
       this.heroVx = 0;
       this.heroVz = 0;
       this.dashTimer = 0;
@@ -7552,7 +7648,10 @@ export class EmbervaultEngine {
     }
 
     // Freeze dungeon simulation immediately on death until player clicks Restart
+    // (the world stays frozen, so enemies never target or hit a downed hero; only the portal and particles animate)
     if (this.isDead) {
+      this.animateHeroPortal(dt);
+      this.updateParticles(dt);
       return;
     }
 
@@ -9174,6 +9273,35 @@ export class EmbervaultEngine {
     }
   }
 
+  /** Animates the swirling cyan portal (town gate, or the hero's portal left behind in the dungeon). */
+  private animateHeroPortal(dt: number): void {
+    if (this.townPortalRig) {
+      this.townPortalRig.vortex.rotation.z += dt * 1.9;
+      this.townPortalRig.outerRing.rotation.z -= dt * 1.2;
+      this.townPortalRig.innerRing.rotation.z += dt * 2.5;
+      const pulse = 1 + Math.sin(this.elapsed * 3.6) * 0.05;
+      this.townPortalRig.halo.scale.set(2.3 * pulse, 2.6 * pulse, 1);
+      const px = this.townPortalRig.root.position.x;
+      const pz = this.townPortalRig.root.position.z;
+      if (Math.random() < dt * 3.5) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 0.3 + Math.random() * 0.55;
+        this.spawnParticle(
+          px + Math.cos(a) * r,
+          0.3 + Math.random() * 1.4,
+          pz + Math.sin(a) * r,
+          (Math.random() - 0.5) * 0.3,
+          0.9 + Math.random() * 0.7,
+          (Math.random() - 0.5) * 0.3,
+          Math.random() < 0.5 ? 0x35a8db : 0x8be2ff,
+          0.52,
+          0.85,
+          -0.15
+        );
+      }
+    }
+  }
+
   private updateEnvironment(dt: number): void {
     // Animate props and collect active light candidates sorted by proximity to hero
     const activeLights: Array<{ prop: AnimatedLightProp; dist: number; intensity: number }> = [];
@@ -9391,32 +9519,7 @@ export class EmbervaultEngine {
       }
     }
 
-    // Animate Swirling Cyan Town Portal (in Town or left behind in Dungeon)
-    if (this.townPortalRig) {
-      this.townPortalRig.vortex.rotation.z += dt * 1.9;
-      this.townPortalRig.outerRing.rotation.z -= dt * 1.2;
-      this.townPortalRig.innerRing.rotation.z += dt * 2.5;
-      const pulse = 1 + Math.sin(this.elapsed * 3.6) * 0.05;
-      this.townPortalRig.halo.scale.set(2.3 * pulse, 2.6 * pulse, 1);
-      const px = this.townPortalRig.root.position.x;
-      const pz = this.townPortalRig.root.position.z;
-      if (Math.random() < dt * 3.5) {
-        const a = Math.random() * Math.PI * 2;
-        const r = 0.3 + Math.random() * 0.55;
-        this.spawnParticle(
-          px + Math.cos(a) * r,
-          0.3 + Math.random() * 1.4,
-          pz + Math.sin(a) * r,
-          (Math.random() - 0.5) * 0.3,
-          0.9 + Math.random() * 0.7,
-          (Math.random() - 0.5) * 0.3,
-          Math.random() < 0.5 ? 0x35a8db : 0x8be2ff,
-          0.52,
-          0.85,
-          -0.15
-        );
-      }
-    }
+    this.animateHeroPortal(dt);
 
     // Periodic Spike Traps
     for (const sp of this.spikes) {
