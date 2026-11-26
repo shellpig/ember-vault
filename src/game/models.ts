@@ -4927,13 +4927,13 @@ export function createFrostMageModel(shadowMap: THREE.Texture): HeroRig {
     return m;
   };
 
-  const coatMat = makeMat({ color: 0x8fd8ff, metalness: 0.1, roughness: 0.7 });
-  const coatLightMat = makeMat({ color: 0xeef8ff, metalness: 0.05, roughness: 0.75 });
-  const coatDarkMat = makeMat({ color: 0x5aa9e6, metalness: 0.12, roughness: 0.7 });
+  const coatMat = makeMat({ color: 0x4fb3f0, metalness: 0.1, roughness: 0.7 });
+  const coatLightMat = makeMat({ color: 0xbfe6ff, metalness: 0.05, roughness: 0.75 });
+  const coatDarkMat = makeMat({ color: 0x2f7fc4, metalness: 0.12, roughness: 0.7 });
   const goldMat = makeMat({ color: 0xffd84a, metalness: 0.85, roughness: 0.25 });
   const skinMat = makeMat({ color: 0xffe3d0, metalness: 0, roughness: 0.8 });
-  const hairMat = makeMat({ color: 0xcfeeff, metalness: 0.05, roughness: 0.6 });
-  const hairDarkMat = makeMat({ color: 0x9fd6f5, metalness: 0.05, roughness: 0.6 });
+  const hairMat = makeMat({ color: 0x9fdcff, metalness: 0.05, roughness: 0.6 });
+  const hairDarkMat = makeMat({ color: 0x6fbfee, metalness: 0.05, roughness: 0.6 });
   const staffMat = makeMat({ color: 0xe6f4ff, metalness: 0.3, roughness: 0.4 });
 
   // Legs (pivot at hip y=0.42): dark-blue leggings, light boots with gold cuffs

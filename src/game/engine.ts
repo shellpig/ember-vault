@@ -466,6 +466,8 @@ interface HeroProjectileEntity {
   traveled: number;
   /** 0, 1 = normal spike, 2 = empowered spike */
   shotIdx: number;
+  /** Phantom Boots guaranteed crit captured when the spike was fired. */
+  phantomCrit: boolean;
 }
 
 interface HeroHitParams {
@@ -725,8 +727,11 @@ export class EmbervaultEngine {
   private queuedRestartClass: HeroClassId | null = null;
   private heroProjectiles: HeroProjectileEntity[] = [];
   /** Last non-zero movement direction (used by Blink). */
-  private lastMoveX = 0;
-  private lastMoveZ = 1;
+  /** This frame's movement input (zero when idle). Blink uses it before falling back to facing. */
+  private moveInputX = 0;
+  private moveInputZ = 0;
+  /** Mage auto-pilot is waiting for the shield to refill (set below 60%, cleared when full). */
+  private aiMageRecharging = false;
   /** True when the last hit was fully absorbed by the shield (blue hit flash instead of red). */
   private heroHitShieldOnly = false;
   private autoUpgradeCooldown = 0;
@@ -1166,7 +1171,7 @@ export class EmbervaultEngine {
     this.rimLight.color.setHex(isAlienDeck ? 0xd8f3ff : 0x6c8cc4);
     this.rimLight.intensity = isAlienDeck ? 0.62 : 0.09;
     this.scene.environmentIntensity = isAlienDeck ? 0.45 : 0.07;
-    this.heroLight.color.setHex(biome.torchColor);
+    this.heroLight.color.setHex(this.isMage() ? 0x9fe6ff : biome.torchColor);
 
     this.textures = createDungeonTextures(
       biome,
@@ -2986,9 +2991,8 @@ export class EmbervaultEngine {
       ? createFrostMageModel(this.sharedShadowMap)
       : createHeroModel(this.sharedShadowMap);
     this.heroRig.root.userData.isFrostMage = wantMage;
-    this.heroLight?.color.setHex(wantMage ? 0x9fe6ff : 0xffaa44);
-    if (this.heroFloorGlow) {
-      (this.heroFloorGlow.material as THREE.MeshBasicMaterial).color.setHex(wantMage ? 0x7fd6ff : 0xffffff);
+    if (this.heroLight) {
+      this.heroLight.color.setHex(wantMage ? 0x9fe6ff : this.dungeon?.biome.torchColor ?? 0xffaa44);
     }
     this.heroRig.root.add(this.heroSetAura.group);
     this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
@@ -3033,6 +3037,15 @@ export class EmbervaultEngine {
       this.portalSafePos = null;
       this.applyHeroClassStats(nextClass);
       this.applyHeroClassRig(nextClass);
+      this.attackCooldown = 0;
+      this.dashCooldown = 0;
+      this.dashTimer = 0;
+      this.heroInvuln = 0;
+      this.catPawHitCounter = 0;
+      this.comboStep = 0;
+      this.moveInputX = 0;
+      this.moveInputZ = 0;
+      this.aiMageRecharging = false;
       this.potions = 3;
       this.gold = 0;
       this.totalGoldEarned = 0;
@@ -4357,7 +4370,11 @@ export class EmbervaultEngine {
 
   private applySlow(e: EnemyEntity): void {
     if (e.dead) return;
-    const factor = e.isBoss ? FROST_MAGE.bossSlowFactor : e.isElite ? FROST_MAGE.eliteSlowFactor : 1;
+    const factor = e.isBoss
+      ? FROST_MAGE.bossSlowFactor
+      : e.isElite || isGuardianEnemy(e.kind)
+      ? FROST_MAGE.eliteSlowFactor
+      : 1;
     const pct = FROST_MAGE.slowPct * factor;
     const wasSlowed = (e.slowTimer ?? 0) > 0;
     e.slowPct = Math.max(wasSlowed ? e.slowPct ?? 0 : 0, pct);
@@ -4485,7 +4502,9 @@ export class EmbervaultEngine {
       vz: dirZ * FROST_MAGE.projectileSpeed,
       traveled: 0,
       shotIdx,
+      phantomCrit: this.phantomCritTimer > 0,
     });
+    this.phantomCritTimer = 0;
   }
 
   private removeHeroProjectileAt(idx: number): void {
@@ -4518,7 +4537,7 @@ export class EmbervaultEngine {
         const nx = p.x + p.vx * sdt;
         const nz = p.z + p.vz * sdt;
         if (this.isPointInWall(nx, nz)) {
-          this.explodeIceSpike(p.x, p.z, p.shotIdx);
+          this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
           exploded = true;
           break;
         }
@@ -4529,7 +4548,7 @@ export class EmbervaultEngine {
         for (const e of this.enemies) {
           if (e.dead) continue;
           if (Math.hypot(e.x - p.x, e.z - p.z) <= FROST_MAGE.projectileHitRadius + this.getEnemyHitRadius(e)) {
-            this.explodeIceSpike(p.x, p.z, p.shotIdx);
+            this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
             exploded = true;
             break;
           }
@@ -4538,13 +4557,13 @@ export class EmbervaultEngine {
         for (const br of this.breakables) {
           if (br.broken) continue;
           if (Math.hypot(br.x - p.x, br.z - p.z) <= 0.6) {
-            this.explodeIceSpike(p.x, p.z, p.shotIdx);
+            this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
             exploded = true;
             break;
           }
         }
         if (!exploded && p.traveled >= FROST_MAGE.projectileRange) {
-          this.explodeIceSpike(p.x, p.z, p.shotIdx);
+          this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
           exploded = true;
         }
       }
@@ -4571,7 +4590,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private explodeIceSpike(x: number, z: number, shotIdx: number): void {
+  private explodeIceSpike(x: number, z: number, shotIdx: number, phantomCrit = false): void {
     const empowered = shotIdx === 2;
     const radius = FROST_MAGE.shotExplosionRadius[shotIdx];
     this.audio.playIceShatter(empowered);
@@ -4615,7 +4634,7 @@ export class EmbervaultEngine {
     }
 
     const atkMult = this.getHeroAtkMult();
-    const usePhantomCrit = this.phantomCritTimer > 0;
+    const usePhantomCrit = phantomCrit;
     const hitState = { consumedPhantom: false, triggeredStorm: false };
     const critChance = Math.min(
       0.95,
@@ -4630,6 +4649,8 @@ export class EmbervaultEngine {
       if (enemy.dead) continue;
       const d = Math.hypot(enemy.x - x, enemy.z - z);
       if (d > radius + this.getEnemyHitRadius(enemy)) continue;
+      // Walls block the blast
+      if (d > 0.6 && !hasLineOfSight(this.dungeon, x, z, enemy.x, enemy.z, this.doorUnlocked, 0.05)) continue;
       const warriorBase = 11 + Math.floor(Math.random() * 6);
       this.applyHeroHit(enemy, {
         baseDmg: Math.max(1, Math.round(warriorBase * FROST_MAGE.shotDamageMult[shotIdx])),
@@ -4654,11 +4675,13 @@ export class EmbervaultEngine {
         this.applySlow(enemy);
       }
     }
-    if (hitState.consumedPhantom) this.phantomCritTimer = 0;
-
     for (const br of this.breakables) {
       if (br.broken) continue;
-      if (Math.hypot(br.x - x, br.z - z) <= radius + 0.35) {
+      const bd = Math.hypot(br.x - x, br.z - z);
+      if (
+        bd <= radius + 0.35 &&
+        (bd <= 0.8 || hasLineOfSight(this.dungeon, x, z, br.x, br.z, this.doorUnlocked, 0.05))
+      ) {
         this.breakProp(br);
         landedHit = true;
       }
@@ -4681,15 +4704,16 @@ export class EmbervaultEngine {
 
     const rings: Array<[number, number, number, number]> = [
       // [inner, outer, maxLife, color]
-      [0.42, 0.7, 0.55, 0xbff4ff],
-      [0.2, 0.42, 0.42, 0xffffff],
-      [0.55, 0.62, 0.65, 0xffe066],
+      // Thin rings: they scale ~19x to reach the nova radius, so keep them narrow
+      [0.64, 0.7, 0.55, 0x8fe3ff],
+      [0.6, 0.64, 0.42, 0xdff8ff],
+      [0.67, 0.7, 0.68, 0xffe066],
     ];
     for (const [inner, outer, life, color] of rings) {
       const mat = new THREE.MeshBasicMaterial({
         color,
         transparent: true,
-        opacity: 0.92,
+        opacity: 0.7,
         side: THREE.DoubleSide,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -4786,7 +4810,10 @@ export class EmbervaultEngine {
 
     for (const br of this.breakables) {
       if (br.broken) continue;
-      if (Math.hypot(br.x - this.heroX, br.z - this.heroZ) <= FROST_MAGE.novaRadius) {
+      if (
+        Math.hypot(br.x - this.heroX, br.z - this.heroZ) <= FROST_MAGE.novaRadius &&
+        hasLineOfSight(this.dungeon, this.heroX, this.heroZ, br.x, br.z, this.doorUnlocked, 0.05)
+      ) {
         this.breakProp(br);
       }
     }
@@ -4827,13 +4854,17 @@ export class EmbervaultEngine {
   }
 
   /** Frost Mage mobility: instant short teleport along the move direction (or facing). */
-  private performBlink(): void {
+  private performBlink(dirOverride?: { x: number; z: number }): void {
     if (this.dashCooldown > 0 || this.dashTimer > 0) return;
-    let dirX = this.lastMoveX;
-    let dirZ = this.lastMoveZ;
-    if (Math.hypot(dirX, dirZ) < 0.1) {
-      dirX = Math.sin(this.heroFacing);
-      dirZ = Math.cos(this.heroFacing);
+    // Direction priority: explicit (AI) > current move input (manual) > facing
+    let dirX = Math.sin(this.heroFacing);
+    let dirZ = Math.cos(this.heroFacing);
+    if (dirOverride) {
+      dirX = dirOverride.x;
+      dirZ = dirOverride.z;
+    } else if (this.controlMode === 'manual' && Math.hypot(this.moveInputX, this.moveInputZ) > 0.1) {
+      dirX = this.moveInputX;
+      dirZ = this.moveInputZ;
     }
     const len = Math.hypot(dirX, dirZ) || 1;
     dirX /= len;
@@ -5552,7 +5583,7 @@ export class EmbervaultEngine {
     if (this.isMage() && this.shield > 0) {
       const absorb = Math.min(this.shield, actualDamage);
       this.shield = Math.max(0, this.shield - absorb);
-      hpDamage = Math.max(0, Math.round(actualDamage - absorb));
+      hpDamage = Math.max(0, actualDamage - Math.ceil(absorb));
       shieldAbsorbed = actualDamage - hpDamage;
       if (this.shield <= 0) this.audio.playShieldBreak();
     }
@@ -6107,6 +6138,8 @@ export class EmbervaultEngine {
   }
 
   private tryAutoTravelDash(moveX: number, moveZ: number, distToGoal: number): void {
+    // The mage's Blink is a 5-unit teleport: keep it for combat escapes, never for travel
+    if (this.isMage()) return;
     if (
       this.dashCooldown > 0 ||
       this.dashTimer > 0 ||
@@ -6336,6 +6369,7 @@ export class EmbervaultEngine {
       }
     }
     const shieldBroken = this.getEffectiveMaxShield() > 0 && this.shield <= 0.5;
+    let castNova = false;
 
     // 1. Frost Nova
     if (
@@ -6344,10 +6378,12 @@ export class EmbervaultEngine {
     ) {
       this.performFrostNova();
       this.aiStatus = 'Frost Nova!';
+      castNova = true;
     }
 
     // 2. Blink out of a swarm / melee crowd when Nova is not available
     if (
+      !castNova &&
       this.pommelCooldown > 0 &&
       this.dashCooldown <= 0 &&
       cn > 0 &&
@@ -6362,9 +6398,7 @@ export class EmbervaultEngine {
         const ex = Math.sin(baseAng + off);
         const ez = Math.cos(baseAng + off);
         if (this.canMoveTo(this.heroX + ex * 2.5, this.heroZ + ez * 2.5, 0.4)) {
-          this.lastMoveX = ex;
-          this.lastMoveZ = ez;
-          this.performBlink();
+          this.performBlink({ x: ex, z: ez });
           this.aiStatus = 'Blinking Clear';
           break;
         }
@@ -6406,9 +6440,7 @@ export class EmbervaultEngine {
       if (step) return step;
       // Cornered: Blink sideways if possible, otherwise stand and shoot
       if (this.dashCooldown <= 0) {
-        this.lastMoveX = px;
-        this.lastMoveZ = pz;
-        this.performBlink();
+        this.performBlink({ x: px, z: pz });
       }
       return { moveX: 0, moveZ: 0 };
     }
@@ -6780,7 +6812,9 @@ export class EmbervaultEngine {
       const anyNear = this.enemies.some(
         (e) => !e.dead && Math.hypot(e.x - this.heroX, e.z - this.heroZ) < 11
       );
-      if (maxShield > 0 && this.shield < maxShield * 0.6 && !anyNear) {
+      if (maxShield > 0 && this.shield < maxShield * 0.6) this.aiMageRecharging = true;
+      if (this.shield >= maxShield * 0.99) this.aiMageRecharging = false;
+      if (maxShield > 0 && this.aiMageRecharging && !anyNear) {
         this.aiStatus = 'Recharging Frost Shield';
         this.aiProgressAnchorX = this.heroX;
         this.aiProgressAnchorZ = this.heroZ;
@@ -7305,10 +7339,8 @@ export class EmbervaultEngine {
       moveZ = aiMove.moveZ;
     }
 
-    if (Math.hypot(moveX, moveZ) > 0.08) {
-      this.lastMoveX = moveX;
-      this.lastMoveZ = moveZ;
-    }
+    this.moveInputX = moveX;
+    this.moveInputZ = moveZ;
 
     // 2. Move Hero (Dash or Walk + Knockback)
     const moveSpeed = 4.65 * (1 + this.relicStats.moveSpeedPct / 100);

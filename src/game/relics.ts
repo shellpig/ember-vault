@@ -835,7 +835,7 @@ export function getUniqueEffectDescForClass(effectId: UniqueEffectId, classId: H
 export function formatMaxHpStatForClass(value: number, classId: HeroClassId): string | null {
   if (classId !== 'frost_mage') return null;
   const { hp, shield } = splitRelicMaxHpForMage(value);
-  return `法師：HP +${hp} / 護盾 +${shield}`;
+  return `法師：約 HP +${hp} / 護盾 +${shield}`;
 }
 
 export function getRarityLabel(rarity: RelicRarity): string {
