@@ -29,6 +29,10 @@ import {
   createEnemyModel,
   createHeroModel,
   createHeroSetAura,
+  createFrostMageModel,
+  createIceSpikeMesh,
+  createFrozenShell,
+  createSlowMarker,
   createKeyPedestal,
   createLootMesh,
   createPotionShop,
@@ -60,6 +64,15 @@ import {
   rollRelicDrops,
 } from './relics';
 import { DungeonTextureSet, createDungeonTextures } from './textures';
+import {
+  FROST_MAGE,
+  HERO_CLASSES,
+  HeroClassId,
+  UpgradeKind,
+  UpgradeOptionView,
+  getShieldSpeedFactor,
+  splitRelicMaxHpForMage,
+} from './classes';
 import {
   BannerEvent,
   BiomeConfig,
@@ -658,7 +671,20 @@ export class EmbervaultEngine {
   private readonly maxArmorUpgrades = 5;
   private critUpgrades = 0;
   private readonly maxCritUpgrades = 10;
-  private autoNextUpgrade: 'hp' | 'atk' | 'armor' | 'crit' = 'hp';
+  private autoNextUpgrade: UpgradeKind = 'hp';
+
+  // Hero Class (warrior / frost_mage)
+  private heroClass: HeroClassId = 'warrior';
+  // Frost Mage shield & upgrades
+  private shield = 0;
+  private baseMaxShield = 0;
+  private hpShieldUpgrades = 0;
+  private shieldSpeedUpgrades = 0;
+  /** Seconds since the hero last took damage (drives shield regen delay). */
+  private timeSinceDamaged = 999;
+  /** Frost Mage ice spike cycle index: 0, 1, 2 (2 = empowered). Never resets on idle. */
+  private mageShotIndex = 0;
+  private queuedRestartClass: HeroClassId | null = null;
   private autoUpgradeCooldown = 0;
   private potions = 3;
   private hasKey = false;
@@ -700,7 +726,8 @@ export class EmbervaultEngine {
   private attackCooldown = 0;
   private attackAnim = 0;
   private pommelCooldown = 0;
-  private readonly pommelMaxCooldown = 8.0;
+  /** Right-click class skill max cooldown (Pommel Strike 8s / Frost Nova 10s). */
+  private pommelMaxCooldown = 8.0;
   private pommelAnim = 0;
   private comboStep = 0;
   private comboResetTimer = 0;
@@ -2877,8 +2904,62 @@ export class EmbervaultEngine {
     return true;
   }
 
-  public restartRun(): void {
-    if (this.transitionState !== 'none') return;
+  public getHeroClass(): HeroClassId {
+    return this.heroClass;
+  }
+
+  /** Swap the hero 3D rig to match the given class (no-op if already matching). */
+  private applyHeroClassRig(classId: HeroClassId): void {
+    if (!this.heroRig || !this.sharedShadowMap) return;
+    const wantMage = classId === 'frost_mage';
+    const isMageRig = Boolean(this.heroRig.root.userData.isFrostMage);
+    if (wantMage === isMageRig) return;
+    this.heroRig.root.remove(this.heroSetAura.group);
+    this.scene.remove(this.heroRig.root);
+    this.heroRig.root.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose();
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+        else obj.material.dispose();
+      }
+    });
+    this.heroRig = wantMage
+      ? createFrostMageModel(this.sharedShadowMap)
+      : createHeroModel(this.sharedShadowMap);
+    this.heroRig.root.userData.isFrostMage = wantMage;
+    this.heroRig.root.add(this.heroSetAura.group);
+    this.heroRig.root.position.set(this.heroX, 0, this.heroZ);
+    this.scene.add(this.heroRig.root);
+  }
+
+  /** Resets class-dependent base stats (HP, shield, upgrades, skill cooldown). */
+  private applyHeroClassStats(classId: HeroClassId): void {
+    const def = HERO_CLASSES[classId];
+    this.heroClass = classId;
+    this.maxHp = def.baseHp;
+    this.hp = def.baseHp;
+    this.baseMaxShield = def.baseShield;
+    this.shield = def.baseShield;
+    this.hpUpgrades = 0;
+    this.atkUpgrades = 0;
+    this.armorUpgrades = 0;
+    this.critUpgrades = 0;
+    this.hpShieldUpgrades = 0;
+    this.shieldSpeedUpgrades = 0;
+    this.timeSinceDamaged = 999;
+    this.mageShotIndex = 0;
+    this.autoNextUpgrade = classId === 'frost_mage' ? 'hp_shield' : 'hp';
+    this.pommelMaxCooldown = def.skillCooldown;
+  }
+
+  public restartRun(classId?: HeroClassId): void {
+    const nextClass: HeroClassId = classId ?? this.heroClass;
+    if (this.transitionState !== 'none') {
+      // A fade is in progress (e.g. the initial fade-in): run the restart as soon as it ends.
+      this.queuedRestartClass = nextClass;
+      return;
+    }
+    this.queuedRestartClass = null;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
@@ -2887,13 +2968,8 @@ export class EmbervaultEngine {
       this.savedDungeon = null;
       this.angelBuff = null;
       this.portalSafePos = null;
-      this.maxHp = 60;
-      this.hp = 60;
-      this.hpUpgrades = 0;
-      this.atkUpgrades = 0;
-      this.armorUpgrades = 0;
-      this.critUpgrades = 0;
-      this.autoNextUpgrade = 'hp';
+      this.applyHeroClassStats(nextClass);
+      this.applyHeroClassRig(nextClass);
       this.potions = 3;
       this.gold = 0;
       this.totalGoldEarned = 0;
@@ -2929,7 +3005,20 @@ export class EmbervaultEngine {
   }
 
   private getEffectiveMaxHp(): number {
+    if (this.heroClass === 'frost_mage') {
+      return this.maxHp + splitRelicMaxHpForMage(this.relicStats.maxHp).hp;
+    }
     return this.maxHp + this.relicStats.maxHp;
+  }
+
+  /** Effective max shield (Frost Mage only; 0 for classes without a shield). */
+  private getEffectiveMaxShield(): number {
+    if (this.heroClass !== 'frost_mage') return 0;
+    return this.baseMaxShield + splitRelicMaxHpForMage(this.relicStats.maxHp).shield;
+  }
+
+  private isMage(): boolean {
+    return this.heroClass === 'frost_mage';
   }
 
   private hasUnique(effectId: UniqueEffectId): boolean {
@@ -2941,9 +3030,11 @@ export class EmbervaultEngine {
   }
 
   private recomputeRelicStats(adjustHp = true): void {
-    const prevEffMax = this.maxHp + this.relicStats.maxHp;
+    const prevEffMax = this.getEffectiveMaxHp();
+    const prevMaxShield = this.getEffectiveMaxShield();
     this.relicStats = computeRelicSummary(this.equippedRelics, this.angelBuff?.stats);
-    const nextEffMax = this.maxHp + this.relicStats.maxHp;
+    const nextEffMax = this.getEffectiveMaxHp();
+    const nextMaxShield = this.getEffectiveMaxShield();
 
     if (adjustHp && !this.isDead) {
       if (nextEffMax > prevEffMax) {
@@ -2951,6 +3042,13 @@ export class EmbervaultEngine {
       } else {
         this.hp = Math.min(nextEffMax, this.hp);
       }
+      if (nextMaxShield > prevMaxShield) {
+        this.shield = Math.min(nextMaxShield, this.shield + (nextMaxShield - prevMaxShield));
+      } else {
+        this.shield = Math.min(nextMaxShield, this.shield);
+      }
+    } else {
+      this.shield = Math.min(nextMaxShield, this.shield);
     }
 
     // Update 4-piece green set visual aura around hero
@@ -3061,8 +3159,147 @@ export class EmbervaultEngine {
     return earned;
   }
 
+  private getTotalUpgradeLevel(): number {
+    return (
+      this.hpUpgrades +
+      this.atkUpgrades +
+      this.armorUpgrades +
+      this.critUpgrades +
+      this.hpShieldUpgrades +
+      this.shieldSpeedUpgrades
+    );
+  }
+
+  /** Max purchase count for an upgrade of the current class (0 = not offered). */
+  private getUpgradeMax(kind: UpgradeKind): number {
+    if (this.isMage()) {
+      switch (kind) {
+        case 'hp_shield':
+          return FROST_MAGE.maxHpShieldUpgrades;
+        case 'atk':
+          return FROST_MAGE.maxAtkUpgrades;
+        case 'crit':
+          return FROST_MAGE.maxCritUpgrades;
+        case 'shield_speed':
+          return FROST_MAGE.maxShieldSpeedUpgrades;
+        default:
+          return 0;
+      }
+    }
+    switch (kind) {
+      case 'hp':
+        return Math.round((this.maxHpCap - HERO_CLASSES.warrior.baseHp) / 10);
+      case 'atk':
+        return 999; // warrior attack upgrades are uncapped
+      case 'armor':
+        return this.maxArmorUpgrades;
+      case 'crit':
+        return this.maxCritUpgrades;
+      default:
+        return 0;
+    }
+  }
+
+  private getUpgradeCount(kind: UpgradeKind): number {
+    switch (kind) {
+      case 'hp':
+        return this.hpUpgrades;
+      case 'atk':
+        return this.atkUpgrades;
+      case 'armor':
+        return this.armorUpgrades;
+      case 'crit':
+        return this.critUpgrades;
+      case 'hp_shield':
+        return this.hpShieldUpgrades;
+      case 'shield_speed':
+        return this.shieldSpeedUpgrades;
+    }
+  }
+
+  private isUpgradeMaxed(kind: UpgradeKind): boolean {
+    if (!this.isMage() && kind === 'hp') return this.maxHp >= this.maxHpCap;
+    return this.getUpgradeCount(kind) >= this.getUpgradeMax(kind);
+  }
+
+  public getUpgradeOptions(): UpgradeOptionView[] {
+    const row = (
+      kind: UpgradeKind,
+      accent: UpgradeOptionView['accent'],
+      label: string,
+      maxedLabel: string,
+      progress: string
+    ): UpgradeOptionView => ({
+      kind,
+      accent,
+      label,
+      maxedLabel,
+      progress,
+      count: this.getUpgradeCount(kind),
+      maxCount: this.getUpgradeMax(kind),
+      maxed: this.isUpgradeMaxed(kind),
+    });
+    if (this.isMage()) {
+      const speedPct = Math.round(this.shieldSpeedUpgrades * FROST_MAGE.shieldSpeedStep * 100);
+      return [
+        row(
+          'hp_shield',
+          'shield',
+          `HP +${FROST_MAGE.hpPerUpgrade} · 護盾 +${FROST_MAGE.shieldPerUpgrade}`,
+          'HP / 護盾 MAXED',
+          `${this.hpShieldUpgrades} / ${FROST_MAGE.maxHpShieldUpgrades} · HP ${this.maxHp} · 護盾 ${this.baseMaxShield}`
+        ),
+        row(
+          'atk',
+          'atk',
+          '+10% 攻擊力',
+          'ATK MAXED',
+          `+${this.atkUpgrades * 10}% / +${FROST_MAGE.maxAtkUpgrades * 10}% DMG`
+        ),
+        row(
+          'crit',
+          'crit',
+          '+2% 爆擊',
+          'CRIT MAXED',
+          `+${this.critUpgrades * 2}% / +${FROST_MAGE.maxCritUpgrades * 2}% CRIT`
+        ),
+        row(
+          'shield_speed',
+          'armor',
+          '護盾回充 +12%',
+          'REGEN MAXED',
+          `-${speedPct}% / -${FROST_MAGE.maxShieldSpeedUpgrades * 12}% 等待與回充時間`
+        ),
+      ];
+    }
+    return [
+      row('hp', 'hp', '+10 Max HP', 'HP MAXED', `${this.maxHp} / ${this.maxHpCap} HP`),
+      row(
+        'atk',
+        'atk',
+        '+10% Attack',
+        'ATK MAXED',
+        `+${this.atkUpgrades * 10}% → +${this.atkUpgrades * 10 + 10}% DMG`
+      ),
+      row(
+        'armor',
+        'armor',
+        '+10% Armor',
+        'DEF MAXED',
+        `${this.armorUpgrades * 10}% / ${this.maxArmorUpgrades * 10}% DEF`
+      ),
+      row(
+        'crit',
+        'crit',
+        '+2% Crit',
+        'CRIT MAXED',
+        `+${this.critUpgrades * 2}% / +${this.maxCritUpgrades * 2}% CRIT`
+      ),
+    ];
+  }
+
   public getUpgradeCost(): number {
-    const lv = this.hpUpgrades + this.atkUpgrades + this.armorUpgrades + this.critUpgrades;
+    const lv = this.getTotalUpgradeLevel();
     return 40 + lv * 25 + Math.floor(lv * lv * 4);
   }
 
@@ -3092,13 +3329,11 @@ export class EmbervaultEngine {
     return Math.hypot(this.heroX - this.angelPos.x, this.heroZ - this.angelPos.z) < 2.75;
   }
 
-  public purchaseUpgrade(kind: 'hp' | 'atk' | 'armor' | 'crit'): boolean {
+  public purchaseUpgrade(kind: UpgradeKind): boolean {
     if (!this.dungeon?.altarPos || !this.isHeroNearAltar()) return false;
     const cost = this.getUpgradeCost();
     if (this.gold < cost) return false;
-    if (kind === 'hp' && this.maxHp >= this.maxHpCap) return false;
-    if (kind === 'armor' && this.armorUpgrades >= this.maxArmorUpgrades) return false;
-    if (kind === 'crit' && this.critUpgrades >= this.maxCritUpgrades) return false;
+    if (this.getUpgradeMax(kind) <= 0 || this.isUpgradeMaxed(kind)) return false;
 
     if (!this.audio.isEnabled() && this.controlMode === 'manual') {
       this.audio.unlockAndEnable();
@@ -3106,7 +3341,31 @@ export class EmbervaultEngine {
 
     this.gold -= cost;
     const effMax = this.getEffectiveMaxHp();
-    if (kind === 'hp') {
+    if (kind === 'hp_shield') {
+      this.hpShieldUpgrades += 1;
+      this.maxHp += FROST_MAGE.hpPerUpgrade;
+      this.baseMaxShield += FROST_MAGE.shieldPerUpgrade;
+      this.hp = this.getEffectiveMaxHp();
+      this.shield = this.getEffectiveMaxShield();
+      this.emitFloatingText(
+        this.heroX,
+        2.0,
+        this.heroZ,
+        `HP +${FROST_MAGE.hpPerUpgrade} · 護盾 +${FROST_MAGE.shieldPerUpgrade} · FULL`,
+        'shieldHit'
+      );
+    } else if (kind === 'shield_speed') {
+      this.shieldSpeedUpgrades += 1;
+      this.hp = effMax;
+      this.shield = this.getEffectiveMaxShield();
+      this.emitFloatingText(
+        this.heroX,
+        2.0,
+        this.heroZ,
+        `護盾回充 +${this.shieldSpeedUpgrades * 12}% · FULL`,
+        'shieldHit'
+      );
+    } else if (kind === 'hp') {
       this.hpUpgrades += 1;
       this.maxHp = Math.min(this.maxHpCap, this.maxHp + 10);
       this.hp = this.getEffectiveMaxHp();
@@ -3143,6 +3402,9 @@ export class EmbervaultEngine {
       );
     }
 
+    if (this.isMage()) {
+      this.shield = this.getEffectiveMaxShield();
+    }
     this.audio.playUpgrade();
 
     const aw = gridToWorld(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
@@ -3153,7 +3415,7 @@ export class EmbervaultEngine {
           ? i % 2 === 0
             ? 0xff5a72
             : 0xffe066
-          : kind === 'armor'
+          : kind === 'armor' || kind === 'hp_shield' || kind === 'shield_speed'
           ? i % 2 === 0
             ? 0x6ecbff
             : 0xffe066
@@ -4482,6 +4744,7 @@ export class EmbervaultEngine {
 
   private buildRunSummary(): RunSummary {
     return {
+      heroClass: this.heroClass,
       depth: this.depth,
       biomeName: this.dungeon.biome.name,
       durationSec: Math.max(1, Math.floor(this.runElapsedSec)),
@@ -4491,11 +4754,11 @@ export class EmbervaultEngine {
       normalKills: this.normalKills,
       eliteKills: this.eliteKills,
       bossKills: this.bossKills,
-      upgradeLevel:
-        this.hpUpgrades + this.atkUpgrades + this.armorUpgrades + this.critUpgrades,
-      hpUpgrades: this.hpUpgrades,
+      upgradeLevel: this.getTotalUpgradeLevel(),
+      // For the Frost Mage, "hpUpgrades" reports HP+shield upgrades and "armorUpgrades" reports shield-speed upgrades
+      hpUpgrades: this.isMage() ? this.hpShieldUpgrades : this.hpUpgrades,
       atkUpgrades: this.atkUpgrades,
-      armorUpgrades: this.armorUpgrades,
+      armorUpgrades: this.isMage() ? this.shieldSpeedUpgrades : this.armorUpgrades,
       critUpgrades: this.critUpgrades,
       maxHp: this.maxHp,
       atkBonusPct: this.atkUpgrades * 10,
@@ -4808,8 +5071,7 @@ export class EmbervaultEngine {
       armorMaxPct: this.maxArmorUpgrades * 10,
       critBonusPct: this.critUpgrades * 2,
       critMaxPct: this.maxCritUpgrades * 2,
-      upgradeLevel:
-        this.hpUpgrades + this.atkUpgrades + this.armorUpgrades + this.critUpgrades,
+      upgradeLevel: this.getTotalUpgradeLevel(),
       upgradeCost: this.getUpgradeCost(),
       potionCost: this.getPotionCost(),
       nearAltar: this.isHeroNearAltar(),
@@ -4845,7 +5107,25 @@ export class EmbervaultEngine {
       relicStats: this.relicStats,
       activeSets: this.relicStats.activeSets,
       discoveredRelicIds: Array.from(this.discoveredRelicIds),
+      heroClass: this.heroClass,
+      shield: Math.round(this.shield),
+      maxShield: this.getEffectiveMaxShield(),
+      shieldRegenerating:
+        this.isMage() &&
+        this.shield < this.getEffectiveMaxShield() &&
+        this.timeSinceDamaged >= this.getShieldRegenDelay(),
+      skillName: HERO_CLASSES[this.heroClass].skillName,
+      mobilityName: HERO_CLASSES[this.heroClass].mobilityName,
+      upgradeOptions: this.getUpgradeOptions(),
     });
+  }
+
+  private getShieldRegenDelay(): number {
+    return FROST_MAGE.shieldDelayBase * getShieldSpeedFactor(this.shieldSpeedUpgrades);
+  }
+
+  private getShieldRefillTime(): number {
+    return FROST_MAGE.shieldRefillBase * getShieldSpeedFactor(this.shieldSpeedUpgrades);
   }
 
   private emitMinimap(): void {
@@ -5762,7 +6042,9 @@ export class EmbervaultEngine {
     const targetPotions = Math.min(8, 4 + Math.floor(this.depth / 6));
     const urgentPotionNeed = this.potions <= 2 && this.gold >= this.getPotionCost();
     const wantsMorePotions = this.potions < targetPotions && this.gold >= this.getPotionCost();
-    const canAutoUpgradeStat = this.gold >= this.getUpgradeCost();
+    const canAutoUpgradeStat =
+      this.gold >= this.getUpgradeCost() &&
+      this.getUpgradeOptions().some((o) => !o.maxed);
     const hasSellableBagRelics = this.relicBag.some(
       (r) => r.rarity === 'blue' || r.rarity === 'yellow'
     );
@@ -5788,14 +6070,14 @@ export class EmbervaultEngine {
               this.aiPath = [];
             }
           } else if (this.gold >= this.getUpgradeCost()) {
-            const cycle: Array<'hp' | 'atk' | 'armor' | 'crit'> = ['hp', 'atk', 'armor', 'crit'];
-            const startIdx = cycle.indexOf(this.autoNextUpgrade);
-            let choice: 'hp' | 'atk' | 'armor' | 'crit' = 'atk';
+            const cycle: UpgradeKind[] = this.isMage()
+              ? ['hp_shield', 'atk', 'shield_speed', 'crit']
+              : ['hp', 'atk', 'armor', 'crit'];
+            const startIdx = Math.max(0, cycle.indexOf(this.autoNextUpgrade));
+            let choice: UpgradeKind = 'atk';
             for (let offset = 0; offset < cycle.length; offset++) {
               const cand = cycle[(startIdx + offset) % cycle.length];
-              if (cand === 'hp' && this.maxHp >= this.maxHpCap) continue;
-              if (cand === 'armor' && this.armorUpgrades >= this.maxArmorUpgrades) continue;
-              if (cand === 'crit' && this.critUpgrades >= this.maxCritUpgrades) continue;
+              if (this.isUpgradeMaxed(cand)) continue;
               choice = cand;
               break;
             }
@@ -6031,6 +6313,9 @@ export class EmbervaultEngine {
       this.emitHud();
       if (this.fadeOpacity <= 0) {
         this.transitionState = 'none';
+        if (this.queuedRestartClass) {
+          this.restartRun(this.queuedRestartClass);
+        }
       }
     }
 

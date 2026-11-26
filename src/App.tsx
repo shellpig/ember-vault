@@ -123,6 +123,13 @@ const INITIAL_HUD: HudState = {
   relicStats: computeRelicSummary([]),
   activeSets: [],
   discoveredRelicIds: [],
+  heroClass: 'warrior',
+  shield: 0,
+  maxShield: 0,
+  shieldRegenerating: false,
+  skillName: 'Pommel Strike',
+  mobilityName: 'Dash',
+  upgradeOptions: [],
 };
 
 function formatDuration(totalSec: number): string {

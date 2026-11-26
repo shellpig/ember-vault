@@ -28,6 +28,10 @@ export interface EnemyRig {
   auraRing?: THREE.Mesh;
   nameTag?: THREE.Sprite;
   stunStars?: THREE.Group;
+  /** Lazily attached by the engine while the enemy is frozen (Frost Nova). */
+  frozenShell?: THREE.Group;
+  /** Lazily attached by the engine while the enemy is slowed (ice spikes). */
+  slowMarker?: THREE.Group;
   flashMaterials: THREE.MeshStandardMaterial[];
 }
 
@@ -4888,3 +4892,66 @@ export function createVillageLampPost(glowMap: THREE.Texture): THREE.Group {
   return root;
 }
 
+
+
+// ===========================================================================
+// FROST MAGE (hero class #2) — models & VFX
+// Contract (engine depends on these exact signatures):
+//  - createFrostMageModel: returns a HeroRig so the shared hero animation code works.
+//      swordGroup  = the staff (rotated on attack like the sword)
+//      lanternPivot/lanternCore = the glowing crystal at the staff head / floating orb
+//      cape        = robe tail / cape (rotated on x while walking)
+//  - createIceSpikeMesh: points along +Z, ~0.6 long (empowered ~0.9); engine sets rotation.y.
+//  - createFrozenShell: ~1.0 tall ice block cluster centred on origin at ground level;
+//      engine scales it per enemy size and toggles visibility.
+//  - createSlowMarker: flat frost swirl at ground level (~0.9 radius) plus a few
+//      floating snowflake bits; engine rotates it and toggles visibility.
+// ===========================================================================
+
+export function createFrostMageModel(shadowMap: THREE.Texture): HeroRig {
+  // STUB — replaced by the real model (light-blue robed female mage, yellow accents).
+  return createHeroModel(shadowMap);
+}
+
+export function createIceSpikeMesh(empowered: boolean): THREE.Group {
+  // STUB
+  const g = new THREE.Group();
+  const spike = new THREE.Mesh(
+    new THREE.ConeGeometry(empowered ? 0.13 : 0.09, empowered ? 0.9 : 0.6, 5),
+    new THREE.MeshBasicMaterial({ color: empowered ? 0xbff4ff : 0x8fe3ff })
+  );
+  spike.rotation.x = Math.PI / 2;
+  g.add(spike);
+  return g;
+}
+
+export function createFrozenShell(): THREE.Group {
+  // STUB
+  const g = new THREE.Group();
+  const block = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 1.0, 0.9),
+    new THREE.MeshBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: 0.35, depthWrite: false })
+  );
+  block.position.y = 0.5;
+  g.add(block);
+  return g;
+}
+
+export function createSlowMarker(): THREE.Group {
+  // STUB
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.6, 0.85, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0x7fdcff,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.05;
+  g.add(ring);
+  return g;
+}

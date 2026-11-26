@@ -142,6 +142,7 @@ import type {
   RelicRarity,
   RelicSummaryStats,
 } from './relics';
+import type { HeroClassId, UpgradeOptionView } from './classes';
 
 export interface FloatingLabelData {
   id: number;
@@ -161,7 +162,9 @@ export interface FloatingLabelData {
     | 'relicYellow'
     | 'relicOrange'
     | 'relicGreen'
-    | 'stun';
+    | 'stun'
+    | 'shieldHit' // damage absorbed by the Frost Mage shield (light blue)
+    | 'frost'; // freeze / slow status text (icy cyan)
 }
 
 export interface BannerEvent {
@@ -195,6 +198,7 @@ export interface MinimapSnapshot {
 }
 
 export interface RunSummary {
+  heroClass: HeroClassId;
   depth: number;
   biomeName: string;
   durationSec: number;
@@ -265,4 +269,18 @@ export interface HudState {
   nearAngel: boolean;
   townReturnCost: number;
   angelBuff: AngelBuff | null;
+  // --- Hero class (added for multi-class support) ---
+  heroClass: HeroClassId;
+  /** Current shield points (0 and unused for classes without a shield). */
+  shield: number;
+  /** Effective max shield (base + upgrades + relic share). 0 = class has no shield. */
+  maxShield: number;
+  /** True while the shield is regenerating (delay elapsed, not full). */
+  shieldRegenerating: boolean;
+  /** Right-click skill display name ("Pommel Strike" / "Frost Nova"). Cooldown = pommelCooldown / pommelMaxCooldown. */
+  skillName: string;
+  /** Mobility skill display name ("Dash" / "Blink"). */
+  mobilityName: string;
+  /** Altar upgrade rows for the current class, already formatted. */
+  upgradeOptions: UpgradeOptionView[];
 }
