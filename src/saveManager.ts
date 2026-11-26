@@ -62,7 +62,10 @@ export class SaveManager {
   /** P6: the trade is over. `serverVersion` is the new save_version when the trade executed (the server state replaced ours). */
   endTrade(serverVersion?: number): void {
     this.held = false;
-    if (serverVersion !== undefined) this.version = serverVersion;
+    if (serverVersion !== undefined) {
+      this.version = serverVersion;
+      this.dirty = false; // server state just replaced local state; no redundant PUT needed
+    }
     if (this.dirty && !this.inFlight && !this.paused) void this.run();
   }
 

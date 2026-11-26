@@ -5995,6 +5995,17 @@ export class EmbervaultEngine {
     }
   }
 
+  private damagePetsInRadius(cx: number, cz: number, radius: number, rawDamage: number): void {
+    for (const pet of Array.from(this.pets.values())) {
+      if (pet.hp <= 0) continue;
+      const owner = this.heroById(pet.ownerId);
+      if (!owner || owner.isDead || owner.inTown) continue;
+      if (Math.hypot(pet.x - cx, pet.z - cz) <= radius) {
+        this.damagePet(pet, rawDamage, cx, cz);
+      }
+    }
+  }
+
   private updatePets(dt: number): void {
     const prevActor = this.hero;
     for (const [ownerId, pet] of Array.from(this.pets.entries())) {
@@ -7216,15 +7227,20 @@ export class EmbervaultEngine {
       eliteKills: this.hero.eliteKills,
       bossKills: this.hero.bossKills,
       upgradeLevel: this.hero.getTotalUpgradeLevel(),
-      // For the Frost Mage, "hpUpgrades" reports HP+shield upgrades and "armorUpgrades" reports shield-speed upgrades
+      // For the Frost Mage, "hpUpgrades" reports HP+shield upgrades and "armorUpgrades" reports shield-speed upgrades.
+      // For the Hunter, "armorUpgrades" reports attack-speed upgrades and crit gives +3% per level.
       hpUpgrades: this.hero.isMage() ? this.hero.hpShieldUpgrades : this.hero.hpUpgrades,
       atkUpgrades: this.hero.atkUpgrades,
-      armorUpgrades: this.hero.isMage() ? this.hero.shieldSpeedUpgrades : this.hero.armorUpgrades,
+      armorUpgrades: this.hero.isMage()
+        ? this.hero.shieldSpeedUpgrades
+        : this.hero.isHunter()
+        ? this.hero.atkSpeedUpgrades
+        : this.hero.armorUpgrades,
       critUpgrades: this.hero.critUpgrades,
       maxHp: this.hero.maxHp,
       atkBonusPct: this.hero.atkUpgrades * 10,
       armorBonusPct: this.hero.armorUpgrades * 10,
-      critBonusPct: this.hero.critUpgrades * 2,
+      critBonusPct: this.hero.critUpgrades * (this.hero.isHunter() ? HUNTER.critPerUpgradePct : 2),
       potionsUsed: this.hero.potionsUsed,
       potionsLeft: this.hero.potions,
       totalDamageDealt: this.hero.totalDamageDealt,
@@ -10108,6 +10124,7 @@ export class EmbervaultEngine {
               this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
             }
           });
+          this.damagePetsInRadius(e.x, e.z, rad, cfg.damage * 0.95 * this.getDepthDamageScale());
         }
       } else if (!e.bossHitApplied) {
         e.bossHitApplied = true;
@@ -10173,6 +10190,7 @@ export class EmbervaultEngine {
               this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
             }
           });
+          this.damagePetsInRadius(tx, tz, rad * 0.92, cfg.damage * 0.9 * this.getDepthDamageScale());
 
           const orbCount = this.depth >= 21 ? 8 : 6;
           const orbKind: ProjectileKind =
@@ -10218,6 +10236,7 @@ export class EmbervaultEngine {
               this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
             }
           });
+          this.damagePetsInRadius(tx, tz, rad, cfg.damage * this.getDepthDamageScale());
         }
       }
 
@@ -12716,7 +12735,10 @@ export class EmbervaultEngine {
     }
     host.lastDepthSent = this.depth;
     // Idle floor: skip the message when nothing at all changed (a keepalive every second keeps the clocks in step)
-    const sig = JSON.stringify(snap.hs.map((h) => [h[1], h[2], h[3], h[4], h[6], h[7], h[8], h[9], h[13], h[14]]));
+    const sig = JSON.stringify([
+      snap.hs.map((h) => [h[1], h[2], h[3], h[4], h[6], h[7], h[8], h[9], h[13], h[14]]),
+      snap.pets ?? null,
+    ]);
     const quiet =
       !snap.en && !snap.es && !snap.er && !snap.ps && !snap.hp && !snap.pr && !snap.ls && !snap.lr && !snap.dr && !snap.w && !snap.ev;
     if (quiet && sig === host.lastHeroSig && now - host.lastSentAt < 1000) return;

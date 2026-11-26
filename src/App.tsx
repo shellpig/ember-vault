@@ -633,8 +633,13 @@ export default function App() {
   /** Leave the running game for the character list (saves first, never blocks for long). */
   const leaveGame = useCallback(async () => {
     const mgr = saveMgrRef.current;
-    if (tradeRef.current) mgr?.endTrade(); // a held save manager would not upload
-    if (mgr) {
+    const activeTrade = tradeRef.current;
+    if (activeTrade) {
+      // Cancel cleanly on the Room DO and skip flushing (beginTrade already flushed before locking;
+      // uploading here would race an executing trade in D1).
+      mpClientRef.current?.tradeCancel(activeTrade.tradeId ?? undefined);
+      mgr?.endTrade();
+    } else if (mgr) {
       await Promise.race([mgr.flush(), new Promise<void>((r) => window.setTimeout(r, 4000))]);
     }
     resetToAttract();

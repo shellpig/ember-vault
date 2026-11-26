@@ -207,10 +207,10 @@ export const HUNTER = {
   critPerUpgradePct: 3,
 
   // Pet companion
-  petBaseHp: 96, // Matches unnamed elite base HP (24 * 4)
+  petBaseHp: 64, // ~65% of unnamed elite base HP (96)
   petDepthHpScale: 0.22,
-  petRegenDelay: 2.5, // seconds without damage before out-of-combat regen starts
-  petRegenRefill: 5.0, // seconds to refill from 0 to full once regen starts
+  petRegenDelay: 3.0, // seconds without damage before out-of-combat regen starts
+  petRegenRefill: 10.0, // seconds to refill from 0 to full once regen starts (10%/s)
   petMoveSpeed: 6.0,
   petAggroRange: 9.0,
   petLeashReturnDist: 11.5, // breaks off combat to return to owner beyond this distance
