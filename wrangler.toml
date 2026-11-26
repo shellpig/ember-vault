@@ -15,3 +15,10 @@ migrations_dir = "migrations"
 # Served to the frontend via GET /api/config and used as `aud` when verifying ID tokens.
 [vars]
 GOOGLE_CLIENT_ID = "560217897916-1mdabk4m44qvtrc6hluu64khvc4hoh35.apps.googleusercontent.com"
+
+# Room Durable Object. The class is defined in the separate `ember-vault-room` Worker (workers/room) because
+# Pages Functions cannot define Durable Object classes. That Worker must be deployed first (docs/p5-setup.md).
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+script_name = "ember-vault-room"

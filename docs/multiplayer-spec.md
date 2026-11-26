@@ -26,6 +26,7 @@
 | 角色 | 一帳號多角色（上限 8），職業隨角色固定 |
 | 起始層數 | = **房主角色的最高到達層數** |
 | 難度選擇 | 保留功能，UI 顯示為灰字「即將推出」 |
+| 房間後端 | `workers/room/` 獨立 Worker 內的 SQLite Durable Object，不公開；瀏覽器只經 Pages Functions 連線（§5.1.1） |
 
 ---
 
@@ -142,30 +143,59 @@
 ### 5.1 元件
 
 ```
-[房主瀏覽器] ──WS──┐
-[玩家 B]     ──WS──┼── Durable Object「Room」（一房一個） ── D1
-[玩家 C/D]   ──WS──┘
+[房主瀏覽器] ──WSS──┐
+[玩家 B]     ──WSS──┼── Pages Functions（驗證 session／角色）──binding ROOM──▶ Worker `ember-vault-room`
+[玩家 C/D]   ──WSS──┘                                                          └─ Durable Object「Room」（一房一個）── D1
 ```
 
 - **Room DO**：房號（6 碼英數，排除易混淆字元）、成員名單、轉發訊息、交易仲裁（見 §7）。不跑遊戲邏輯。
-- **房主**：跑地城模擬（現在的 engine），每 50ms（20 Hz）送快照。
+- **房主**：跑地城模擬（現在的 engine），每 50ms（20 Hz）送快照（P5-B 起實際值以 §5.2.1 流量預算為準：快照上限 15 Hz）。
 - **其他玩家**：每個 frame 收集輸入，以 30 Hz 送出；畫面以快照插值（延遲約 100ms 緩衝）＋本機英雄移動預測。
+
+### 5.1.1 實際架構（P5-A 已實作）
+
+- **獨立 Worker 放 Durable Object**：Pages Functions 不能定義 DO class，所以 `Room` 在 `workers/room/`（Worker 名稱 `ember-vault-room`，**SQLite-backed**，migration `v1` `new_sqlite_classes = ["Room"]`，免費方案只支援這種）。Pages 的 `wrangler.toml` 以 `[[durable_objects.bindings]] name = "ROOM", class_name = "Room", script_name = "ember-vault-room"` 綁定。部署順序與指令見 `docs/p5-setup.md`。
+- **DO 不公開**：Worker 沒有 routes、`workers_dev = false`，瀏覽器碰不到。瀏覽器只連 Pages：
+  - `POST /api/rooms { characterId }`：需登入；確認角色屬於本帳號；產生 6 碼房號（拒絕取樣，字元表 `ABCDEFGHJKMNPQRSTUVWXYZ23456789`）；呼叫 DO `/init` 記錄房主 accountId 與建立時間；碼已被使用（409）就重試，最多 6 次。回傳 `{ code }`。
+  - `GET /api/rooms/:code/ws?characterId=...`：需登入；Origin 檢查比照 `_middleware.ts`（帶 Origin 時必須同源，`DEV_AUTH=1` 時略過）；驗證角色屬於本帳號並讀出角色摘要（名稱、職業、`max_depth`）；把驗證過的身分放進內部 header `x-ev-identity`，用 `ROOM.idFromName(code)` 的 stub 轉給 DO。Pages 轉送前會丟掉瀏覽器的 cookie 與所有 `x-ev-*` header，**DO 不信任任何來自瀏覽器的身分欄位**。
+  - 沒有 `Upgrade: websocket` 的 GET 是「試跑」：做同樣的檢查但不建立連線，回 200／401／403／404／409，讓前端顯示明確的繁中錯誤（失敗的 WebSocket 握手拿不到 HTTP 狀態碼）。
+  - 錯誤碼：未登入 401；角色不屬於本帳號或不存在 403；房號格式錯誤或房間不存在 404；滿 4 人 409；同一帳號重複加入 → **取代舊連線**（沿用原 playerId，舊連線收到 `replaced`）。
+- **Hibernation**：`ctx.acceptWebSocket`、`webSocketMessage/Close/Error`、成員資訊用 `serializeAttachment` 存在每條連線上；房間 meta（房主 accountId、建立時間）存在 DO storage。保活用 `setWebSocketAutoResponse`（文字 `ping` → `pong`，不喚醒 DO、不計請求）。
+- **房間生命週期**：非房主只能加入「房主已連線」的房間；房主斷線或離開 → 廣播 `roomClosed`、關閉全部連線、`deleteAll()` 清掉狀態（房號可再使用）。建立後 2 分鐘房主沒連上（或連線全消失）→ alarm 清除。
+- **限制**：單則訊息 4096 字元（超過 close 1009）；每連線 token bucket（突發 20、每秒補 5，超過 close 1008）；二進位或非 JSON 訊息斷線；聊天 200 字、控制字元轉空白；`from`／`name` 一律由伺服器蓋章。
+
+### 5.1.2 為 P5-B 預留
+
+- 所有訊息都有 `type` 欄位；未知 `type` 會被忽略（向前相容）。
+- `relay` 訊息類型已定義於 `shared/room.ts`（`kind` + 不透明 `payload`），DO 內已寫好轉發路徑（房主 → 全體其他人；成員 → 只給房主；`from` 由伺服器蓋章，不可偽造），但以常數 `RELAY_ENABLED = false` 關閉，P5-A 不接收。P5-B 開啟後再決定 `kind` 清單（`input`、`snapshot`、`event`、`location`…）與各自的大小上限；快照可能超過 P5-A 的 4096 字元上限，P5-B 需要為房主的 `relay` 另訂較大的上限（或壓縮／分片）。
 
 ### 5.2 訊息（JSON，日後可換 binary）
 
 | 方向 | type | 內容 |
 |---|---|---|
-| C→S | `join` | `characterId` |
-| S→C | `welcome` | `playerId`、成員、是否為房主、目前地城完整狀態（若有） |
+| C→S | （連線時） | `characterId` 放在 WebSocket URL 的 query，由 Pages Function 驗證（P5-A；不再有 `join` 訊息） |
+| S→C | `welcome` | `code`、`playerId`、是否為房主、成員清單（P5-A）；P5-B 起另含目前地城完整狀態（若有） |
+| S→C | `memberJoined` | 新成員（同一 playerId 再次出現視為更新）（P5-A） |
+| C↔S | `chat` | 文字，上限 200 字；伺服器蓋 `from`、`name`、`ts` 後廣播給全員含自己（P5-A） |
+| C→S / S→C | `ping` / `pong` | 每 5 秒一次；`ping` 帶 `t` 與自己最近的 `rtt`，`pong` 回 `t` 與全員 `latencies`（P5-A） |
+| S→C | `replaced` | 同帳號從別處加入，這條連線被取代（P5-A） |
 | C→房主 | `input` | `seq`、移動向量、瞄準方向、按鍵（攻擊 / 衝刺 / 技能 / 藥水 / 互動） |
 | 房主→C | `snapshot` | `tick`、heroes[]、enemies[]、projectiles[]、loot[]（含 `ownerId`）、門 |
 | 房主→C | `event` | 傷害數字、音效、特效、橫幅（不需重送，掉了就算） |
 | C→房主 | `location` | 進城 / 出城（選了哪扇門） |
 | C→C（經 S） | `townPos` | 城鎮內位置（5 Hz） |
-| S→C | `memberLeft` / `roomClosed` | 有人離開 / 房主離開 → 房間結束 |
+| S→C | `memberLeft` / `roomClosed` | 有人離開 / 房主離開 → 房間結束（P5-A） |
+| C→S / S→C | `relay` | **P5-B 預留**：房主→全體、成員→房主的通用轉發（目前關閉） |
 
 - 客戶端依 `ownerId` 過濾 loot，只畫自己的。
 - 撿取遺物：房主判定撿到 → 對該玩家發 `event: lootPicked { relic }`，客戶端放進自己的背包。
+
+### 5.2.1 流量預算（Cloudflare 免費方案）
+
+- Durable Objects 每天 **100,000 次請求**；**傳入的 WebSocket 訊息以 20:1 計算**（20 則 = 1 次請求），**送出的訊息與 ping 不計**，連線建立算 1 次。
+- 因此設計原則：**傳入 DO 的訊息要少**。成員 → 房主的輸入「有變化才送」（不固定 30 Hz）；房主 → 全體的快照上限 **15 Hz**（房主送快照給 DO 本身是傳入訊息：15 Hz ≈ 54,000 則／小時 ≈ 2,700 次請求／小時）。
+- 估算（P5-B 要實測修正）：4 人房間一小時約 3,000–6,000 次請求，免費額度約可撐 15–30 個房間小時／天。
+- P5-A 沒有高頻訊息：每人每 5 秒一則 ping（4 人房間一小時約 144 次請求）＋聊天；保活文字 ping 走 auto-response 不計費。詳見 `docs/p5-setup.md`。
 
 ### 5.3 中途加入
 
@@ -293,7 +323,9 @@ CREATE TABLE trades (
 | **P2 倉庫** | 城鎮倉庫建築＋UI、背包 ↔ 倉庫、200 上限 | 倉庫內容跨局保留 |
 | **P3 死亡改版（單人）** | 倒地 → 原地開門 → 按鈕回城扣金幣（扣到 0）、死亡不結束這局、傳送門改為 `hero.portal` | 單人死亡後可回城繼續 |
 | **P4 多英雄重構** | `Hero` 抽出、`heroes[]`、敵人鎖定最近者、bot 隊友、救人、難度縮放、城鎮分離成 `TownScene` | 單人＋3 個 bot 能完整打一層、救人可用 |
-| **P5 房間＋連線** | Room DO、房號、快照 / 輸入、插值與預測、各自 loot、各自傳送門、城鎮本機模擬＋位置同步、房主離開即結束 | 4 個瀏覽器分頁能一起打 |
+| **P5-A 房間基礎設施** | Room Worker＋DO（SQLite、Hibernation）、`POST /api/rooms`、`/api/rooms/:code/ws` 代理與身分驗證、房間大廳（成員、職業、層數、延遲、聊天）、房主離開即結束、多開發帳號；**不同步遊戲畫面** | 4 個帳號能開房、用房號加入、互看成員與聊天；房主離開房間即關閉；單人開始完全不連線 |
+| **P5-B 同步遊戲** | 房主開始遊戲、快照 / 輸入（`relay`）、插值與預測、各自 loot、各自傳送門、難度縮放接上房間人數 | 4 個瀏覽器分頁能一起打地城 |
+| **P5-C 城鎮與位置同步** | 城鎮本機模擬＋位置同步（`townPos`）、進出城（`location`）、全員回城時地城凍結的連線版 | 多人進出城鎮與地城流程完整 |
 | **P6 交易** | 城鎮交易 UI、Room DO 仲裁、D1 batch、`save_version` | 交易後雙方存檔正確，斷線不能刷物品 |
 | **P7 中途加入／重連＋打磨** | 進行中加入、斷線重連、延遲補償調整 | 中途加入可直接進地城 |
 
