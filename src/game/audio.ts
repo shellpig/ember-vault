@@ -531,6 +531,137 @@ export class DungeonAudio {
     osc.stop(now + 0.24);
   }
 
+  // ---- Frost Mage ---------------------------------------------------------
+  /** Crisp glassy "tsing" when an ice spike is fired. */
+  public playIceCast(empowered = false): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    const base = empowered ? 1250 : 1650;
+    osc.frequency.setValueAtTime(base, now);
+    osc.frequency.exponentialRampToValueAtTime(base * 1.9, now + 0.07);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(empowered ? 0.12 : 0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + (empowered ? 0.2 : 0.13));
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  }
+
+  /** Shattering ice burst on spike impact. */
+  public playIceShatter(empowered = false): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(empowered ? 3200 : 4200, now);
+    filter.Q.setValueAtTime(2.2, now);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(empowered ? 0.26 : 0.15, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + (empowered ? 0.28 : 0.16));
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.masterGain);
+    src.start(now, Math.random() * 0.5, 0.3);
+
+    const ping = this.ctx.createOscillator();
+    ping.type = 'sine';
+    ping.frequency.setValueAtTime(empowered ? 2100 : 2700, now);
+    ping.frequency.exponentialRampToValueAtTime(empowered ? 900 : 1500, now + 0.12);
+    const pg = this.ctx.createGain();
+    pg.gain.setValueAtTime(0.06, now);
+    pg.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+    ping.connect(pg);
+    pg.connect(this.masterGain);
+    ping.start(now);
+    ping.stop(now + 0.15);
+  }
+
+  /** Big icy whoomph + crystalline shimmer for Frost Nova. */
+  public playFrostNova(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const boom = this.ctx.createOscillator();
+    boom.type = 'sine';
+    boom.frequency.setValueAtTime(160, now);
+    boom.frequency.exponentialRampToValueAtTime(45, now + 0.45);
+    const bg = this.ctx.createGain();
+    bg.gain.setValueAtTime(0.32, now);
+    bg.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    boom.connect(bg);
+    bg.connect(this.masterGain);
+    boom.start(now);
+    boom.stop(now + 0.52);
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(2400, now);
+    filter.frequency.exponentialRampToValueAtTime(6000, now + 0.6);
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.22, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+    src.connect(filter);
+    filter.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(now, 0.1, 0.72);
+
+    for (let i = 0; i < 4; i++) {
+      const t = now + 0.05 + i * 0.07;
+      const o = this.ctx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(1800 + i * 420, t);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.05, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      o.connect(g);
+      g.connect(this.masterGain);
+      o.start(t);
+      o.stop(t + 0.26);
+    }
+  }
+
+  /** Airy shimmer for Blink. */
+  public playBlink(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(600, now);
+    osc.frequency.exponentialRampToValueAtTime(2400, now + 0.12);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.12, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.17);
+  }
+
+  /** Soft icy chime when the shield is depleted (warning). */
+  public playShieldBreak(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(2600, now);
+    filter.Q.setValueAtTime(4, now);
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.masterGain);
+    src.start(now, 0.2, 0.36);
+  }
+
   public playBlock(panBonk = false): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

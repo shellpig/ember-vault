@@ -1524,6 +1524,7 @@ export default function App() {
       {/* Relic Equipment & Bag Vault Modal */}
       {relicModalOpen && !hud.isDead && (
         <RelicEquipmentModal
+          heroClass={hud.heroClass}
           equipped={hud.equippedRelics}
           bag={hud.relicBag}
           bagCap={hud.relicBagCap}
@@ -1541,6 +1542,7 @@ export default function App() {
       {/* Hidden Ctrl+I Orange & Green Relic Compendium */}
       {codexModalOpen && (
         <RelicCompendiumModal
+          heroClass={hud.heroClass}
           discoveredIds={hud.discoveredRelicIds}
           onClose={() => setCodexModalOpen(false)}
         />
