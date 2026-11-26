@@ -48,26 +48,22 @@ npm run db:migrate:remote    # 遠端（正式 D1）
 
 ### 4. Cloudflare Pages 專案設定
 
-在 Cloudflare Dashboard → Workers & Pages → 你的 Pages 專案：
+`wrangler.toml` 是設定的唯一來源（D1 binding 與 `GOOGLE_CLIENT_ID` 都寫在裡面），dashboard 上這些欄位會變成唯讀，**不需要在 dashboard 設 binding 或環境變數**。
 
-1. **Settings → Bindings（或 Functions → D1 database bindings）**：新增 D1 binding，Variable name 填 `DB`，選 `ember-vault-db`。**Production 與 Preview 都要各設一次**。
-2. **Settings → Variables and Secrets**：新增環境變數（Production 與 Preview 都要）：
-   - `GOOGLE_CLIENT_ID` = 上面取得的 Client ID（後端驗證 ID token 的 `aud` 用）
-   - `VITE_GOOGLE_CLIENT_ID` = 同一個 Client ID（前端建置時讀取，**必須在建置前設好**，設完要重新部署才會生效）
-3. **不要**在正式環境設定 `DEV_AUTH`（它會啟用不需密碼的假登入端點 `/api/auth/dev`）。
-4. 建置設定維持：Build command `vite build`（或 `npm run build`），Build output directory `dist`。`functions/` 目錄會被 Pages 自動編譯成 Functions。
-5. 若 `wrangler.toml` 存在，Pages 會以它為設定來源；dashboard 上的 binding 與變數若與它衝突，以 `wrangler.toml` 為準。目前 `wrangler.toml` 只定義 D1 binding，環境變數仍在 dashboard 設定。
+1. 確認 `wrangler.toml` 的 `database_id` 已填好並 commit。
+2. 確認 `[vars]` 的 `GOOGLE_CLIENT_ID` 是你的 Client ID（公開值，可以 commit）。前端由 `GET /api/config` 取得，不需要建置時環境變數。
+3. **絕對不要**在 `wrangler.toml` 或 dashboard 設 `DEV_AUTH`（它會啟用不需密碼的假登入端點 `/api/auth/dev`）。
+4. 建置設定維持：Build command `npm run build`，Build output directory `dist`。`functions/` 會被 Pages 自動編譯成 Functions。
 
 ## 本機開發
 
 建立 `.dev.vars`（已被 git 忽略，供 wrangler 讀取後端環境變數）：
 
 ```
-GOOGLE_CLIENT_ID=你的 Client ID（沒有的話隨便填，只是 Google 登入會不能用）
 DEV_AUTH=1
 ```
 
-前端環境變數（可選）：複製 `.env.example` 為 `.env.local`，填入 `VITE_GOOGLE_CLIENT_ID`。
+`GOOGLE_CLIENT_ID` 會自動讀 `wrangler.toml` 的 `[vars]`；若要在本機換成別的 Client ID，在 `.dev.vars` 加一行 `GOOGLE_CLIENT_ID=...` 即可覆蓋。
 
 ```bash
 npm install

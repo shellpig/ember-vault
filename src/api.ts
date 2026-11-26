@@ -59,6 +59,7 @@ export function saveToLoadout(save: CharacterSave): CharacterLoadout {
 }
 
 export const api = {
+  config: () => request<{ googleClientId: string }>('GET', '/api/config'),
   me: () => request<MeResponse>('GET', '/api/me'),
   googleLogin: (credential: string) => request<MeResponse>('POST', '/api/auth/google', { credential }),
   devLogin: () => request<MeResponse>('POST', '/api/auth/dev'),

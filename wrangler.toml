@@ -10,3 +10,8 @@ binding = "DB"
 database_name = "ember-vault-db"
 database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 migrations_dir = "migrations"
+
+# Public (non-secret) config. The Google OAuth client id is visible to every browser anyway.
+# Served to the frontend via GET /api/config and used as `aud` when verifying ID tokens.
+[vars]
+GOOGLE_CLIENT_ID = "560217897916-1mdabk4m44qvtrc6hluu64khvc4hoh35.apps.googleusercontent.com"

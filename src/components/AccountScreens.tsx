@@ -11,7 +11,6 @@ import {
   type MeResponse,
 } from '../../shared/character';
 
-const GOOGLE_CLIENT_ID: string = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '';
 
 const PANEL = 'bg-[#0b0d13]/95 border border-[#b89448]/70 shadow-[0_24px_64px_rgba(0,0,0,0.9)]';
 const BTN =
@@ -85,15 +84,28 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: (me: MeResponse) => vo
   const btnRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // undefined = still loading, '' = not configured on the server
+  const [clientId, setClientId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
+    let cancelled = false;
+    api
+      .config()
+      .then((c) => !cancelled && setClientId(c.googleClientId))
+      .catch(() => !cancelled && setClientId(''));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!clientId) return;
     let cancelled = false;
     loadGoogleScript()
       .then(() => {
         if (cancelled || !btnRef.current || !window.google) return;
         window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
+          client_id: clientId,
           callback: async ({ credential }) => {
             setBusy(true);
             setError(null);
@@ -116,7 +128,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: (me: MeResponse) => vo
     return () => {
       cancelled = true;
     };
-  }, [onLoggedIn]);
+  }, [onLoggedIn, clientId]);
 
   const devLogin = async () => {
     setBusy(true);
@@ -135,10 +147,12 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: (me: MeResponse) => vo
         <p className="font-hud text-xs text-[#aeb3c2] text-center leading-relaxed">
           登入後即可建立角色，金幣、遺物與升級會保存在雲端。
         </p>
-        {GOOGLE_CLIENT_ID ? (
+        {clientId ? (
           <div ref={btnRef} className={busy ? 'opacity-50 pointer-events-none' : ''} />
+        ) : clientId === '' ? (
+          <p className="font-hud text-xs text-[#ff8a98] text-center">伺服器未設定 GOOGLE_CLIENT_ID，無法使用 Google 登入。</p>
         ) : (
-          <p className="font-hud text-xs text-[#ff8a98] text-center">尚未設定 VITE_GOOGLE_CLIENT_ID，無法使用 Google 登入。</p>
+          <p className="font-hud text-xs text-[#aeb3c2] text-center">載入中…</p>
         )}
         {import.meta.env.DEV && (
           <button type="button" onClick={devLogin} disabled={busy} className={BTN_PLAIN}>
