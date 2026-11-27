@@ -1,7 +1,7 @@
 import type { EmbervaultEngine } from '../engine';
 import { BOT_REGROUP_DIST, BOT_REGROUP_DONE_DIST, COMPANION_EDGE_NDC, COMPANION_WARP_DIST, FROST_MAGE, HERO_CLASSES, HUNTER, UpgradeKind } from '../classes';
 import { findGridPath, gridToWorld, hasLineOfSight, isTileWalkable, worldToGrid, worldToWalkableGrid } from '../dungeon';
-import { BOSS_AI, BOSS_VOLLEY, isGuardianEnemy, isSwarmEnemy } from './data';
+import { BOSS_AI, BOSS_NOVA, BOSS_VOLLEY, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, EnemyEntity, LootEntity } from './entities';
 import { _projVec } from './scratch';
 import { Hero } from '../hero';
@@ -350,6 +350,32 @@ export const aiMethods = {
           this.performDash();
         }
         return stepAway(escX, escZ);
+      }
+
+      // nova_ring: also sidestep out of the N directional laser telegraph lanes into the safe gap
+      if (e.bossSkill === 'nova_ring' && cDist < BOSS_NOVA.beamMaxRange) {
+        const count = this.depth >= BOSS_NOVA.deepFromDepth ? BOSS_NOVA.beamsDeep : BOSS_NOVA.beams;
+        const baseAng = e.bossNovaAngle ?? e.facing;
+        const laneHalf = BOSS_NOVA.beamHalfWidth + margin;
+        for (let i = 0; i < count; i++) {
+          const ang = baseAng + (i / count) * Math.PI * 2;
+          const bdx = Math.sin(ang);
+          const bdz = Math.cos(ang);
+          const along = cdx * bdx + cdz * bdz;
+          if (along < 0 || along > BOSS_NOVA.beamMaxRange) continue;
+          const lateral = cdx * -bdz + cdz * bdx;
+          if (Math.abs(lateral) < laneHalf) {
+            this.hero.ai.status = 'Evading Boss Laser';
+            const side = lateral === 0 ? this.hero.ai.strafeSign : Math.sign(lateral);
+            const escX = -bdz * side;
+            const escZ = bdx * side;
+            if (this.hero.dashCooldown <= 0 && remaining < BOSS_AI.dashLeadTime + 0.06) {
+              this.hero.facing = Math.atan2(escX, escZ);
+              this.performDash();
+            }
+            return stepAway(escX, escZ);
+          }
+        }
       }
     }
 

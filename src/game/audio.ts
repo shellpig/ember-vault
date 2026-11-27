@@ -486,6 +486,62 @@ export class DungeonAudio {
     src.start(now, 0.1, 0.35);
   }
 
+  public playBossLaser(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    // 1. Sub-bass energy discharge punch
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(165, now);
+    sub.frequency.exponentialRampToValueAtTime(42, now + 0.38);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.42, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+    sub.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 0.44);
+
+    // 2. High-energy downward-sweeping laser beam tone ("BU!~~~")
+    const beam = this.ctx.createOscillator();
+    beam.type = 'sawtooth';
+    beam.frequency.setValueAtTime(1480, now);
+    beam.frequency.exponentialRampToValueAtTime(340, now + 0.14);
+    beam.frequency.exponentialRampToValueAtTime(220, now + 0.44);
+
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1800, now);
+    bp.frequency.exponentialRampToValueAtTime(620, now + 0.42);
+    bp.Q.value = 1.6;
+
+    const bg = this.ctx.createGain();
+    bg.gain.setValueAtTime(0.28, now);
+    bg.gain.linearRampToValueAtTime(0.22, now + 0.2);
+    bg.gain.exponentialRampToValueAtTime(0.001, now + 0.46);
+
+    beam.connect(bp);
+    bp.connect(bg);
+    bg.connect(this.masterGain);
+    beam.start(now);
+    beam.stop(now + 0.48);
+
+    // 3. Shimmering plasma crackle tail
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const hp = this.ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.setValueAtTime(1400, now);
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.18, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+    src.connect(hp);
+    hp.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(now, 0.05, 0.44);
+  }
+
   public playBossVictory(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

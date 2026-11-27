@@ -186,6 +186,7 @@ export const enemiesMethods = {
       e.telegraphZ = e.z;
       e.telegraphRadius = 0;
       if (e.telegraph) e.telegraph.group.visible = false;
+      this.hideBossWindupVfx(e.id);
       this.emitHud();
       return;
     }
@@ -232,17 +233,21 @@ export const enemiesMethods = {
       const leadDist = Math.min(1.1, dist * 0.5);
       tx = e.x + (dx / (dist || 1)) * leadDist;
       tz = e.z + (dz / (dist || 1)) * leadDist;
+    } else if (chosen === 'nova_ring') {
+      // Lock the radial laser beam angles at windup start so charge lines match the burst
+      e.bossNovaAngle = e.facing;
     }
     // ranged_volley: compact ring beneath the boss; nova_ring: centred on the boss
 
     e.telegraphX = tx;
     e.telegraphZ = tz;
     e.telegraphRadius = tRad;
+    const customWindup = this.updateBossWindupVfx(e, chosen, tx, tz, tRad, 0, e.bossNovaAngle ?? e.facing);
     if (e.telegraph) {
       e.telegraph.group.position.set(tx, 0, tz);
       e.telegraph.group.scale.setScalar(tRad);
       e.telegraph.fillDisk.scale.setScalar(0.12);
-      e.telegraph.group.visible = true;
+      e.telegraph.group.visible = !customWindup;
     }
     if (chosen === 'ranged_volley') {
       this.audio.playMageCast();
@@ -252,25 +257,54 @@ export const enemiesMethods = {
     this.emitHud();
   },
 
-  /** One radial orb wave of nova_ring (the first one fires on the strike, the next ones `waveInterval` apart). */
-  bossFireNovaWave(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig): void {
-    const orbCount = this.depth >= BOSS_NOVA.deepFromDepth ? BOSS_NOVA.orbsPerWaveDeep : BOSS_NOVA.orbsPerWave;
-    const orbKind: ProjectileKind =
-      cfg.projectileKind && cfg.projectileKind !== 'bone_dart'
-        ? cfg.projectileKind
-        : this.depth >= BOSS_NOVA.deepFromDepth
-        ? 'bio_orb'
-        : 'mage_orb';
-    const ox = e.bossNovaX ?? e.x;
-    const oz = e.bossNovaZ ?? e.z;
-    // Every wave flies along the same lines, so the gaps between the orbs stay safe for the whole volley
-    const baseAng = e.bossNovaAngle ?? 0;
-    const orbDmg = this.bossDamage(e, BOSS_NOVA.orbDamage);
-    for (let i = 0; i < orbCount; i++) {
-      const a = baseAng + (i / orbCount) * Math.PI * 2;
-      const sdx = Math.sin(a);
-      const sdz = Math.cos(a);
-      this.spawnProjectile(orbKind, ox + sdx * 0.75, oz + sdz * 0.75, sdx, sdz, 1, this.getEnemyLabel(e), BOSS_NOVA.orbSpeed, orbDmg);
+  /** Check single-hit damage for active nova_ring laser beams + centre circle across all live heroes and pets. */
+  checkBossNovaBeamHits(this: EmbervaultEngine, e: EnemyEntity): void {
+    const active = e.bossNovaActiveBeams;
+    if (!active) return;
+    const { ox, oz, rad, beams, dmg, hitIds } = active;
+    const halfW = BOSS_NOVA.beamHalfWidth;
+    const label = this.getEnemyLabel(e);
+
+    const pointHitsNova = (px: number, pz: number, targetR: number): boolean => {
+      const rx = px - ox;
+      const rz = pz - oz;
+      if (Math.hypot(rx, rz) <= rad) return true;
+      for (const b of beams) {
+        const along = rx * b.dirX + rz * b.dirZ;
+        if (along < 0 || along > b.length + targetR) continue;
+        const lateral = Math.abs(rx * -b.dirZ + rz * b.dirX);
+        if (lateral <= halfW + targetR) return true;
+      }
+      return false;
+    };
+
+    const firstCheck = !active.dodgedChecked;
+    active.dodgedChecked = true;
+
+    this.forEachLiveHero(() => {
+      const key = `h:${this.hero.id}`;
+      if (hitIds.has(key)) return;
+      if (pointHitsNova(this.hero.x, this.hero.z, 0.34)) {
+        hitIds.add(key);
+        this.damageHero(dmg, ox, oz, label);
+      } else if (firstCheck) {
+        const d = Math.hypot(this.hero.x - ox, this.hero.z - oz);
+        if (d <= rad + 3.4) {
+          this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
+        }
+      }
+    });
+
+    for (const pet of this.pets.values()) {
+      if (pet.hp <= 0) continue;
+      const owner = this.heroById(pet.ownerId);
+      if (!owner || owner.isDead || owner.inTown) continue;
+      const key = `p:${pet.ownerId}`;
+      if (hitIds.has(key)) continue;
+      if (pointHitsNova(pet.x, pet.z, 0.36)) {
+        hitIds.add(key);
+        this.damagePet(pet, dmg, ox, oz);
+      }
     }
   },
 
@@ -362,13 +396,12 @@ export const enemiesMethods = {
       }
     }
 
-    // nova_ring: later orb waves keep coming while the boss is already recovering
-    if ((e.bossNovaWaves ?? 0) > 0) {
-      e.bossNovaTimer = (e.bossNovaTimer ?? 0) - dt;
-      if (e.bossNovaTimer <= 0) {
-        e.bossNovaWaves = e.bossNovaWaves! - 1;
-        e.bossNovaTimer = BOSS_NOVA.waveInterval;
-        this.bossFireNovaWave(e, cfg);
+    // nova_ring: active laser beam hit window (each hero/pet can take damage at most once)
+    if (e.bossNovaActiveBeams) {
+      e.bossNovaActiveBeams.timer -= dt;
+      this.checkBossNovaBeamHits(e);
+      if (e.bossNovaActiveBeams.timer <= 0) {
+        e.bossNovaActiveBeams = undefined;
       }
     }
 
@@ -377,6 +410,7 @@ export const enemiesMethods = {
 
     if (state === 'chase') {
       if (e.telegraph) e.telegraph.group.visible = false;
+      this.hideBossWindupVfx(e.id);
 
       if (dist < 12.5 && dist > 1.35) {
         const dirX = dx / (dist || 1);
@@ -403,10 +437,26 @@ export const enemiesMethods = {
       }
 
       // Smoothly fill ground danger circle so player reads exact dodge timing (skills only)
-      if (!isBasic && e.telegraph) {
-        e.telegraph.fillDisk.scale.setScalar(0.12 + progress * 0.88);
-        e.telegraph.fillMat.opacity = 0.2 + progress * 0.34;
-        e.telegraph.ringMat.opacity = 0.72 + Math.sin(this.elapsed * 26) * 0.24;
+      if (!isBasic) {
+        const customWindup = this.updateBossWindupVfx(
+          e,
+          skill,
+          e.telegraphX ?? e.x,
+          e.telegraphZ ?? e.z,
+          e.telegraphRadius ?? cfg.telegraphRadius,
+          progress,
+          e.bossNovaAngle ?? e.facing
+        );
+        if (e.telegraph) {
+          if (customWindup) {
+            e.telegraph.group.visible = false;
+          } else {
+            e.telegraph.fillDisk.scale.setScalar(0.12 + progress * 0.88);
+            e.telegraph.fillMat.opacity = 0.2 + progress * 0.34;
+            e.telegraph.ringMat.opacity = 0.72 + Math.sin(this.elapsed * 26) * 0.24;
+            e.telegraph.group.visible = true;
+          }
+        }
       }
 
       if ((e.bossStateTimer ?? 0) <= 0) {
@@ -519,6 +569,7 @@ export const enemiesMethods = {
       } else if (!e.bossHitApplied) {
         e.bossHitApplied = true;
         if (e.telegraph) e.telegraph.group.visible = false;
+        this.hideBossWindupVfx(e.id);
 
         if (skill === 'ranged_volley') {
           // Fair 3-shot ranged fan toward locked aim direction
@@ -561,34 +612,34 @@ export const enemiesMethods = {
             );
           }
         } else if (skill === 'nova_ring') {
-          // Close shockwave, then radial orb waves (the first right now, the rest `waveInterval` apart)
+          // Bright-white radial laser beams (stop at walls, single hit across centre circle + beams)
           const dmg = this.bossDamage(e, BOSS_SKILLS.nova_ring.damage);
-          this.audio.playBossSlam();
-          this.addScreenShake(0.38, 0.22);
-          emitShockwave(tx, tz, rad, cfg.telegraphColor);
+          const baseAng = e.bossNovaAngle ?? e.facing;
+          const beams = this.computeNovaBeams(tx, tz, baseAng);
+          this.audio.playBossLaser();
+          this.addScreenShake(0.45, 0.28);
+          this.spawnBossNovaLaserVfx(tx, tz, rad, beams, cfg.telegraphColor);
 
-          this.forEachLiveHero(() => {
-            const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
-            if (heroDistToImpact <= rad) {
-              this.damageHero(dmg, tx, tz, this.getEnemyLabel(e));
-            } else if (heroDistToImpact <= rad + 3.0) {
-              this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
-            }
-          });
-          this.damagePetsInRadius(tx, tz, rad, dmg);
-
-          e.bossNovaX = tx;
-          e.bossNovaZ = tz;
-          e.bossNovaAngle = e.facing;
-          e.bossNovaWaves = BOSS_NOVA.waves - 1;
-          e.bossNovaTimer = BOSS_NOVA.waveInterval;
-          this.bossFireNovaWave(e, cfg);
+          e.bossNovaActiveBeams = {
+            ox: tx,
+            oz: tz,
+            rad,
+            beams,
+            timer: BOSS_NOVA.activeHitWindow,
+            dmg,
+            hitIds: new Set<string>(),
+          };
+          this.checkBossNovaBeamHits(e);
         } else {
           // 'slam' or 'targeted_blast' (remote psychic blast)
           const dmg = this.bossDamage(e, BOSS_SKILLS[skill].damage);
           this.audio.playBossSlam();
           this.addScreenShake(0.42, 0.24);
-          emitShockwave(tx, tz, rad, cfg.telegraphColor);
+          if (skill === 'slam') {
+            this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor);
+          } else {
+            emitShockwave(tx, tz, rad, cfg.telegraphColor);
+          }
 
           this.forEachLiveHero(() => {
             const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);

@@ -13,6 +13,15 @@ export type FloorBossKind =
 
 export type BossSkillKind = 'slam' | 'charge_slam' | 'nova_ring' | 'ranged_volley' | 'targeted_blast';
 
+/** Stable index order for syncing `bossSkill` over multiplayer snapshots. */
+export const BOSS_SKILL_LIST: readonly BossSkillKind[] = [
+  'slam',
+  'charge_slam',
+  'nova_ring',
+  'ranged_volley',
+  'targeted_blast',
+];
+
 /** A boss action is either one of its skills (ground telegraph) or a basic attack (docs/boss-spec.md sections 3-5). */
 export type BossActionType = 'skill' | 'basic';
 
@@ -325,15 +334,15 @@ export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
   targeted_blast: { windup: 0.7, strike: 0.1, damage: 1.5, range: 6.4, radius: 2.25 },
 };
 
-/** nova_ring: the radial orb waves after the centre hit. */
+/** nova_ring: radial bright-white laser beams (stop at walls, single hit per target across centre + beams). */
 export const BOSS_NOVA = {
-  waves: 2,
-  waveInterval: 0.2,
-  orbsPerWave: 8,
-  orbsPerWaveDeep: 10,
+  beams: 6,
+  beamsDeep: 8,
   deepFromDepth: 21,
-  orbDamage: 0.58,
-  orbSpeed: 5.4,
+  beamMaxRange: 11,
+  beamHalfWidth: 0.42,
+  /** Duration (s) the fired laser beams actively check hits (each hero/pet can only be hit once). */
+  activeHitWindow: 0.18,
 } as const;
 
 /** charge_slam geometry (the dash itself lasts `BOSS_SKILLS.charge_slam.strike`). */

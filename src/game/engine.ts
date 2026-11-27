@@ -91,6 +91,8 @@ import { aiMethods } from './engine/ai';
 import { frameMethods } from './engine/frame';
 import { enemiesMethods } from './engine/enemies';
 import { treasureMethods } from './engine/treasure';
+import { bossVfxMethods } from './engine/bossVfx';
+import type { BossVfxInstance, BossWindupRig } from './engine/bossVfx';
 
 export type { CharacterLoadout } from './hero';
 export { STASH_CAP } from './hero';
@@ -253,6 +255,14 @@ export class EmbervaultEngine {
   particles: Particle[] = [];
   slashArcs: SlashArc[] = [];
   particleGeo = new THREE.BoxGeometry(0.11, 0.11, 0.11);
+
+  // Boss procedural shader & 3D VFX
+  bossVfxItems: BossVfxInstance[] = [];
+  bossWindupRigs: Map<number, BossWindupRig> = new Map();
+  bossBurstLight: THREE.PointLight | null = null;
+  bossBurstLightMax = 0;
+  bossBurstLightTimer = 0;
+  bossBurstLightDur = 0;
 
   // Game state shared by everyone in the run (per-hero state lives in `hero`, see hero.ts)
   depth = 1;
@@ -589,6 +599,7 @@ export class EmbervaultEngine {
       this.mpHostFrozenTick();
       this.animateHeroPortal(dt);
       this.updateParticles(dt);
+      this.updateBossVfx(dt);
       return;
     }
 
@@ -662,8 +673,9 @@ export class EmbervaultEngine {
     this.updateEnvironment(dt);
     this.updateWallOcclusion();
 
-    // 8. Update Pooled Particles & Sword Slash Arcs
+    // 8. Update Pooled Particles, Sword Slash Arcs & Boss Procedural VFX
     this.updateParticles(dt);
+    this.updateBossVfx(dt);
 
     // 9. Smooth Isometric Camera Follow + Screen Shake
     const camDist = 14.5 * this.camZoom;
@@ -780,6 +792,10 @@ export class EmbervaultEngine {
 
     this.leaveTownScene();
     this.clearLevel();
+    if (this.bossBurstLight) {
+      this.scene.remove(this.bossBurstLight);
+      this.bossBurstLight = null;
+    }
     for (const h of this.heroes) if (h.isBot) this.disposeBot(h);
     for (const bar of this.rescueBars.values()) {
       this.scene.remove(bar.group);
@@ -837,6 +853,7 @@ type AiMethods = typeof aiMethods;
 type FrameMethods = typeof frameMethods;
 type EnemiesMethods = typeof enemiesMethods;
 type TreasureMethods = typeof treasureMethods;
+type BossVfxMethods = typeof bossVfxMethods;
 export interface EmbervaultEngine
   extends HudMethods,
     CoreMpMethods,
@@ -858,7 +875,8 @@ export interface EmbervaultEngine
     AiMethods,
     FrameMethods,
     EnemiesMethods,
-    TreasureMethods {}
+    TreasureMethods,
+    BossVfxMethods {}
 Object.assign(
   EmbervaultEngine.prototype,
   hudMethods,
@@ -882,4 +900,5 @@ Object.assign(
   frameMethods,
   enemiesMethods,
   treasureMethods,
+  bossVfxMethods,
 );

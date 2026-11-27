@@ -6,6 +6,7 @@ import type { RoomMember } from '../../../../shared/room';
 import { HeroClassId, UpgradeKind } from '../../classes';
 import { gridToWorld } from '../../dungeon';
 import { TREASURE_CONFIG } from '../../treasure';
+import { BOSS_SKILL_LIST } from '../data';
 import { EnemyEntity, MpHostState, SavedDungeonSnapshot } from '../entities';
 import { Hero } from '../../hero';
 
@@ -637,6 +638,7 @@ export const hostMpMethods = {
       const dur = e.bossStateDuration ?? 0;
       entry.push(dur > 0 ? q100(Math.min(1, (e.bossStateTimer ?? 0) / dur)) : 0);
       entry.push(q100(e.telegraphX ?? e.x), q100(e.telegraphZ ?? e.z), q100(e.telegraphRadius ?? 0));
+      entry.push(Math.max(0, BOSS_SKILL_LIST.indexOf(e.bossSkill ?? 'slam')));
     }
     return entry;
   },

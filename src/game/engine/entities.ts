@@ -1,6 +1,7 @@
 import type { CommandPayload, GameEvent, GameKind, HandbackPayload, LoadoutPayload } from '../../../shared/game';
 import type { RoomMember } from '../../../shared/room';
 import { HeroClassId, PetSpecies } from '../classes';
+import type { BossBeamSpec } from './bossVfx';
 import { BossActionType, BossSkillKind } from './data';
 import type { CharacterLoadout } from '../hero';
 import { BossTelegraphRig, EnemyRig, GateRig, PetRig, RelicLootRig, SpikeTrapRig, TownPortalRig, TreasureChestRig } from '../models';
@@ -178,13 +179,21 @@ export interface EnemyEntity {
   bossStreak?: number;
   /** Enraged (HP first dropped under 50%): faster and hits harder until it dies. */
   bossEnraged?: boolean;
-  /** nova_ring waves still to be fired after the centre hit: [remaining waves, seconds to next, origin x, origin z, base angle]. */
-  bossNovaWaves?: number;
-  bossNovaTimer?: number;
-  bossNovaX?: number;
-  bossNovaZ?: number;
+  /** Locked base angle of nova_ring laser beams (set at windup start so charge lines match burst). */
   bossNovaAngle?: number;
-  bossNovaDamage?: number;
+  /** Active nova_ring laser hit window (single hit per hero/pet across centre circle + all beams). */
+  bossNovaActiveBeams?: {
+    ox: number;
+    oz: number;
+    rad: number;
+    beams: BossBeamSpec[];
+    timer: number;
+    dmg: number;
+    hitIds: Set<string>;
+    dodgedChecked?: boolean;
+  };
+  /** Guest only: previous bossState so windup -> strike triggers burst VFX once. */
+  prevBossState?: BossAttackState;
   // Frost Mage debuffs
   /** Seconds of slow remaining. */
   slowTimer?: number;

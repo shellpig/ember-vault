@@ -2,7 +2,7 @@ import { EmbervaultEngine } from '../../engine';
 import type { DoorSnap, EnemyStatic, GameEvent, InputPayload, LevelPayload, PrivatePayload, SnapshotPayload, WorldSnap } from '../../../../shared/game';
 import { EF_BOSS_SHIFT, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
 import { HeroClassId, PetSpecies } from '../../classes';
-import { BOSS_CONFIGS, BOSS_ENRAGE, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
+import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_SKILL_LIST, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
 import { BreakableEntity, EnemyEntity, HeroProjectileEntity, LootEntity, MpGuestState, MpSample, ProjectileEntity } from '../entities';
 import { Hero } from '../../hero';
 import { BossTelegraphRig, applyEliteVisuals, createBossTelegraph, createEnemyModel, createHunterArrowMesh, createHunterPetModel, createIceSpikeMesh, createLootMesh, createProjectileMesh, createRelicLootMesh } from '../../models';
@@ -228,6 +228,7 @@ export const guestMpMethods = {
           p.e.telegraphX = (en[7] ?? 0) / 100;
           p.e.telegraphZ = (en[8] ?? 0) / 100;
           p.e.telegraphRadius = (en[9] ?? 0) / 100;
+          if (en[10] !== undefined) p.e.bossSkill = BOSS_SKILL_LIST[en[10]] ?? 'slam';
         }
       }
     }
@@ -486,6 +487,7 @@ export const guestMpMethods = {
     p.e.dead = true;
     p.e.rig.root.visible = false;
     if (p.e.telegraph) p.e.telegraph.group.visible = false;
+    this.hideBossWindupVfx(id);
     this.dynamicGroup.remove(p.e.rig.root);
     if (p.e.telegraph) this.dynamicGroup.remove(p.e.telegraph.group);
     g.enemies.delete(id);
@@ -875,19 +877,45 @@ export const guestMpMethods = {
       }
       if (e.rig.auraRing) e.rig.auraRing.rotation.z += dt * 1.1;
       if (e.isBoss) this.updateBossRageVisual(e, dt);
-      if (e.telegraph) {
-        // A windup without a telegraph radius is a basic attack: nothing on the ground
-        if (e.bossState === 'windup' && (e.telegraphRadius ?? 0) > 0) {
-          // bossStateTimer is the REMAINING fraction of the windup here: the circle fills up as it runs out
-          const prog = 1 - (e.bossStateTimer ?? 0);
-          e.telegraph.group.position.set(e.telegraphX ?? e.x, 0, e.telegraphZ ?? e.z);
-          e.telegraph.group.scale.setScalar(e.telegraphRadius ?? 3);
-          e.telegraph.fillDisk.scale.setScalar(0.12 + prog * 0.88);
-          e.telegraph.fillMat.opacity = 0.2 + prog * 0.34;
-          e.telegraph.ringMat.opacity = 0.72 + Math.sin(this.elapsed * 26) * 0.24;
-          e.telegraph.group.visible = true;
-        } else {
-          e.telegraph.group.visible = false;
+      if (e.isBoss) {
+        const skill = e.bossSkill ?? 'slam';
+        const tx = e.telegraphX ?? e.x;
+        const tz = e.telegraphZ ?? e.z;
+        const rad = e.telegraphRadius ?? 0;
+
+        // Trigger burst VFX once on windup -> strike transition
+        if (e.prevBossState === 'windup' && e.bossState === 'strike' && rad > 0 && isFloorBoss(e.kind)) {
+          const cfg = BOSS_CONFIGS[e.kind];
+          this.hideBossWindupVfx(e.id);
+          if (skill === 'slam') {
+            this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor);
+          } else if (skill === 'nova_ring') {
+            const beams = this.computeNovaBeams(tx, tz, e.facing);
+            this.spawnBossNovaLaserVfx(tx, tz, rad, beams, cfg.telegraphColor);
+          }
+        }
+        e.prevBossState = e.bossState;
+
+        if (e.telegraph) {
+          // A windup without a telegraph radius is a basic attack: nothing on the ground
+          if (e.bossState === 'windup' && rad > 0) {
+            // bossStateTimer is the REMAINING fraction of the windup here: the circle fills up as it runs out
+            const prog = 1 - (e.bossStateTimer ?? 0);
+            const customWindup = this.updateBossWindupVfx(e, skill, tx, tz, rad, prog, e.facing);
+            if (customWindup) {
+              e.telegraph.group.visible = false;
+            } else {
+              e.telegraph.group.position.set(tx, 0, tz);
+              e.telegraph.group.scale.setScalar(rad);
+              e.telegraph.fillDisk.scale.setScalar(0.12 + prog * 0.88);
+              e.telegraph.fillMat.opacity = 0.2 + prog * 0.34;
+              e.telegraph.ringMat.opacity = 0.72 + Math.sin(this.elapsed * 26) * 0.24;
+              e.telegraph.group.visible = true;
+            }
+          } else {
+            e.telegraph.group.visible = false;
+            this.hideBossWindupVfx(e.id);
+          }
         }
       }
     }

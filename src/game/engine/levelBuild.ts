@@ -14,6 +14,7 @@ export const levelBuildMethods = {
    * textures, entities and the per-level bits of every hero's AI. The town is untouched (see clearTown).
    */
   clearLevel(this: EmbervaultEngine): void {
+    this.clearBossVfx();
     this.disposeGroupContents(this.levelGroup);
     this.disposeGroupContents(this.dynamicGroup);
     this.disposeGroupContents(this.debrisGroup);
