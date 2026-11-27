@@ -77,6 +77,8 @@ export interface HeroAiState {
   unstuckPath: GridCell[];
   currentTargetId: number | null;
   unstuckAttempts: number;
+  /** Bot only: drifted too far from the leader, so it ignores enemies until it has regrouped. */
+  regrouping: boolean;
   skipEnemyUntil: Map<number, number>;
   /** Mage auto-pilot is waiting for the shield to refill (set below 60%, cleared when full). */
   mageRecharging: boolean;
@@ -250,6 +252,7 @@ export class Hero {
     unstuckPath: [],
     currentTargetId: null,
     unstuckAttempts: 0,
+    regrouping: false,
     skipEnemyUntil: new Map<number, number>(),
     mageRecharging: false,
     upgradeCooldown: 0,

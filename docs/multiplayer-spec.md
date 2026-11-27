@@ -312,6 +312,7 @@ Room DO 不懂遊戲內容，只做轉發（`relay`）＋把房間標記為「�
   - 遺物：複製玩家裝備中的遺物，所有**數值加成**（含套裝件數加成）乘 `BOT_RELIC_SCALE = 0.8`（`Hero.relicScale` → `scaleRelicSummary()`）；`maxHp`、`damageReduction`、`lifeOnKill`、`thorns` 四個固定值四捨五入為整數。**無法縮放的質性效果**（傳說遺物特效 `uniqueEffects`、四件套光環）照常生效。
   - 同步：引擎每 0.5 秒比對玩家的升級總數與裝備遺物 id，變動（祭壇購買、換裝、進出城鎮）即重算所有 bot，最大血量增加的部分當作治療。
   - bot 永遠不存檔、不打 API、不開房；怪物依人數縮放照舊把 bot 算進 n。
+  - 歸隊：bot 與玩家距離 > 7.5（`BOT_REGROUP_DIST`）就放棄目標、優先走回玩家身邊，回到 5 以內（`BOT_REGROUP_DONE_DIST`）才重新參戰；快到螢幕邊緣（NDC 0.9，`COMPANION_EDGE_NDC`）時直接瞬移回玩家旁。
 
 **P4-C 實作備註**
 - 城鎮與地城是同一個 `THREE.Scene` 內的兩組 Group（`townGroup` vs `levelGroup`／`dynamicGroup`／`debrisGroup`），只有本地英雄所在那組 `visible`，另一組完全不渲染（共用燈光、粒子池、英雄模型與已編譯的 shader）。引擎的「目前關卡欄位」（`dungeon`、`enemies`、`lightProps`…）打包成 `LevelCtx`；本地英雄在城鎮時地城的那組欄位停放在 `dungeonCtx`，背景模擬時暫時換進來（`runDungeonBackground`），模擬期間 HUD、粒子、音效、浮動文字、鏡頭一律不動（`bgSim`）。城鎮每次進入時重建、離開時釋放（純本機）。

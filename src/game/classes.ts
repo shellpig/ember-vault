@@ -249,6 +249,14 @@ export function getHunterPetMaxHp(depth: number): number {
 export const MAX_BOTS = 3;
 /** Fraction of the player's numeric relic bonuses that a bot receives. */
 export const BOT_RELIC_SCALE = 0.8;
+/** A bot farther than this (world units) from the leader drops its fight and walks back. */
+export const BOT_REGROUP_DIST = 7.5;
+/** ...and only resumes fighting once it is back within this distance. */
+export const BOT_REGROUP_DONE_DIST = 5.0;
+/** Bots and pets warp beside their leader/owner once they reach this fraction of the screen half-size (NDC). */
+export const COMPANION_EDGE_NDC = 0.9;
+/** Distance fallback for the same warp when the leader/owner is not the camera's hero (e.g. a teammate's pet). */
+export const COMPANION_WARP_DIST = 12;
 
 /** Altar upgrade tracks of each class (same options and caps the Altar of Ascension offers), in display order. */
 export const CLASS_UPGRADE_OPTIONS: Record<HeroClassId, ReadonlyArray<{ key: keyof CharacterUpgrades; max: number }>> = {

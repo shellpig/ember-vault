@@ -141,6 +141,10 @@ import {
   UpgradeOptionView,
   WARRIOR,
   BOT_RELIC_SCALE,
+  BOT_REGROUP_DIST,
+  BOT_REGROUP_DONE_DIST,
+  COMPANION_EDGE_NDC,
+  COMPANION_WARP_DIST,
   MAX_BOTS,
   distributeUpgradePoints,
   getHunterPetMaxHp,
@@ -6440,8 +6444,8 @@ export class EmbervaultEngine {
       let moveX = 0;
       let moveZ = 0;
 
-      if (ownerDist > HUNTER.petTeleportDist) {
-        // Teleport right next to owner
+      if (ownerDist > HUNTER.petTeleportDist || this.isCompanionTooFar(owner, pet.x, pet.z)) {
+        // Teleport right next to owner (also once it drifts to the screen edge, e.g. snagged behind a wall)
         pet.x = owner.x + (Math.random() - 0.5) * 0.8;
         pet.z = owner.z + (Math.random() - 0.5) * 0.8;
         if (!this.canMoveTo(pet.x, pet.z, 0.45)) {
@@ -6463,7 +6467,7 @@ export class EmbervaultEngine {
           if (e.dead) continue;
           const dPet = Math.hypot(e.x - pet.x, e.z - pet.z);
           const dOwner = Math.hypot(e.x - owner.x, e.z - owner.z);
-          if (dPet < bestD && dOwner < HUNTER.petLeashReturnDist) {
+          if (dPet < bestD && dOwner < HUNTER.petLeashReturnDist && !this.isCompanionTooFar(owner, e.x, e.z)) {
             bestD = dPet;
             target = e;
           }
@@ -8809,6 +8813,26 @@ export class EmbervaultEngine {
     const rescueMove = this.aiRescueStep(dt);
     if (rescueMove) return rescueMove;
 
+    // 1b-3. Bots that drifted away from the leader drop the fight and walk back first (hysteresis: resume fighting
+    //       only once they are close again)
+    if (this.hero.isBot) {
+      const me = this.hero;
+      const leader = this.isAwayMode(me) && this.awayAnchor ? this.awayAnchor : this.localHero;
+      const d = Math.hypot(leader.x - me.x, leader.z - me.z);
+      if (me.ai.regrouping) {
+        if (d <= BOT_REGROUP_DONE_DIST) me.ai.regrouping = false;
+      } else if (d > BOT_REGROUP_DIST) {
+        me.ai.regrouping = true;
+        me.ai.combatPath = [];
+        me.ai.currentTargetId = null;
+      }
+      if (me.ai.regrouping) {
+        const step = this.aiFollowLeader(dt);
+        me.ai.status = 'Regrouping';
+        return step;
+      }
+    }
+
     // 1c. Active Unstuck Detour: commit to breaking free from a pillar/corner deadlock before re-engaging
     if (this.hero.ai.unstuckTimer > 0) {
       this.hero.ai.unstuckTimer = Math.max(0, this.hero.ai.unstuckTimer - dt);
@@ -9550,6 +9574,18 @@ export class EmbervaultEngine {
     return { moveX: dx / bestD, moveZ: dz / bestD };
   }
 
+  /**
+   * True when a companion (bot or pet) at (x, z) is far enough from its leader/owner to be warped back: near the
+   * screen edge when the leader is the camera's hero, otherwise beyond COMPANION_WARP_DIST.
+   */
+  private isCompanionTooFar(leader: { x: number; z: number }, x: number, z: number): boolean {
+    const d = Math.hypot(x - leader.x, z - leader.z);
+    if (d < 4) return false;
+    if (leader !== this.localHero || this.inTown) return d > COMPANION_WARP_DIST;
+    _projVec.set(x, 0.6, z).project(this.camera);
+    return Math.abs(_projVec.x) > COMPANION_EDGE_NDC || Math.abs(_projVec.y) > COMPANION_EDGE_NDC;
+  }
+
   /** Bot while the local hero is in town (spec §3.4): wait at the post the local hero left from. */
   private isAwayMode(me: Hero): boolean {
     return me.isBot && this.localHero.inTown;
@@ -9577,8 +9613,8 @@ export class EmbervaultEngine {
     const dist = Math.hypot(dx, dz);
     // Waiting bots stand spread out within ~3 of the post
     const slot = away ? 0.9 + (me.botIndex % 3) * 0.6 : 1.8 + (me.botIndex % 3) * 0.9;
-    if (dist > 36) {
-      // Hopelessly separated (e.g. snagged behind the gate): catch up instantly
+    if (away ? dist > 36 : this.isCompanionTooFar(leader, me.x, me.z)) {
+      // Separated (snagged behind a wall / the gate, or about to leave the screen): catch up instantly
       this.warpHeroNear(me, leader.x, leader.z, me.botIndex - 1);
       return { moveX: 0, moveZ: 0 };
     }
