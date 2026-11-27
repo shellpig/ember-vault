@@ -1374,33 +1374,21 @@ export default function App() {
           })()}
         </div>
 
-        {/* Hunter Pet Companion Status Card (below top-left player panel) */}
+        {/* Hunter pet: compact row (same style as the teammate rows below), keeps the animal icon */}
         {!hud.inTown && hud.pet && (
           <div
-            className="mt-2 bg-[#0c0e14]/90 border border-[#b85b3a]/80 px-3 py-2 shadow-[0_6px_18px_rgba(0,0,0,0.6)] min-w-[238px]"
+            className="mt-1.5 w-1/2 min-w-[190px] bg-[#0c0e14]/85 border border-[#b85b3a]/70 px-1.5 py-1 font-hud text-[10px] leading-none shadow-[0_3px_10px_rgba(0,0,0,0.55)]"
             aria-label={`Pet ${hud.pet.name}, HP ${hud.pet.hp} of ${hud.pet.maxHp}`}
+            title={`${hud.pet.name} · ${hud.pet.hp} / ${hud.pet.maxHp} HP${
+              hud.pet.buffRemaining > 0 ? ` · 狂野激勵 +20% ${hud.pet.buffRemaining.toFixed(1)}s` : ''
+            }`}
           >
-            <div className="flex items-center justify-between gap-2 mb-1.5">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-sm leading-none" aria-hidden="true">
-                  {hud.pet.species === 'bear' ? '🐻' : hud.pet.species === 'chocobo' ? '🐥' : '🐺'}
-                </span>
-                <span className="font-display text-xs font-bold tracking-[0.1em] text-[#ffd6a5] truncate">
-                  {hud.pet.name}
-                </span>
-              </div>
-              {hud.pet.buffRemaining > 0 && (
-                <div
-                  title="狂野激勵：攻擊 / 攻速 / 防禦 +20%"
-                  className="flex items-center gap-1 px-1.5 py-0.5 border border-[#ff9f43]/85 bg-[#2d1a0b] text-[#ffd166] font-hud text-[10px] font-bold tabular-nums shadow-[0_0_10px_rgba(255,159,67,0.35)] whitespace-nowrap"
-                >
-                  <Zap className="w-3 h-3 text-[#ff9f43]" />
-                  <span>+20% {hud.pet.buffRemaining.toFixed(1)}s</span>
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1 h-2 bg-[#1a161c] border border-[#6b4432] overflow-hidden">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[12px] leading-none shrink-0" aria-hidden="true">
+                {hud.pet.species === 'bear' ? '🐻' : hud.pet.species === 'chocobo' ? '🐥' : '🐺'}
+              </span>
+              <span className="max-w-[72px] truncate font-semibold text-[#ffd6a5]">{hud.pet.name}</span>
+              <div className="flex-1 min-w-[40px] h-1.5 bg-[#1a161c] border border-[#6b4432] overflow-hidden">
                 <div
                   className={`h-full bg-gradient-to-r from-[#2e9e5b] via-[#4cd97b] to-[#8ff5ad] transition-all duration-150 ${
                     hud.pet.regenerating ? 'animate-pulse' : ''
@@ -1410,9 +1398,12 @@ export default function App() {
                   }}
                 />
               </div>
-              <span className="min-w-[62px] shrink-0 text-right font-hud text-[11px] font-semibold text-[#d9f7e2] tabular-nums whitespace-nowrap">
-                {hud.pet.hp} / {hud.pet.maxHp}
-              </span>
+              {hud.pet.buffRemaining > 0 && (
+                <span className="shrink-0 flex items-center gap-0.5 text-[#ffd166] tabular-nums">
+                  <Zap className="w-2.5 h-2.5 text-[#ff9f43]" />
+                  {hud.pet.buffRemaining.toFixed(1)}s
+                </span>
+              )}
             </div>
           </div>
         )}
