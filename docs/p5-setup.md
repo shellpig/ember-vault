@@ -156,3 +156,8 @@ P5-A 的用量估算：4 人房間，每人每 5 秒 1 則 ping ≈ 每小時 4 
 - 沒有自動重連：斷線就提示並回大廳（P7 處理）。
 - 房主離開、關分頁或斷線 = 房間結束，沒有房主轉移。
 - 一個帳號可以連續建立很多空房間（每個 2 分鐘後被 alarm 清掉）。目前沒有建房頻率限制，朋友間使用可接受；公開使用前需要加。
+
+### 寶箱房升級（migration 0003）
+
+1. `npm run db:migrate:remote`（新的 D1 migration `0003_treasure_pity.sql`，`characters.treasure_pity` 欄位）。**要在合併 `main`（新 Pages 上線）之前跑**：新 Pages 的存檔 UPDATE 會寫這個欄位，欄位不存在會存檔失敗。
+2. 部署 Pages（合併 PR）。**不需要 `npm run deploy:room`**：Room DO 只轉送，協定只新增選用欄位，`workers/room`、`shared/room.ts` 都沒有改動。交易 SQL 只動 gold／bag／stash，不影響保底計數。

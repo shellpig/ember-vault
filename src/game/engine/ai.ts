@@ -5,6 +5,7 @@ import { BOSS_AI, BOSS_VOLLEY, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, EnemyEntity, LootEntity } from './entities';
 import { _projVec } from './scratch';
 import { Hero } from '../hero';
+import { TREASURE_CONFIG } from '../treasure';
 import { DungeonData } from '../types';
 
 export const aiMethods = {
@@ -853,6 +854,10 @@ export const aiMethods = {
       return { moveX: dirX, moveZ: dirZ };
     }
 
+    // 4a-1. Treasure room: with no threat around, walk to every discovered closed chest and open it
+    const chestStep = this.aiTreasureStep(dt);
+    if (chestStep) return chestStep;
+
     // 4a-2. Auto-Heal at any discovered Healing Sanctum (Rune Well) whenever HP is not full
     if (this.hero.hp < this.hero.getEffectiveMaxHp()) {
       let bestRune: AnimatedLightProp | null = null;
@@ -1164,6 +1169,72 @@ export const aiMethods = {
     }
 
     return { moveX: 0, moveZ: 0 };
+  },
+
+  /**
+   * Step 4a-1 of the auto-pilot (the local hero only, never a bot): once a treasure chest has been discovered (its tile is on
+   * the minimap) and no live monster is near the hero or the chest, walk there and open it, one chest after the other.
+   * Never runs during a fight: the enemy steps above return first, and a monster close to the hero or the chest vetoes it.
+   */
+  aiTreasureStep(this: EmbervaultEngine, dt: number): { moveX: number; moveZ: number } | null {
+    const t = this.dungeon.treasure;
+    const me = this.hero;
+    if (!t || me.isBot || me.isRemote || me.isDead) return null;
+    let best = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < t.chests.length; i++) {
+      const c = t.chests[i];
+      const ent = this.treasureRigs[i];
+      if (c.opened || !ent || !this.dungeon.explored[c.gz]?.[c.gx]) continue;
+      const d = Math.hypot(ent.x - me.x, ent.z - me.z);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best < 0) return null;
+    const ent = this.treasureRigs[best];
+    const threat = TREASURE_CONFIG.autoThreatRange;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      if (Math.hypot(e.x - me.x, e.z - me.z) < threat || Math.hypot(e.x - ent.x, e.z - ent.z) < threat) return null;
+    }
+    const ai = me.ai;
+    if (bestD <= TREASURE_CONFIG.autoOpenRange) {
+      ai.status = 'Opening Treasure';
+      ai.progressAnchorX = me.x;
+      ai.progressAnchorZ = me.z;
+      ai.noProgressTimer = 0;
+      ai.stuckTimer = 0;
+      ai.stuckCount = 0;
+      ai.lastCheckX = me.x;
+      ai.lastCheckZ = me.z;
+      this.useNearbyTreasureChest(TREASURE_CONFIG.autoOpenRange);
+      return { moveX: 0, moveZ: 0 };
+    }
+    ai.status = 'Seeking Treasure';
+    const dx = ent.x - me.x;
+    const dz = ent.z - me.z;
+    if (ai.forcePathTimer <= 0 && hasLineOfSight(this.dungeon, me.x, me.z, ent.x, ent.z, this.doorUnlocked, 0.4)) {
+      const dirX = dx / (bestD || 1);
+      const dirZ = dz / (bestD || 1);
+      this.tryAutoTravelDash(dirX, dirZ, bestD);
+      return { moveX: dirX, moveZ: dirZ };
+    }
+    const goal = t.chests[best];
+    ai.repathTimer -= dt;
+    const last = ai.path[ai.path.length - 1];
+    if (ai.path.length === 0 || ai.repathTimer <= 0 || !last || last.gx !== goal.gx || last.gz !== goal.gz) {
+      ai.repathTimer = 0.65;
+      ai.path = this.buildSafeGridPath(goal.gx, goal.gz);
+    }
+    const step = this.followGridPath(ai.path);
+    if (step) {
+      const dashVec = this.getPathDashDirection(ai.path, step);
+      this.tryAutoTravelDash(dashVec.moveX, dashVec.moveZ, dashVec.distToGoal);
+      return step;
+    }
+    return null;
   },
 
   /**

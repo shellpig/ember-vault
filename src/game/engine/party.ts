@@ -61,6 +61,7 @@ export const partyMethods = {
       hasKey: this.hasKey,
       doorUnlocked: this.doorUnlocked,
       heroPortalRigs: new Map(),
+      treasureRigs: [],
     };
   },
 
@@ -90,6 +91,7 @@ export const partyMethods = {
       hasKey: this.hasKey,
       doorUnlocked: this.doorUnlocked,
       heroPortalRigs: this.heroPortalRigs,
+      treasureRigs: this.treasureRigs,
     };
   },
 
@@ -118,6 +120,7 @@ export const partyMethods = {
     this.hasKey = c.hasKey;
     this.doorUnlocked = c.doorUnlocked;
     this.heroPortalRigs = c.heroPortalRigs;
+    this.treasureRigs = c.treasureRigs;
   },
 
   /** Shows the group set of the level the local hero is in (the other one is not rendered at all). */

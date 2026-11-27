@@ -8,6 +8,15 @@ import { RelicDropSource, RelicItem, evaluateRelicLoadoutScore, getRarityColorHe
 import { EnemyKind, FloatingLabelData } from '../types';
 import * as THREE from 'three';
 
+/** What kind of monster a drop is for (see `dropEnemyLoot`). */
+export interface EnemyLootProfile {
+  guardian: boolean;
+  elite: boolean;
+  swarm: boolean;
+  /** Special (named) elite: every drop chance and the coin count scale x1.2. */
+  special: boolean;
+}
+
 export const lootMethods = {
   breakProp(this: EmbervaultEngine, br: BreakableEntity): void {
     if (this.mpGuestDungeon()) {
@@ -125,24 +134,11 @@ export const lootMethods = {
 
       // Boss Treasure Hoard: 12 high-value bouncing gold coins (x1.5) scaled +6.5%/floor + Healing Elixir + Guaranteed Boss Relics
       // (every hero gets their own hoard)
-      const goldScale = this.getDepthGoldScale();
       const bossKiller = this.hero;
       for (const h of this.heroes) {
         if (h.inTown) continue;
         this.setActor(h);
-        for (let i = 0; i < BOSS_LOOT.coinCount; i++) {
-          const a = (i / BOSS_LOOT.coinCount) * Math.PI * 2 + Math.random() * 0.3;
-          const r = 0.35 + Math.random() * 1.05;
-          const baseBossCoin = 10 + Math.floor(Math.random() * 5);
-          this.spawnLoot(
-            enemy.x + Math.cos(a) * r,
-            enemy.z + Math.sin(a) * r,
-            'gold',
-            Math.max(10, Math.round(baseBossCoin * goldScale * BOSS_LOOT.goldMult))
-          );
-        }
-        this.spawnLoot(enemy.x, enemy.z, 'potion');
-        this.spawnRelicDrops(enemy.x, enemy.z, 'boss');
+        this.dropBossHoard(enemy.x, enemy.z);
       }
       this.setActor(bossKiller);
       if (this.hero.relicStats.lifeOnKill > 0) {
@@ -328,52 +324,76 @@ export const lootMethods = {
       this.emitFloatingText(enemy.x, 1.9, enemy.z, msg, 'info');
     }
 
-    const isSwarm = isSwarmEnemy(enemy.kind);
-    const specialDropMult = enemy.isSpecialElite ? 1.2 : 1;
+    const lootProfile: EnemyLootProfile = {
+      guardian: isGuardianEnemy(enemy.kind),
+      elite: enemy.isElite,
+      swarm: isSwarmEnemy(enemy.kind),
+      special: Boolean(enemy.isSpecialElite),
+    };
     // Every hero rolls their own drops (spec §5.2); the killer is the actor again afterwards
     const killer = this.hero;
     for (const h of this.heroes) {
       if (h.inTown) continue;
       this.setActor(h);
-      const extraCoins =
-        (this.hero.hasSet4pc('syndicate') ? 1 : 0) +
-        (this.hero.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0) +
-        (enemy.isElite && this.hero.hasUnique('starforged_treasure_sense') && Math.random() < 0.25 ? 2 : 0);
-      const rawCoinDrops =
-        ((isGuardianEnemy(enemy.kind) ? 3 : enemy.isElite ? 3 : isSwarm ? 0.65 : 1) + extraCoins) *
-        specialDropMult;
-      const coinDrops =
-        Math.floor(rawCoinDrops) + (Math.random() < rawCoinDrops - Math.floor(rawCoinDrops) ? 1 : 0);
-      for (let i = 0; i < coinDrops; i++) {
-        this.spawnLoot(
-          enemy.x + (Math.random() - 0.5) * (enemy.isElite ? 0.85 : 0.5),
-          enemy.z + (Math.random() - 0.5) * (enemy.isElite ? 0.85 : 0.5),
-          'gold'
-        );
-      }
-      const dropMult = 1 + this.hero.relicStats.dropRatePct / 100;
-      const basePotionChance = isGuardianEnemy(enemy.kind)
-        ? 0.5
-        : enemy.isElite
-        ? 0.36
-        : isSwarm
-        ? 0.06
-        : 0.12;
-      if (Math.random() < Math.min(0.95, basePotionChance * dropMult * specialDropMult)) {
-        this.spawnLoot(enemy.x, enemy.z, 'potion');
-      }
-
-      // Relic drop rolls (Elites guaranteed >= 1, Special Named Elites scale drop rate x1.2, Swarms x0.5 per critter)
-      this.spawnRelicDrops(
-        enemy.x,
-        enemy.z,
-        enemy.isElite ? 'elite' : 'mob',
-        specialDropMult * (isSwarm && !enemy.isElite ? 0.5 : 1)
-      );
+      this.dropEnemyLoot(enemy.x, enemy.z, lootProfile);
     }
     this.setActor(killer);
 
     this.emitHud();
+  },
+
+  /**
+   * One monster's drop for the CURRENT actor (`this.hero`; the caller loops over the heroes): gold coins, an elixir and the
+   * relic rolls. Shared by `killEnemy` and the treasure chests so both use the very same numbers. `relics: false` skips the
+   * relic rolls (the "three elites' worth of gold and potions" chest).
+   */
+  dropEnemyLoot(this: EmbervaultEngine, x: number, z: number, p: EnemyLootProfile, relics = true): void {
+    const specialDropMult = p.special ? 1.2 : 1;
+    const extraCoins =
+      (this.hero.hasSet4pc('syndicate') ? 1 : 0) +
+      (this.hero.hasUnique('frying_pan_bonk') && Math.random() < 0.15 ? 1 : 0) +
+      (p.elite && this.hero.hasUnique('starforged_treasure_sense') && Math.random() < 0.25 ? 2 : 0);
+    const rawCoinDrops = ((p.guardian ? 3 : p.elite ? 3 : p.swarm ? 0.65 : 1) + extraCoins) * specialDropMult;
+    const coinDrops =
+      Math.floor(rawCoinDrops) + (Math.random() < rawCoinDrops - Math.floor(rawCoinDrops) ? 1 : 0);
+    for (let i = 0; i < coinDrops; i++) {
+      this.spawnLoot(
+        x + (Math.random() - 0.5) * (p.elite ? 0.85 : 0.5),
+        z + (Math.random() - 0.5) * (p.elite ? 0.85 : 0.5),
+        'gold'
+      );
+    }
+    const dropMult = 1 + this.hero.relicStats.dropRatePct / 100;
+    const basePotionChance = p.guardian ? 0.5 : p.elite ? 0.36 : p.swarm ? 0.06 : 0.12;
+    if (Math.random() < Math.min(0.95, basePotionChance * dropMult * specialDropMult)) {
+      this.spawnLoot(x, z, 'potion');
+    }
+
+    // Relic drop rolls (Elites guaranteed >= 1, Special Named Elites scale drop rate x1.2, Swarms x0.5 per critter)
+    if (relics) {
+      this.spawnRelicDrops(x, z, p.elite ? 'elite' : 'mob', specialDropMult * (p.swarm && !p.elite ? 0.5 : 1));
+    }
+  },
+
+  /**
+   * Boss Treasure Hoard for the CURRENT actor: 12 high-value bouncing coins (x1.5, scaled +6.5% per floor), a Healing Elixir
+   * and the guaranteed boss relics. Shared by the boss kill and the treasure chests.
+   */
+  dropBossHoard(this: EmbervaultEngine, x: number, z: number): void {
+    const goldScale = this.getDepthGoldScale();
+    for (let i = 0; i < BOSS_LOOT.coinCount; i++) {
+      const a = (i / BOSS_LOOT.coinCount) * Math.PI * 2 + Math.random() * 0.3;
+      const r = 0.35 + Math.random() * 1.05;
+      const baseBossCoin = 10 + Math.floor(Math.random() * 5);
+      this.spawnLoot(
+        x + Math.cos(a) * r,
+        z + Math.sin(a) * r,
+        'gold',
+        Math.max(10, Math.round(baseBossCoin * goldScale * BOSS_LOOT.goldMult))
+      );
+    }
+    this.spawnLoot(x, z, 'potion');
+    this.spawnRelicDrops(x, z, 'boss');
   },
 
   spawnRelicDrops(
@@ -390,6 +410,11 @@ export const lootMethods = {
       () => this.nextId++,
       extraDropMult
     );
+    this.spawnRelicItems(x, z, dropped);
+  },
+
+  /** Hands already rolled relics to the CURRENT actor: popped out of (x, z) for a player, straight into the bag for a bot. */
+  spawnRelicItems(this: EmbervaultEngine, x: number, z: number, dropped: RelicItem[]): void {
     if (this.hero.isBot) {
       // Bots do not render or walk over loot: the roll goes straight into their own bag
       for (const relic of dropped) this.grantBotRelic(relic);

@@ -63,6 +63,7 @@ import {
   SlashArc,
   SpikeInstance,
   StationRig,
+  TreasureChestEntity,
   WallOcclusionTile,
 } from './engine/entities';
 import {
@@ -89,6 +90,7 @@ import { movementMethods } from './engine/movement';
 import { aiMethods } from './engine/ai';
 import { frameMethods } from './engine/frame';
 import { enemiesMethods } from './engine/enemies';
+import { treasureMethods } from './engine/treasure';
 
 export type { CharacterLoadout } from './hero';
 export { STASH_CAP } from './hero';
@@ -188,6 +190,8 @@ export class EmbervaultEngine {
   rescueBars = new Map<string, { group: THREE.Group; fill: THREE.Mesh }>();
   /** Visual of each hero's dungeon portal (`hero.portal` holds the data). The town gate is `townPortalRig`. */
   heroPortalRigs = new Map<string, TownPortalRig>();
+  /** Treasure chest models of this floor, index-aligned with `dungeon.treasure.chests`. */
+  treasureRigs: TreasureChestEntity[] = [];
 
   // Persistent lights & hero
   heroLight!: THREE.PointLight;
@@ -404,7 +408,8 @@ export class EmbervaultEngine {
     if (this.hero.stashOpen) return;
     const code = e.code;
 
-    // Hotkey F: interact with the town stash chest; in the dungeon, revive downed teammate or step through a nearby portal
+    // Hotkey F: interact with the town stash chest; in the dungeon, revive downed teammate (hold), open a treasure chest, or
+    // step through a nearby portal. Priority: rescue > treasure chest > portal (the HUD prompts follow the same order).
     if (code === 'KeyF' && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (this.inTown && this.isHeroNearStash()) {
         e.preventDefault();
@@ -417,7 +422,10 @@ export class EmbervaultEngine {
             !other.inTown &&
             Math.hypot(other.x - this.hero.x, other.z - this.hero.z) <= 1.5
         );
-        if (!nearDowned && this.findNearbyDungeonPortal(this.hero)) {
+        if (!nearDowned && this.isHeroNearTreasureChest()) {
+          e.preventDefault();
+          if (!e.repeat) this.useNearbyTreasureChest();
+        } else if (!nearDowned && this.findNearbyDungeonPortal(this.hero)) {
           e.preventDefault();
           this.useDungeonPortal();
         } else {
@@ -622,8 +630,10 @@ export class EmbervaultEngine {
       // The host simulates monsters / loot / objectives; only my own spikes fly here
       this.updateHeroProjectiles(dt);
       this.mpGuestWorld(dt);
+      this.updateTreasure(dt);
     } else if (!this.inTown) {
       this.updateObjectives(dt);
+      this.updateTreasure(dt);
 
       // 5. Update Enemies, Pets & Projectiles
       this.updatePets(dt);
@@ -718,6 +728,7 @@ export class EmbervaultEngine {
     'playRelicEquip',
     'playRelicSell',
     'playRelicDrop',
+    'playTreasureFound',
     'playUpgrade',
     'playPlayerHurt',
     'playShieldBreak',
@@ -813,6 +824,7 @@ type MovementMethods = typeof movementMethods;
 type AiMethods = typeof aiMethods;
 type FrameMethods = typeof frameMethods;
 type EnemiesMethods = typeof enemiesMethods;
+type TreasureMethods = typeof treasureMethods;
 export interface EmbervaultEngine
   extends HudMethods,
     CoreMpMethods,
@@ -833,7 +845,8 @@ export interface EmbervaultEngine
     MovementMethods,
     AiMethods,
     FrameMethods,
-    EnemiesMethods {}
+    EnemiesMethods,
+    TreasureMethods {}
 Object.assign(
   EmbervaultEngine.prototype,
   hudMethods,
@@ -856,4 +869,5 @@ Object.assign(
   aiMethods,
   frameMethods,
   enemiesMethods,
+  treasureMethods,
 );

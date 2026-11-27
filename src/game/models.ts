@@ -5001,6 +5001,55 @@ export function createStashChest(glowMap: THREE.Texture): StashChestRig {
   return { root, lid, halo, glowRing };
 }
 
+export interface TreasureChestRig extends StashChestRig {
+  /** Emissive materials that stop glowing once the chest was opened. */
+  glowMats: THREE.MeshStandardMaterial[];
+}
+
+/**
+ * Dungeon treasure chest (docs/treasure-room-spec.md 6): the town stash chest, smaller, in darker wood, with a stronger
+ * golden glow. `lid.rotation.x` swings it open (the engine eases it to -1.15); an opened chest has `halo`, `glowRing` and
+ * `glowMats` switched off.
+ */
+export function createTreasureChest(glowMap: THREE.Texture): TreasureChestRig {
+  const rig = createStashChest(glowMap);
+  const recolor = new Map<number, number>([
+    [0x6b4126, 0x3d2415], // body wood
+    [0x4a2c19, 0x2b180d], // lid wood
+    [0x6f7480, 0x45414a], // plinth stone
+    [0x5b6070, 0x3d414d], // iron bands
+  ]);
+  const glowMats: THREE.MeshStandardMaterial[] = [];
+  rig.root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const mat = obj.material;
+    if (!(mat instanceof THREE.MeshStandardMaterial)) return;
+    const to = recolor.get(mat.color.getHex());
+    if (to !== undefined) mat.color.setHex(to);
+    if (mat.emissive.getHex() === 0xffa630) {
+      mat.emissiveIntensity = 1.9;
+      glowMats.push(mat);
+    }
+  });
+  // Gold trim along the lid and body rims so the chest reads as "treasure" from the iso camera
+  const trimMat = new THREE.MeshStandardMaterial({
+    color: 0xe2b248,
+    emissive: 0x9a6410,
+    emissiveIntensity: 0.9,
+    roughness: 0.34,
+    metalness: 0.8,
+  });
+  glowMats.push(trimMat);
+  for (const sz of [-0.55, 0.55]) {
+    const rim = new THREE.Mesh(new THREE.BoxGeometry(1.74, 0.07, 0.07), trimMat);
+    rim.position.set(0, 0.14 + 0.74, sz);
+    rig.root.add(rim);
+  }
+  rig.root.scale.setScalar(0.62);
+  (rig.glowRing.material as THREE.MeshBasicMaterial).opacity = 0.42;
+  return { ...rig, glowMats };
+}
+
 export function createTownHouse(
   variant: 'tavern' | 'cottage',
   glowMap: THREE.Texture

@@ -2,6 +2,7 @@ import type { EmbervaultEngine } from '../engine';
 import { TILE_SIZE, generateDungeon, gridToWorld, worldToGrid } from '../dungeon';
 import { BOSS_CONFIGS, getBossForDepth } from './data';
 import { SavedDungeonSnapshot } from './entities';
+import type { TreasureRoomData } from '../types';
 import { _camTarget, _color, _mat4, _pos, _quat, _scale } from './scratch';
 import { createAmbientDecorProp, createBrazier, createCrateProp, createKeyPedestal, createLockedGate, createPotionShop, createRuneWell, createSpikeTrap, createStairwell, createUpgradeAltar, createWallCapGeometries, createWallTorch } from '../models';
 import { createDungeonTextures } from '../textures';
@@ -39,6 +40,7 @@ export const levelBuildMethods = {
     this.gateRig = null;
     this.gateOpenProgress = 0;
     this.heroPortalRigs = new Map();
+    this.treasureRigs = [];
     this.wallOpaqueMeshes = [];
     this.wallFadeMeshes = [];
     this.capOpaqueMeshes = [];
@@ -64,7 +66,14 @@ export const levelBuildMethods = {
   buildLevel(
     this: EmbervaultEngine,
     depth: number,
-    options?: { savedSnapshot?: SavedDungeonSnapshot; tickBuffFloor?: boolean; mpSeed?: number; guest?: boolean }
+    options?: {
+      savedSnapshot?: SavedDungeonSnapshot;
+      tickBuffFloor?: boolean;
+      mpSeed?: number;
+      guest?: boolean;
+      /** Teammate client: the host's treasure room of this floor (`level` payload), adopted instead of rolling one. */
+      mpTreasure?: TreasureRoomData;
+    }
   ): void {
     // `bg`: a floor change that happens while the local hero is in town (a teammate took the stairs). The dungeon's
     // fields are swapped in for it, and nothing may touch the screen, the camera or the local hero.
@@ -81,7 +90,8 @@ export const levelBuildMethods = {
       h.maxDepthReached = depth;
       if (h === this.localHero) localDepthRaised = true;
     }
-    if (!bg && (!options?.savedSnapshot || localDepthRaised)) this.requestSave('floor');
+    // (the 'floor' save is requested below, after the treasure room roll: that roll moves the pity counter that is saved)
+    const saveFloor = !bg && (!options?.savedSnapshot || localDepthRaised);
 
     let buffExpired = false;
     for (const h of this.heroes) {
@@ -112,7 +122,11 @@ export const levelBuildMethods = {
       }
       // Room game teammates build the host's floor from its seed (everything static comes out of this generator)
       this.dungeon = generateDungeon(depth, options?.mpSeed);
+      // Treasure room: the host / single player rolls it (and moves the pity counter); a teammate adopts the host's result
+      if (options?.guest) this.adoptTreasureRoom(options.mpTreasure);
+      else this.rollTreasureRoom();
     }
+    if (saveFloor) this.requestSave('floor');
     const biome = this.dungeon.biome;
 
     // Update scene atmosphere to match biome (bright blue-silver sci-fi lighting for Alien Starship Deck!)
@@ -780,6 +794,9 @@ export const levelBuildMethods = {
         }
       }
     }
+
+    // 4c. Treasure room chests (docs/treasure-room-spec.md; none on most floors)
+    this.buildTreasureChests();
 
     // 5. Floating Golden Relic Key Pedestal
     {

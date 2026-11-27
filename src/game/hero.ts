@@ -1,3 +1,4 @@
+import { MAX_TREASURE_PITY } from '../../shared/character';
 import type { CharacterUpgrades } from '../../shared/character';
 import {
   FROST_MAGE,
@@ -23,6 +24,8 @@ export interface CharacterLoadout {
   bag: RelicItem[];
   /** Town stash (up to STASH_CAP relics). */
   stash: RelicItem[];
+  /** Treasure room pity counter: floors built in a row without a treasure room. Old saves / peers omit it (= 0). */
+  treasurePity?: number;
 }
 
 /** Stash capacity (mirrors MAX_STASH in shared/character.ts). */
@@ -199,6 +202,8 @@ export class Hero {
   /** Town stash contents (oldest deposit first). The stash belongs to the character, so it travels with the hero. */
   public stash: RelicItem[] = [];
   public stashOpen = false;
+  /** Treasure room pity: floors built in a row without a treasure room (persisted per character, spec docs/treasure-room-spec.md). */
+  public treasurePity = 0;
   public discoveredRelicIds = new Set<string>();
   public relicStats: RelicSummaryStats = computeRelicSummary([]);
   /** Multiplier applied to every numeric relic bonus (1 for players; bots run at BOT_RELIC_SCALE). */
@@ -300,6 +305,7 @@ export class Hero {
     this.relicBag = [];
     this.stash = [];
     this.stashOpen = false;
+    this.treasurePity = 0;
     this.discoveredRelicIds.clear();
     this.phantomCritTimer = 0;
     this.alchemistShieldTimer = 0;
@@ -328,6 +334,7 @@ export class Hero {
       equipped: this.equippedRelics.map((r) => ({ ...r })),
       bag: this.relicBag.map((r) => ({ ...r })),
       stash: this.stash.map((r) => ({ ...r })),
+      treasurePity: this.treasurePity,
     };
   }
 
@@ -611,6 +618,7 @@ export class Hero {
     this.equippedRelics = l.equipped.slice(0, 4).map((r) => ({ ...r }));
     this.relicBag = l.bag.slice(0, this.relicBagCap).map((r) => ({ ...r }));
     this.stash = (l.stash ?? []).slice(0, STASH_CAP).map((r) => ({ ...r }));
+    this.treasurePity = Math.max(0, Math.min(MAX_TREASURE_PITY, Math.floor(Number(l.treasurePity) || 0)));
     for (const r of [...this.equippedRelics, ...this.relicBag, ...this.stash]) {
       this.discoveredRelicIds.add(r.templateId);
     }

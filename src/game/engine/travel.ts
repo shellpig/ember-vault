@@ -535,6 +535,7 @@ export const travelMethods = {
       this.setupBots(loadout ?? null);
       this.buildLevel(firstDepth);
       this.loadingRun = false;
+      this.requestSave('floor'); // the first floor's treasure room roll moved the pity counter (checkpoints were off while loading)
     });
   },
 

@@ -119,6 +119,7 @@ export const hudMethods = {
       hasShopOnFloor: Boolean(this.dungeon.shopPos),
       inTown: this.inTown,
       nearPortal: this.isHeroNearPortal(),
+      nearChest: this.isHeroNearTreasureChest(),
       portalOptions: this.getTownPortalOptions(),
       dungeonRunning: this.inTown && this.dungeonCtx !== null,
       nearAngel: this.isHeroNearAngel(),
@@ -223,6 +224,7 @@ export const hudMethods = {
       shopX: this.dungeon.shopPos?.gx,
       shopZ: this.dungeon.shopPos?.gz,
       terrainTheme: this.dungeon.biome.terrainTheme,
+      chests: this.dungeon.treasure?.chests.map((c) => ({ x: c.gx, z: c.gz, opened: c.opened })),
       enemies: this.viewEnemies()
         .filter((e) => !e.dead)
         .map((e) => {

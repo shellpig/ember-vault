@@ -18,6 +18,7 @@ interface CharacterRow {
   equipped: string;
   bag: string;
   stash: string;
+  treasure_pity?: number | null;
   save_version: number;
   created_at: number;
   updated_at: number;
@@ -43,6 +44,7 @@ export function rowToSave(row: CharacterRow): CharacterSave {
     equipped: parseJson<RelicItem[]>(row.equipped, []),
     bag: parseJson<RelicItem[]>(row.bag, []),
     stash: parseJson<RelicItem[]>(row.stash, []),
+    treasure_pity: row.treasure_pity ?? 0,
     save_version: row.save_version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -66,7 +68,7 @@ export async function handleSave(request: Request, env: Env, accountId: string, 
   const res = await env.DB.prepare(
     `UPDATE characters
         SET gold = ?, max_depth = MAX(max_depth, ?), potions = ?, upgrades = ?, equipped = ?, bag = ?,
-            stash = COALESCE(?, stash), save_version = save_version + 1, updated_at = ?
+            stash = COALESCE(?, stash), treasure_pity = COALESCE(?, treasure_pity), save_version = save_version + 1, updated_at = ?
       WHERE id = ? AND account_id = ? AND save_version = ?`
   )
     .bind(
@@ -77,6 +79,7 @@ export async function handleSave(request: Request, env: Env, accountId: string, 
       JSON.stringify(s.equipped),
       JSON.stringify(s.bag),
       s.stash ? JSON.stringify(s.stash) : null,
+      s.treasurePity,
       nowSec(),
       id,
       accountId,

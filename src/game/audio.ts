@@ -359,6 +359,24 @@ export class DungeonAudio {
     notes.forEach((n, i) => this.playTone(n, 'square', now + i * 0.075, 0.2, 0.11));
   }
 
+  /** Treasure room discovered (local only): a short rising shimmer. */
+  public playTreasureFound(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    [587.33, 739.99, 880, 1174.66, 1479.98].forEach((n, i) => this.playTone(n, 'triangle', now + i * 0.07, 0.3, 0.1));
+  }
+
+  /** Treasure chest opened: creaking lid, then a bright coin chord. */
+  public playChestOpen(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    this.playTone(150, 'sawtooth', now, 0.22, 0.1);
+    this.playTone(210, 'sawtooth', now + 0.08, 0.2, 0.08);
+    this.playTone(783.99, 'sine', now + 0.2, 0.34, 0.13);
+    this.playTone(987.77, 'sine', now + 0.26, 0.34, 0.12);
+    this.playTone(1318.51, 'triangle', now + 0.32, 0.4, 0.12);
+  }
+
   public playDoorUnlock(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

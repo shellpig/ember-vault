@@ -5,6 +5,7 @@ import { ROOM_MAX_PLAYERS } from '../../../../shared/room';
 import type { RoomMember } from '../../../../shared/room';
 import { HeroClassId, UpgradeKind } from '../../classes';
 import { gridToWorld } from '../../dungeon';
+import { TREASURE_CONFIG } from '../../treasure';
 import { EnemyEntity, MpHostState, SavedDungeonSnapshot } from '../entities';
 import { Hero } from '../../hero';
 
@@ -323,6 +324,14 @@ export const hostMpMethods = {
         case 'death':
           if (h.isDead) this.mpHostSendToTown(h, true);
           break;
+        case 'chest': {
+          // Treasure chest: the host judges reach and state; everybody learns the result from the world snapshot
+          const ent = typeof cmd.i === 'number' ? this.treasureRigs[cmd.i] : undefined;
+          if (ent && !h.isDead && Math.hypot(ent.x - h.x, ent.z - h.z) <= TREASURE_CONFIG.hostOpenRange) {
+            this.openTreasureChest(cmd.i, h);
+          }
+          break;
+        }
       }
     } finally {
       this.setActor(prev);
@@ -488,6 +497,7 @@ export const hostMpMethods = {
       z: q100(o.z),
       ...(o.inTown ? { tw: 1 as const } : {}),
     }));
+    const treasure = this.dungeon.treasure;
     const payload: LevelPayload = {
       n: this.depth,
       seed: this.dungeon.genSeed ?? 0,
@@ -495,6 +505,9 @@ export const hostMpMethods = {
       snap,
       priv: this.mpPrivOf(h),
       ...(isNewFloor ? { fl: 1 as const } : {}),
+      ...(treasure
+        ? { tr: { r: treasure.roomId, c: treasure.chests.map((c): [number, number, 0 | 1] => [c.gx, c.gz, c.opened ? 1 : 0]) } }
+        : {}),
     };
     mp.send('level', payload, h.id);
   },
@@ -800,6 +813,8 @@ export const hostMpMethods = {
       ru: this.lightProps.filter((lp) => lp.kind === 'rune').flatMap((lp, i) => (lp.used ? [i] : [])),
       br: this.breakables.flatMap((b, i) => (b.broken ? [i] : [])),
     };
+    const chests = this.dungeon.treasure?.chests;
+    if (chests) world.tc = chests.flatMap((c, i) => (c.opened ? [i] : []));
     const worldSig = JSON.stringify(world);
     if (full || worldSig !== host.worldSig) {
       snap.w = world;
