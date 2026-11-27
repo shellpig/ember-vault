@@ -8,3 +8,6 @@ coverage/
 !.env.example
 .dev.vars
 .wrangler/
+
+# AI Studio reference assets (not used by the game)
+public/assets/aistudio/
