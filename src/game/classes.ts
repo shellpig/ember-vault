@@ -247,6 +247,23 @@ export function getHunterPetMaxHp(depth: number): number {
 // ---------------------------------------------------------------------------
 /** Most bot teammates a single-player run can have. */
 export const MAX_BOTS = 3;
+/** Random bot names (a few are deliberately silly). Keep them short: they sit on a nameplate and a compact HUD row. */
+export const BOT_NAMES: readonly string[] = [
+  '艾琳', '羅蘭', '凱爾', '席薇亞', '雷恩', '諾娃', '托爾', '芙蕾雅', '賽倫', '莉亞', '葛雷', '米菈',
+  '摸魚大師', '補刀仔', '路癡阿明', '躺平哥', '走位鬼才', '等等我', '手滑王', '泡麵仔', '肝帝', '撿垃圾的',
+  '隊友A', '不要丟下我', '只會跟', '阿嬤說不行',
+];
+
+/** Picks `count` distinct random bot names. */
+export function pickBotNames(count: number): string[] {
+  const pool = [...BOT_NAMES];
+  const out: string[] = [];
+  for (let i = 0; i < count && pool.length > 0; i++) {
+    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return out;
+}
+
 /** Fraction of the player's numeric relic bonuses that a bot receives. */
 export const BOT_RELIC_SCALE = 0.8;
 /** A bot farther than this (world units) from the leader drops its fight and walks back. */

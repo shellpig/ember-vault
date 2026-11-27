@@ -238,6 +238,20 @@ export interface RunSummary {
   slainBy: string;
 }
 
+/** A teammate row under the top-left player panel (single-player bots, or the other players of a room). */
+export interface CompanionHudInfo {
+  id: string;
+  name: string;
+  classId: HeroClassId;
+  level: number;
+  hp: number;
+  maxHp: number;
+  shield: number;
+  maxShield: number;
+  isDead: boolean;
+  inTown: boolean;
+}
+
 /** A hero entry of the party panel. */
 export interface PartyMemberInfo {
   id: string;
@@ -335,6 +349,8 @@ export interface HudState {
   upgradeOptions: UpgradeOptionView[];
   /** Active Hunter pet state (shown below the top-left HUD card), or null if none. */
   pet: PetHudInfo | null;
+  /** Bots (single player) or the other players (room), shown as compact rows under the player panel. */
+  companions: CompanionHudInfo[];
 }
 
 /** One selectable dungeon portal in the town gate menu (spec §3.1: any hero may use anybody's portal). */

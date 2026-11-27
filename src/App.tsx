@@ -222,6 +222,7 @@ const INITIAL_HUD: HudState = {
   mobilityName: '衝刺',
   upgradeOptions: [],
   pet: null,
+  companions: [],
 };
 
 const UPGRADE_ACCENT_STYLES: Record<
@@ -1413,6 +1414,56 @@ export default function App() {
                 {hud.pet.hp} / {hud.pet.maxHp}
               </span>
             </div>
+          </div>
+        )}
+
+        {/* Teammate rows: single-player bots or the other players of a room (compact: half the player panel's width) */}
+        {hud.companions.length > 0 && (
+          <div className="mt-1.5 w-1/2 min-w-[190px] flex flex-col gap-1">
+            {hud.companions.map((c) => {
+              const hpPct = Math.max(0, Math.min(100, (c.hp / Math.max(1, c.maxHp)) * 100));
+              const shPct = c.maxShield > 0 ? Math.max(0, Math.min(100, (c.shield / c.maxShield) * 100)) : 0;
+              return (
+                <div
+                  key={c.id}
+                  className={`bg-[#0c0e14]/85 border border-[#3a3328] px-1.5 py-1 font-hud text-[10px] leading-none shadow-[0_3px_10px_rgba(0,0,0,0.55)] ${
+                    c.isDead ? 'opacity-70' : ''
+                  }`}
+                  aria-label={`${c.name}, Level ${c.level}, HP ${c.hp} of ${c.maxHp}`}
+                  title={`${c.name} · LV ${c.level} · ${c.hp} / ${c.maxHp} HP${c.maxShield > 0 ? ` · 護盾 ${c.shield} / ${c.maxShield}` : ''}`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="w-1.5 h-1.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: HERO_CLASSES[c.classId].accentCss }}
+                      aria-hidden="true"
+                    />
+                    <span className="shrink-0 text-[#efd89c] tabular-nums">LV{c.level}</span>
+                    <span className="max-w-[72px] truncate font-semibold text-[#e7e2d6]">{c.name}</span>
+                    <div className="flex-1 min-w-[40px] flex flex-col gap-[2px]">
+                      <div className="h-1.5 bg-[#1a161c] border border-[#4a3a30] overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-150 ${
+                            c.isDead ? 'bg-[#5a5560]' : 'bg-gradient-to-r from-[#b8283b] to-[#f0566a]'
+                          }`}
+                          style={{ width: `${c.isDead ? 0 : hpPct}%` }}
+                        />
+                      </div>
+                      {c.maxShield > 0 && (
+                        <div className="h-1 bg-[#10161d] overflow-hidden">
+                          <div className="h-full bg-[#8fd8ff] transition-all duration-150" style={{ width: `${shPct}%` }} />
+                        </div>
+                      )}
+                    </div>
+                    {(c.isDead || c.inTown) && (
+                      <span className={`shrink-0 ${c.isDead ? 'text-[#ff8a98]' : 'text-[#8fd4ff]'}`}>
+                        {c.isDead ? '倒地' : '城鎮'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

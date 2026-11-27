@@ -312,6 +312,9 @@ Room DO 不懂遊戲內容，只做轉發（`relay`）＋把房間標記為「�
   - 遺物：複製玩家裝備中的遺物，所有**數值加成**（含套裝件數加成）乘 `BOT_RELIC_SCALE = 0.8`（`Hero.relicScale` → `scaleRelicSummary()`）；`maxHp`、`damageReduction`、`lifeOnKill`、`thorns` 四個固定值四捨五入為整數。**無法縮放的質性效果**（傳說遺物特效 `uniqueEffects`、四件套光環）照常生效。
   - 同步：引擎每 0.5 秒比對玩家的升級總數與裝備遺物 id，變動（祭壇購買、換裝、進出城鎮）即重算所有 bot，最大血量增加的部分當作治療。
   - bot 永遠不存檔、不打 API、不開房；怪物依人數縮放照舊把 bot 算進 n。
+  - 名字：每局從 `BOT_NAMES`（`classes.ts`，含部分搞笑名）隨機抽不重複的名字，顯示在頭頂名牌、傳送門與 HUD。
+  - 喝藥水：單人模式本地玩家喝藥水時，地城中存活且未滿血的 bot 也各回復同樣的量（任一 bot 受傷時即使玩家滿血也能喝）。
+  - HUD 隊友列：左上角玩家狀態板（與戰寵卡）下方，每位 bot（單人）或其他玩家（多人）一列精簡列：職業色點、LV、名字、血條（法師多一條細護盾條）、倒地／城鎮標記，寬度約為狀態板一半。多人時等級與最大護盾由房主快照 `HeroSnap` 尾端兩個選用欄位（`level`、`maxShield`）帶給隊友，舊客戶端忽略即可，Room DO 只轉送不解析，不需 `deploy:room`。
   - 歸隊：bot 與玩家距離 > 7.5（`BOT_REGROUP_DIST`）就放棄目標、優先走回玩家身邊，回到 5 以內（`BOT_REGROUP_DONE_DIST`）才重新參戰；快到螢幕邊緣（NDC 0.9，`COMPANION_EDGE_NDC`）時直接瞬移回玩家旁。
 
 **P4-C 實作備註**

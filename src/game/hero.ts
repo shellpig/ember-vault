@@ -104,8 +104,11 @@ export class Hero {
    * teammate's client it is a render-only puppet fed by snapshots. Never saved by this client.
    */
   public isRemote = false;
-  /** Nameplate text of a remote teammate (character name). */
+  /** Nameplate text of a remote teammate (character name) or a bot's random name. */
   public displayName = '';
+  /** Teammate puppet only: level / effective max shield reported by the host's snapshot (null = compute locally). */
+  public netLevel: number | null = null;
+  public netMaxShield: number | null = null;
 
   // Visual rig (owned by the hero; the engine adds it to the scene)
   public rig!: HeroRig;

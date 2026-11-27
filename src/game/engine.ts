@@ -148,6 +148,7 @@ import {
   MAX_BOTS,
   distributeUpgradePoints,
   getHunterPetMaxHp,
+  pickBotNames,
   sumUpgradeLevels,
 } from './classes';
 import {
@@ -1344,11 +1345,13 @@ export class EmbervaultEngine {
         classes = this.botClasses.slice(0, MAX_BOTS);
       }
     }
+    const botNames = pickBotNames(classes.length);
     for (let i = 0; i < classes.length; i++) {
       const classId = classes[i];
       const bot = new Hero(`bot-${i + 1}`);
       bot.isBot = true;
       bot.botIndex = i + 1;
+      bot.displayName = botNames[i] ?? `Bot ${i + 1}`;
       bot.rig = this.createHeroRigForClass(classId);
       bot.setAura = createHeroSetAura();
       bot.rig.root.add(bot.setAura.group);
@@ -4379,7 +4382,7 @@ export class EmbervaultEngine {
             : h.displayName
             ? `${h.displayName} 的傳送門`
             : h.isBot
-            ? `Bot ${h.botIndex} 的傳送門`
+            ? `${h.displayName || `Bot ${h.botIndex}`} 的傳送門`
             : '隊友的傳送門',
         isOwn: h === local,
         downed: h.isDead || (this.mp?.role === 'guest' && h !== local && this.mp.guest.partyState.get(h.id) === 2),
@@ -5179,7 +5182,12 @@ export class EmbervaultEngine {
 
   private usePotion(): void {
     const effMax = this.hero.getEffectiveMaxHp();
-    if (this.hero.isDead || this.hero.potions <= 0 || this.hero.hp >= effMax) return;
+    // Single player: the local hero's elixir also heals the bot teammates, so drinking is allowed while any of them is hurt
+    const healsBots = !this.mp && this.hero === this.localHero && !this.hero.isBot;
+    const hurtBots = healsBots
+      ? this.heroes.filter((h) => h.isBot && !h.isDead && !h.inTown && h.hp < h.getEffectiveMaxHp())
+      : [];
+    if (this.hero.isDead || this.hero.potions <= 0 || (this.hero.hp >= effMax && hurtBots.length === 0)) return;
     if (this.mpGuestDungeon()) {
       // The host drinks it for me (HP / potions come back with its next snapshot / private state)
       this.mpQueueAction(ACT_POTION);
@@ -5203,6 +5211,12 @@ export class EmbervaultEngine {
       noodleBonus;
     const heal = Math.min(baseHeal, effMax - this.hero.hp);
     this.hero.hp = Math.min(effMax, this.hero.hp + heal);
+    for (const b of hurtBots) {
+      const bMax = b.getEffectiveMaxHp();
+      const bHeal = Math.min(baseHeal, bMax - b.hp);
+      b.hp = Math.min(bMax, b.hp + bHeal);
+      if (bHeal > 0) this.emitFloatingText(b.x, 1.8, b.z, `+${Math.round(bHeal)} HP`, 'heal');
+    }
     this.audio.playPotion();
     this.pushBanner(
       savedFlask ? '秘藥奇蹟 · 不耗藥水!' : noodleBonus > 0 ? '泡麵加湯回復!' : 'ELIXIR USED'
@@ -8086,6 +8100,20 @@ export class EmbervaultEngine {
           regenerating: p.hp < p.maxHp && p.timeSinceDamaged >= HUNTER.petRegenDelay,
         };
       })(),
+      companions: this.heroes
+        .filter((h) => h !== lh && (h.isBot || h.isRemote))
+        .map((h) => ({
+          id: h.id,
+          name: h.displayName || (h.isBot ? `Bot ${h.botIndex}` : this.mp ? this.mpNameOf(h.id) : '隊友'),
+          classId: h.classId,
+          level: h.netLevel ?? 1 + h.getTotalUpgradeLevel(),
+          hp: Math.max(0, Math.round(h.hp)),
+          maxHp: Math.max(1, Math.round(h.getEffectiveMaxHp())),
+          shield: Math.max(0, Math.round(h.shield)),
+          maxShield: Math.round(h.netMaxShield ?? h.getEffectiveMaxShield()),
+          isDead: h.isDead,
+          inTown: h.inTown,
+        })),
     });
   }
 
@@ -13159,6 +13187,8 @@ export class EmbervaultEngine {
         0,
         h.rescueTargetId ?? '',
         q100(h.rescueProgress),
+        1 + h.getTotalUpgradeLevel(),
+        Math.round(h.getEffectiveMaxShield()),
       ] as HeroSnap;
     });
     const snap: SnapshotPayload = { ts: Math.round(now), d: this.depth, el: q100(this.elapsed), hs };
@@ -13513,6 +13543,8 @@ export class EmbervaultEngine {
       h.hp = e[4];
       h.maxHp = e[5];
       h.shield = e[6];
+      if (e[15] !== undefined) h.netLevel = e[15];
+      if (e[16] !== undefined) h.netMaxShield = e[16];
       h.hitFlash = (flags & HF_HIT) !== 0 ? 0.12 : h.hitFlash;
       h.hitShieldOnly = (flags & HF_HIT_SHIELD) !== 0;
       if (e[8] > 0 && h.attackAnim <= 0.02) h.attackAnim = e[8] / 100;

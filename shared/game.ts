@@ -141,9 +141,10 @@ export interface LevelPayload {
 /**
  * Hero entry of a snapshot:
  * [id, x100, z100, facing100, hp, maxHp, shield, flags, attackAnim100, pommelAnim100, echoT, echoAgeMs,
- *  rescueProgressOnMe100, myRescueTargetId, myRescueProgress100]
+ *  rescueProgressOnMe100, myRescueTargetId, myRescueProgress100, level?, maxShield?]
+ * The last two are optional (added later; older clients ignore them) and feed the teammate rows of the HUD.
  */
-export type HeroSnap = [string, number, number, number, number, number, number, number, number, number, number, number, number, string, number];
+export type HeroSnap = [string, number, number, number, number, number, number, number, number, number, number, number, number, string, number, number?, number?];
 export const HF_DEAD = 1;
 export const HF_TOWN = 2;
 export const HF_DASH = 4;
