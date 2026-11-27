@@ -370,7 +370,7 @@ export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
   slam: { windup: 0.8, strike: 0.1, damage: 1.5, range: null, radius: null },
   nova_ring: { windup: 0.6, strike: 0.1, damage: 0.9, range: 8.5, radius: null },
   charge_slam: { windup: 0.7, strike: 0.3, damage: 1.25, range: 5.4, needsLos: true, radius: 2.25 },
-  ranged_volley: { windup: 0.5, strike: 0.1, damage: 0.9, range: 7.8, needsLos: true, radius: 1.45 },
+  ranged_volley: { windup: 0.6, strike: 0.1, damage: 0.75, range: 7.8, needsLos: true, radius: 1.45 },
   targeted_blast: { windup: 0.95, strike: 0.1, damage: 1.5, range: 10.5, radius: 2.25 },
   prism_cone: { windup: 0.75, strike: 0.1, damage: 1.35, range: 6.8, radius: 6.4 },
   orbital_barrage: { windup: 0.65, strike: 0.1, damage: 0.95, range: 9.5, radius: 1.85 },
@@ -418,8 +418,21 @@ export const BOSS_CHARGE = {
   corridorHalfWidth: 1.05,
 } as const;
 
-/** ranged_volley: 3 fan shots, aim follows the hero for the first part of the windup then locks. */
-export const BOSS_VOLLEY = { spread: [-0.28, 0, 0.28], projectileSpeed: 6.6, boneDartSpeed: 7.8, aimTrackFraction: 0.6 } as const;
+/**
+ * ranged_volley: 2-stage triple railgun barrage.
+ * - Windup: 0.6s (first 50% tracks hero, final 0.30s locked).
+ * - Stage 1 (on fire): 3 instant full-length accelerator railgun lances deal `beamDamage` (35%, single-hit per target).
+ * - Stage 2 (follow-up): 3 high-speed heavy railgun shells deal `BOSS_SKILLS.ranged_volley.damage` (75%; total 110%).
+ */
+export const BOSS_VOLLEY = {
+  spread: [-0.28, 0, 0.28],
+  projectileSpeed: 10.8,
+  boneDartSpeed: 12.0,
+  aimTrackFraction: 0.5,
+  beamDamage: 0.35,
+  beamMaxRange: 10.5,
+  beamHalfWidth: 0.36,
+} as const;
 
 /** Every action (skill or basic) ends with: strike -> recovery (stiffness) -> cooldown -> next action. */
 export const BOSS_RECOVER = 0.5;

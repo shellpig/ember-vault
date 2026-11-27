@@ -1971,7 +1971,7 @@ export const bossVfxMethods = {
         const ang = aimAngle + BOSS_VOLLEY.spread[i];
         const dx = Math.sin(ang);
         const dz = Math.cos(ang);
-        const hit = this.raycastBossBeam(tx, tz, dx, dz, 10.5);
+        const hit = this.raycastBossBeam(tx, tz, dx, dz, BOSS_VOLLEY.beamMaxRange);
         const bl = rig.volleyLines[i];
         bl.mesh.rotation.y = ang;
         const laneW = compress > 0 ? THREE.MathUtils.lerp(0.62, 0.34, compress) : locked ? 0.62 : 0.76;
@@ -3713,7 +3713,7 @@ export const bossVfxMethods = {
       const ang = baseAngle + off;
       const dx = Math.sin(ang);
       const dz = Math.cos(ang);
-      const hit = this.raycastBossBeam(ox, oz, dx, dz, 10.5);
+      const hit = this.raycastBossBeam(ox, oz, dx, dz, BOSS_VOLLEY.beamMaxRange);
       // Full-length plasma lance matching the ENTIRE 10.5-tile railgun sightline (never truncated at 7.5!)
       const lanceLen = Math.max(0.8, hit.dist - 0.35);
       const midX = dx * (lanceLen * 0.5 + 0.35);

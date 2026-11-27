@@ -913,7 +913,8 @@ export const heroCombatMethods = {
     sourceX: number,
     sourceZ: number,
     sourceLabel = '地城怪物',
-    attacker?: EnemyEntity
+    attacker?: EnemyEntity,
+    invulnOverride?: number
   ): void {
     if (this.hero.isDead || this.hero.invuln > 0 || this.transitionState !== 'none') return;
 
@@ -923,7 +924,7 @@ export const heroCombatMethods = {
     // Relic Block Chance: completely negate incoming damage
     if (this.hero.relicStats.blockPct > 0 && Math.random() * 100 < this.hero.relicStats.blockPct) {
       const hasPan = this.hero.hasUnique('frying_pan_bonk');
-      this.hero.invuln = isSwarmHit ? 0.14 : 0.38;
+      this.hero.invuln = invulnOverride !== undefined ? invulnOverride : isSwarmHit ? 0.14 : 0.38;
       this.audio.playBlock(hasPan);
       this.emitFloatingText(
         this.hero.x,
@@ -1000,8 +1001,9 @@ export const heroCombatMethods = {
     this.hero.rescueProgress = 0; // getting hit interrupts a rescue in progress
 
     this.hero.hp = Math.max(0, this.hero.hp - hpDamage);
-    // Swarm critters use a brief invuln window so their 2/sec rapid chip bites (-1, -1, -2, -2) land cleanly
-    this.hero.invuln = isSwarmHit ? 0.14 : 0.72;
+    // Swarm critters use a brief invuln window so their 2/sec rapid chip bites (-1, -1, -2, -2) land cleanly;
+    // multi-stage boss attacks (e.g. ranged_volley Stage 1 beam -> Stage 2 shell) pass invulnOverride = 0.
+    this.hero.invuln = invulnOverride !== undefined ? invulnOverride : isSwarmHit ? 0.14 : 0.72;
     this.hero.hitFlash = isSwarmHit ? 0.1 : 0.18;
     this.hero.hitShieldOnly = hpDamage <= 0;
     this.audio.playPlayerHurt();

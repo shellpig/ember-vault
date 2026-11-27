@@ -300,14 +300,21 @@ export const classSkillsMethods = {
     }
   },
 
-  damagePet(this: EmbervaultEngine, pet: PetEntity, rawDamage: number, srcX: number, srcZ: number): void {
+  damagePet(
+    this: EmbervaultEngine,
+    pet: PetEntity,
+    rawDamage: number,
+    srcX: number,
+    srcZ: number,
+    invulnOverride?: number
+  ): void {
     if (pet.invuln > 0 || pet.hp <= 0) return;
     const defMult = pet.buffTimer > 0 ? HUNTER.petBuffDamageTakenMult : 1;
     const dmg = Math.max(1, Math.round(rawDamage * defMult));
     pet.hp = Math.max(0, pet.hp - dmg);
     pet.timeSinceDamaged = 0;
     pet.hitFlash = 0.16;
-    pet.invuln = 0.35;
+    pet.invuln = invulnOverride !== undefined ? invulnOverride : 0.35;
 
     const dx = pet.x - srcX;
     const dz = pet.z - srcZ;

@@ -880,19 +880,27 @@ export const enemiesMethods = {
         this.hideBossWindupVfx(e.id);
 
         if (skill === 'ranged_volley') {
-          // Fair 3-shot ranged fan toward locked aim direction
+          // 2-stage triple railgun barrage:
+          // Stage 1: instant full-length accelerator lances (35%, single-hit per hero/pet across all 3 lanes)
+          // Stage 2: fast heavy railgun shells (75%, total 110% if both hit)
           const projKind: ProjectileKind = cfg.projectileKind ?? 'bio_orb';
           const baseAngle = e.facing;
           const projSpeed = projKind === 'bone_dart' ? BOSS_VOLLEY.boneDartSpeed : BOSS_VOLLEY.projectileSpeed;
+          const beamDmg = this.bossDamage(e, BOSS_VOLLEY.beamDamage);
           const projDmg = this.bossDamage(e, BOSS_SKILLS.ranged_volley.damage);
+          const label = this.getEnemyLabel(e);
 
           this.audio.playBossVolley();
-          this.forEachLiveHero(() => this.addScreenShake(0.44, 0.22));
+          this.forEachLiveHero(() => this.addScreenShake(0.46, 0.24));
           this.spawnBossVolleyVfx(e.x, e.z, baseAngle, cfg.telegraphColor);
+
+          const lanes: Array<{ dx: number; dz: number; dist: number }> = [];
           for (const offset of BOSS_VOLLEY.spread) {
             const a = baseAngle + offset;
             const sdx = Math.sin(a);
             const sdz = Math.cos(a);
+            const hit = this.raycastBossBeam(e.x, e.z, sdx, sdz, BOSS_VOLLEY.beamMaxRange);
+            lanes.push({ dx: sdx, dz: sdz, dist: hit.dist });
             this.spawnProjectile(
               projKind,
               e.x + sdx * 0.95,
@@ -900,12 +908,48 @@ export const enemiesMethods = {
               sdx,
               sdz,
               1,
-              this.getEnemyLabel(e),
+              label,
               projSpeed,
               projDmg,
-              2.0
+              1.6
             );
           }
+
+          // Stage 1 hit check along the 3 accelerator railgun lances (deduped so point-blank never triple-hits)
+          const pointHitsLane = (px: number, pz: number, targetR: number): boolean => {
+            const rx = px - e.x;
+            const rz = pz - e.z;
+            for (const lane of lanes) {
+              const along = rx * lane.dx + rz * lane.dz;
+              if (along < 0.1 || along > lane.dist + targetR) continue;
+              const lateral = Math.abs(rx * -lane.dz + rz * lane.dx);
+              if (lateral <= BOSS_VOLLEY.beamHalfWidth + targetR) return true;
+            }
+            return false;
+          };
+
+          const beamHitIds = new Set<string>();
+          this.forEachLiveHero(() => {
+            const key = `h:${this.hero.id}`;
+            if (beamHitIds.has(key)) return;
+            if (pointHitsLane(this.hero.x, this.hero.z, 0.3)) {
+              beamHitIds.add(key);
+              // invulnOverride = 0 so Stage 2 heavy railgun shell landing right after is not swallowed by i-frames
+              this.damageHero(beamDmg, e.x, e.z, label, undefined, 0);
+            }
+          });
+          for (const pet of this.pets.values()) {
+            if (pet.hp <= 0) continue;
+            const owner = this.heroById(pet.ownerId);
+            if (!owner || owner.isDead || owner.inTown) continue;
+            const key = `p:${pet.ownerId}`;
+            if (beamHitIds.has(key)) continue;
+            if (pointHitsLane(pet.x, pet.z, 0.32)) {
+              beamHitIds.add(key);
+              this.damagePet(pet, beamDmg, e.x, e.z, 0);
+            }
+          }
+
           for (let i = 0; i < 14; i++) {
             const a = baseAngle + (Math.random() - 0.5) * 0.9;
             this.spawnParticle(

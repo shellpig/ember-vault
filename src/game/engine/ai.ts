@@ -345,7 +345,7 @@ export const aiMethods = {
         const along = bdx * fx + bdz * fz;
         const lateral = bdx * -fz + bdz * fx;
         const fanHalfWidth = Math.max(0, along) * Math.tan(0.28) + 1.05;
-        if (along > 0 && bDist < 10 && Math.abs(lateral) < fanHalfWidth) {
+        if (along > 0 && bDist < BOSS_VOLLEY.beamMaxRange + 0.4 && Math.abs(lateral) < fanHalfWidth) {
           this.hero.ai.status = 'Strafing Boss Volley';
           const side = lateral === 0 ? this.hero.ai.strafeSign : Math.sign(lateral);
           const mv = stepAway(-fz * side, fx * side);
