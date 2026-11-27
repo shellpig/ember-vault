@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Heart, LogOut, Plus, Shield, Trash2 } from 'lucide-react';
 import { ApiError, api } from '../api';
-import { HERO_CLASSES, SELECTABLE_CLASS_IDS, HeroClassId } from '../game/classes';
+import { HERO_CLASSES, MAX_BOTS, SELECTABLE_CLASS_IDS, HeroClassId } from '../game/classes';
+import { loadBotSetup, saveBotSetup, type BotSetup } from '../botSetup';
 import { ClassEmblem } from './ClassEmblem';
 import { isRoomCode, normalizeRoomCode, roomErrorText } from '../net/roomClient';
 import { ROOM_CODE_LENGTH } from '../../shared/room';
@@ -452,6 +453,38 @@ export function CharacterSelectScreen({
 // Lobby
 // ---------------------------------------------------------------------------
 
+/** Start floor slider (1..max depth). Renders nothing for a character that has not been past floor 1. */
+export function StartDepthPicker({ maxDepth, value, onChange }: { maxDepth: number; value: number; onChange: (v: number) => void }) {
+  if (maxDepth <= 1) return null;
+  return (
+    <div className="w-full flex flex-col gap-1" data-testid="start-depth-picker">
+      <div className="flex items-center justify-between font-hud text-xs text-[#aeb3c2]">
+        <label htmlFor="start-depth">起始層數</label>
+        <span className="tabular-nums text-[#f3e1b4]" data-testid="start-depth-value">
+          第 {value} 層
+        </span>
+      </div>
+      <input
+        id="start-depth"
+        data-testid="start-depth"
+        type="range"
+        min={1}
+        max={maxDepth}
+        step={1}
+        value={value}
+        onChange={(e) => onChange(Math.max(1, Math.min(maxDepth, Number(e.target.value) || maxDepth)))}
+        className="w-full accent-[#d6b25e]"
+      />
+      <div className="flex items-center justify-between font-hud text-[10px] text-[#6a6f80] tabular-nums">
+        <span>1</span>
+        <button type="button" className="hover:text-[#f3e1b4] cursor-pointer" onClick={() => onChange(maxDepth)}>
+          最深 {maxDepth}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function LobbyScreen({
   save,
   notice,
@@ -463,7 +496,7 @@ export function LobbyScreen({
   save: CharacterSave;
   /** Message carried over from the room screen (host left, connection failed, ...). */
   notice?: string | null;
-  onStart: () => void;
+  onStart: (opts: { startDepth: number; bots: BotSetup }) => void;
   onBack: () => void;
   onCreateRoom: () => void;
   onJoinRoom: (code: string) => void;
@@ -471,6 +504,16 @@ export function LobbyScreen({
   const cls = HERO_CLASSES[save.class_id as HeroClassId];
   const [code, setCode] = useState('');
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [startDepth, setStartDepth] = useState(Math.max(1, save.max_depth));
+  const [bots, setBots] = useState<BotSetup>(() => loadBotSetup());
+
+  const setBotCount = (n: number) => {
+    setBots((prev) => {
+      const next = prev.slice(0, n);
+      while (next.length < n) next.push(prev[next.length] ?? prev[prev.length - 1] ?? 'warrior');
+      return next;
+    });
+  };
 
   const join = () => {
     const normalized = normalizeRoomCode(code);
@@ -495,15 +538,65 @@ export function LobbyScreen({
         <div className="font-hud text-xs text-[#6a6f80] cursor-not-allowed select-none" aria-disabled="true">
           難度：即將推出
         </div>
+        <StartDepthPicker maxDepth={save.max_depth} value={startDepth} onChange={setStartDepth} />
+        <div className="w-full flex flex-col gap-2" data-testid="bot-picker">
+          <div className="flex items-center justify-between font-hud text-xs text-[#aeb3c2]">
+            <span>單人機器人隊友</span>
+            <div className="flex gap-1">
+              {Array.from({ length: MAX_BOTS + 1 }, (_, n) => (
+                <button
+                  key={n}
+                  type="button"
+                  data-testid={`bot-count-${n}`}
+                  aria-pressed={bots.length === n}
+                  onClick={() => setBotCount(n)}
+                  className={`w-7 h-7 border text-xs tabular-nums cursor-pointer ${
+                    bots.length === n
+                      ? 'border-[#d6b25e] bg-[#2a2110] text-[#ffe7a8]'
+                      : 'border-[#3a3428] bg-[#151822] text-[#b9b4a4] hover:border-[#b89448]'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          {bots.map((c, i) => (
+            <label key={i} className="flex items-center justify-between gap-2 font-hud text-xs text-[#8d93a6]">
+              <span>機器人 {i + 1}</span>
+              <select
+                data-testid={`bot-class-${i}`}
+                value={c}
+                onChange={(e) => setBots((prev) => prev.map((x, j) => (j === i ? (e.target.value as HeroClassId) : x)))}
+                className="flex-1 max-w-[180px] px-2 py-1 bg-[#10131c] border border-[#3a3428] text-[#f3e1b4] text-xs outline-none focus:border-[#d6b25e]"
+              >
+                {SELECTABLE_CLASS_IDS.map((id) => (
+                  <option key={id} value={id}>
+                    {HERO_CLASSES[id].name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+          {bots.length > 0 && (
+            <p className="font-hud text-[10px] text-[#6a6f80]">機器人等級同你的升級總數，遺物加成為你的 80%；怪物依隊伍人數增強。</p>
+          )}
+        </div>
         {notice && (
           <p role="alert" data-testid="lobby-notice" className="font-hud text-xs text-[#ff8a98] text-center">
             {notice}
           </p>
         )}
         <div className="w-full flex flex-col gap-3">
-          <button type="button" data-testid="start-solo" className={`${BTN_PRIMARY} w-full`} onClick={onStart}>
+          <button type="button" data-testid="start-solo" className={`${BTN_PRIMARY} w-full`} onClick={() => {
+              saveBotSetup(bots);
+              onStart({ startDepth, bots });
+            }}
+          >
             單人開始
-            <span className="block font-hud text-[11px] text-[#b9a77a]">從第 {save.max_depth} 層開始 · 不連線</span>
+            <span className="block font-hud text-[11px] text-[#b9a77a]">
+              從第 {startDepth} 層開始{bots.length > 0 ? ` · ${bots.length} 位機器人` : ''} · 不連線
+            </span>
           </button>
           <button type="button" data-testid="create-room" className={`${BTN_PLAIN} w-full`} onClick={onCreateRoom}>
             建立房間

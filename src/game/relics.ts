@@ -1226,6 +1226,30 @@ export function rollAngelBlessing(depth: number): AngelBuff {
   };
 }
 
+/** Flat (non-percentage) relic stats that must stay whole numbers when scaled. */
+const WHOLE_NUMBER_RELIC_STATS = ['maxHp', 'damageReduction', 'lifeOnKill', 'thorns'] as const;
+
+/**
+ * Returns a copy of `summary` with every numeric bonus multiplied by `mult` (bots use 0.8 of the player's relics).
+ * Flat stats are rounded to whole numbers. Qualitative effects (unique relic effects, 4-piece set auras and the
+ * set descriptions) cannot be scaled and are passed through unchanged.
+ */
+export function scaleRelicSummary(summary: RelicSummaryStats, mult: number): RelicSummaryStats {
+  if (mult === 1) return summary;
+  const out: RelicSummaryStats = {
+    ...summary,
+    uniqueEffects: [...summary.uniqueEffects],
+    activeSetIds4pc: [...summary.activeSetIds4pc],
+    activeSets: summary.activeSets,
+  };
+  for (const key of Object.keys(summary) as Array<keyof RelicSummaryStats>) {
+    const v = summary[key];
+    if (typeof v === 'number') (out as unknown as Record<string, number>)[key] = v * mult;
+  }
+  for (const key of WHOLE_NUMBER_RELIC_STATS) out[key] = Math.round(out[key]);
+  return out;
+}
+
 export function computeRelicSummary(
   equipped: RelicItem[],
   extraStats?: RelicStat[]

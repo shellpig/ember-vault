@@ -140,7 +140,11 @@ import {
   UpgradeKind,
   UpgradeOptionView,
   WARRIOR,
+  BOT_RELIC_SCALE,
+  MAX_BOTS,
+  distributeUpgradePoints,
   getHunterPetMaxHp,
+  sumUpgradeLevels,
 } from './classes';
 import {
   BannerEvent,
@@ -184,6 +188,8 @@ export interface MpConfig {
   sendTownPos: (p: { x: number; z: number; f: number; a: 0 | 1 | 2 }) => void;
   /** P7: this client joins a game that is already running (the host puts it in town / at the entrance, no start loadout wait). */
   late?: boolean;
+  /** Host only: the floor the room starts on (1..host max depth). Local setting, never sent over the wire. */
+  startDepth?: number;
 }
 
 /** One teammate's town position stream (P5-C). Positions are stamped with the local receive time. */
@@ -294,6 +300,8 @@ interface MpState {
   holdSince: number;
   /** P7: this client joined a running game. */
   late: boolean;
+  /** Host: the floor chosen in the room lobby (already clamped to [1, loadout.maxDepth]). */
+  startDepth: number;
   /** Town positions of the others + what I sent last (P5-C). */
   town: { peers: Map<string, MpTownPeer>; acc: number; last: { x: number; z: number; f: number; a: 0 | 1 | 2 } | null };
   sendTownPos: (p: { x: number; z: number; f: number; a: 0 | 1 | 2 }) => void;
@@ -973,8 +981,13 @@ export class EmbervaultEngine {
   private get localHero(): Hero {
     return this.heroById(this.localHeroId) ?? this.heroes[0];
   }
-  /** Number of bot teammates requested through `?bots=N` (0-3). */
-  private readonly botCount: number = EmbervaultEngine.readBotCount();
+  /** Dev override: `?bots=N` (0-3) forces N bots and wins over the UI setup. Null when the parameter is absent. */
+  private readonly botUrlOverride: number | null = EmbervaultEngine.readBotCount();
+  /** Bot classes picked in the single-player pre-run screen (one entry per bot, at most MAX_BOTS). */
+  private botClasses: HeroClassId[] = [];
+  /** Last gear fingerprint the bots were synced to (see syncBotGear). */
+  private botGearKey = '';
+  private botGearTimer = 0;
   /** Nameplate / ground ring of each bot (cheap, one sprite + one ring per bot). */
   private botMarkers = new Map<string, { ring: THREE.Mesh; plate: THREE.Sprite; label: string }>();
   /** Progress bar floating over a downed hero while someone revives them. */
@@ -1047,6 +1060,7 @@ export class EmbervaultEngine {
   private depth = 1;
   private queuedRestartClass: HeroClassId | null = null;
   private queuedRestartLoadout: CharacterLoadout | null = null;
+  private queuedRestartDepth: number | undefined;
   /** True while a cloud-saved character is loaded (enables save checkpoints). */
   private persistRun = false;
   /** Suppresses save checkpoints while a run is being (re)built from a save. */
@@ -1113,15 +1127,28 @@ export class EmbervaultEngine {
     return g;
   }
 
-  /** `?bots=N` (0-3, default 0): number of local bot teammates. Works on every build (handy for testing). */
-  private static readBotCount(): number {
+  /** `?bots=N` (0-3): dev override for the number of local bot teammates; null when absent. */
+  private static readBotCount(): number | null {
     try {
       const raw = new URLSearchParams(window.location.search).get('bots');
-      const n = Number.parseInt(raw ?? '0', 10);
-      return Number.isFinite(n) ? Math.max(0, Math.min(3, n)) : 0;
+      if (raw === null) return null;
+      const n = Number.parseInt(raw, 10);
+      return Number.isFinite(n) ? Math.max(0, Math.min(MAX_BOTS, n)) : 0;
     } catch {
-      return 0;
+      return null;
     }
+  }
+
+  /** Clamps a requested start floor to [1, maxDepth]; a missing / invalid request means "the deepest floor". */
+  private static clampStartDepth(requested: number | undefined, maxDepth: number): number {
+    const max = Math.max(1, Math.floor(Number(maxDepth) || 1));
+    const want = Number.isFinite(requested) ? Math.floor(requested as number) : max;
+    return Math.max(1, Math.min(max, want));
+  }
+
+  /** Single-player bot setup from the pre-run screen (one class per bot). Applied by the next `restartRun`. */
+  public setBotClasses(classes: HeroClassId[]): void {
+    this.botClasses = classes.slice(0, MAX_BOTS);
   }
 
   private heroById(id: string): Hero | undefined {
@@ -1289,55 +1316,102 @@ export class EmbervaultEngine {
     return rig;
   }
 
-  /** (Re)creates the bot teammates. Their starting kit is a copy of `base` (the local loadout) or the bare class. */
+  /**
+   * (Re)creates the bot teammates. With a character loadout (`base`) bot classes come from the pre-run setup and each
+   * bot gets the player's total upgrade level plus 80% of the player's relic bonuses; without one (attract mode) only the
+   * `?bots=N` dev override creates (bare) bots.
+   */
   private setupBots(base: CharacterLoadout | null): void {
     for (const h of this.heroes) if (h.isBot || h.isRemote) this.disposeBot(h);
     this.heroes = this.heroes.filter((h) => !h.isBot && !h.isRemote);
+    this.botGearKey = '';
     if (!this.sharedShadowMap) return;
     // Room games never have local bots (every other hero is a real teammate)
-    const botTotal = this.mp ? 0 : this.botCount;
-    for (let i = 0; i < botTotal; i++) {
+    let classes: HeroClassId[] = [];
+    if (!this.mp) {
+      if (this.botUrlOverride !== null) {
+        classes = Array.from({ length: this.botUrlOverride }, (_, i) => {
+          const picked = this.botClasses[i];
+          if (picked) return picked;
+          const roll = Math.random();
+          return roll < 0.34 ? 'warrior' : roll < 0.67 ? 'frost_mage' : 'hunter';
+        });
+      } else if (base) {
+        classes = this.botClasses.slice(0, MAX_BOTS);
+      }
+    }
+    for (let i = 0; i < classes.length; i++) {
+      const classId = classes[i];
       const bot = new Hero(`bot-${i + 1}`);
       bot.isBot = true;
       bot.botIndex = i + 1;
-      const roll = Math.random();
-      const classId: HeroClassId = roll < 0.34 ? 'warrior' : roll < 0.67 ? 'frost_mage' : 'hunter';
       bot.rig = this.createHeroRigForClass(classId);
       bot.setAura = createHeroSetAura();
       bot.rig.root.add(bot.setAura.group);
       this.scene.add(bot.rig.root);
       bot.resetForNewRun();
       bot.applyClassStats(classId);
+      bot.relicScale = BOT_RELIC_SCALE;
       if (base) {
-        // Upgrade levels are class specific: map the tracks onto each other.
-        const up = base.upgrades;
-        const hpLv = Math.max(up.hp, up.hpShield);
-        const utilLv = Math.max(up.armor, up.shieldSpeed, up.atkSpeed ?? 0);
-        bot.applyLoadout({
-          gold: 0,
-          maxDepth: base.maxDepth,
-          potions: Math.max(3, Math.min(6, base.potions)),
-          upgrades: {
-            hp: hpLv,
-            atk: up.atk,
-            armor: utilLv,
-            crit: up.crit,
-            hpShield: hpLv,
-            shieldSpeed: utilLv,
-            atkSpeed: utilLv,
-          },
-          equipped: base.equipped,
-          bag: [],
-          stash: [],
-        });
+        this.applyBotGear(bot, sumUpgradeLevels(base.upgrades), base.equipped, Math.max(3, Math.min(6, base.potions)));
       }
       bot.controlMode = 'auto';
-      bot.maxDepthReached = base?.maxDepth ?? 1;
+      bot.maxDepthReached = 1;
       bot.recomputeRelicStats(false);
       bot.hp = bot.getEffectiveMaxHp();
       bot.shield = bot.getEffectiveMaxShield();
       this.createBotMarker(bot);
       this.heroes.push(bot);
+    }
+  }
+
+  /**
+   * Gives a bot its gear: `level` upgrade points spread evenly over the bot class's altar options (capped options pass
+   * their share on) and the player's equipped relics (numeric bonuses scaled by `bot.relicScale`). Never touches the
+   * player, the save or the API.
+   */
+  private applyBotGear(bot: Hero, level: number, equipped: RelicItem[], potions: number): void {
+    bot.applyLoadout({
+      gold: 0,
+      maxDepth: 1,
+      potions,
+      upgrades: distributeUpgradePoints(bot.classId, level),
+      equipped,
+      bag: [],
+      stash: [],
+    });
+    bot.relicScale = BOT_RELIC_SCALE;
+  }
+
+  /**
+   * Keeps bots in step with the local hero: when the player's total upgrade level or equipped relics change (altar
+   * purchase, relic swap, coming back from town), every bot's gear is recomputed. Checked twice a second; bots keep their
+   * current HP / shield (the increase of max HP is granted as healing, like a relic swap on the player).
+   */
+  private syncBotGear(dt: number): void {
+    if (this.mp || !this.heroes.some((h) => h.isBot)) return;
+    this.botGearTimer -= dt;
+    if (this.botGearTimer > 0) return;
+    this.botGearTimer = 0.5;
+    const local = this.localHero;
+    const equipped = local.equippedRelics;
+    const key = `${local.getTotalUpgradeLevel()}|${equipped.map((r) => r.id).join(',')}`;
+    if (key === this.botGearKey) return;
+    const first = this.botGearKey === '';
+    this.botGearKey = key;
+    if (first) return; // setupBots just built them from the same state
+    for (const bot of this.heroes) {
+      if (!bot.isBot) continue;
+      const prevHp = bot.getEffectiveMaxHp();
+      const prevShield = bot.getEffectiveMaxShield();
+      this.applyBotGear(bot, local.getTotalUpgradeLevel(), equipped, bot.potions);
+      bot.recomputeRelicStats(false);
+      const nextHp = bot.getEffectiveMaxHp();
+      const nextShield = bot.getEffectiveMaxShield();
+      if (!bot.isDead) {
+        bot.hp = Math.min(nextHp, bot.hp + Math.max(0, nextHp - prevHp));
+        bot.shield = Math.min(nextShield, bot.shield + Math.max(0, nextShield - prevShield));
+      }
     }
   }
 
@@ -4487,18 +4561,20 @@ export class EmbervaultEngine {
   /**
    * Restarts the run. Without `loadout` this is the attract-mode / legacy restart (fresh hero, depth 1,
    * auto-pilot, nothing persisted). With `loadout` the hero is rebuilt from a character save: upgrades,
-   * relics, gold, potions are restored, derived stats are recomputed and the run starts on `maxDepth`.
+   * relics, gold, potions are restored, derived stats are recomputed and the run starts on `startDepth` (default and upper bound: `maxDepth`).
    */
-  public restartRun(classId?: HeroClassId, loadout?: CharacterLoadout): void {
+  public restartRun(classId?: HeroClassId, loadout?: CharacterLoadout, startDepth?: number): void {
     const nextClass: HeroClassId = classId ?? this.hero.classId;
     if (this.transitionState !== 'none') {
       // A fade is in progress (e.g. the initial fade-in): run the restart as soon as it ends.
       this.queuedRestartClass = nextClass;
       this.queuedRestartLoadout = loadout ?? null;
+      this.queuedRestartDepth = startDepth;
       return;
     }
     this.queuedRestartClass = null;
     this.queuedRestartLoadout = null;
+    this.queuedRestartDepth = undefined;
     if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
     this.audio.playDescend();
     this.beginTransition(() => {
@@ -4514,14 +4590,17 @@ export class EmbervaultEngine {
       this.hero.applyClassStats(nextClass);
       this.applyHeroClassRig(nextClass);
       this.runElapsedSec = 0;
-      let startDepth = 1;
+      let firstDepth = 1;
+      let deepest = 1;
       if (loadout) {
         this.hero.applyLoadout(loadout);
-        startDepth = Math.max(1, Math.floor(loadout.maxDepth));
+        // The player may start shallower than their deepest floor; max depth itself never goes down
+        deepest = Math.max(1, Math.floor(loadout.maxDepth));
+        firstDepth = EmbervaultEngine.clampStartDepth(startDepth, deepest);
       } else {
         this.hero.controlMode = 'auto';
       }
-      this.hero.maxDepthReached = startDepth;
+      this.hero.maxDepthReached = deepest;
       this.hero.recomputeRelicStats(false);
       if (loadout) {
         // Derived stats (max HP / shield incl. relic bonuses) are final now: start the run at full health.
@@ -4541,7 +4620,7 @@ export class EmbervaultEngine {
       }
       // Bot teammates start from a copy of the local loadout (fresh each run); none when ?bots=0
       this.setupBots(loadout ?? null);
-      this.buildLevel(startDepth);
+      this.buildLevel(firstDepth);
       this.loadingRun = false;
     });
   }
@@ -9590,7 +9669,7 @@ export class EmbervaultEngine {
       if (this.fadeOpacity <= 0) {
         this.transitionState = 'none';
         if (this.queuedRestartClass) {
-          this.restartRun(this.queuedRestartClass, this.queuedRestartLoadout ?? undefined);
+          this.restartRun(this.queuedRestartClass, this.queuedRestartLoadout ?? undefined, this.queuedRestartDepth);
         }
       }
     }
@@ -9606,6 +9685,7 @@ export class EmbervaultEngine {
     }
 
     this.runElapsedSec += dt;
+    this.syncBotGear(dt);
 
     // Brief tactile hit-stop on sword impact
     if (this.hitStopTimer > 0) {
@@ -12032,6 +12112,7 @@ export class EmbervaultEngine {
       onNotice: cfg.onNotice,
       sendTownPos: cfg.sendTownPos,
       late: cfg.late === true,
+      startDepth: EmbervaultEngine.clampStartDepth(cfg.startDepth, loadout.maxDepth),
       hold: false,
       holdText: '',
       holdKind: null as MpState['holdKind'],
@@ -12375,7 +12456,7 @@ export class EmbervaultEngine {
       if (!p) continue;
       this.mpCreateHero(m.playerId, m.name, (p.classId as HeroClassId) ?? 'warrior', p.loadout, p.angel ?? null);
     }
-    const startDepth = Math.max(1, Math.floor(mp.loadout.maxDepth));
+    const startDepth = EmbervaultEngine.clampStartDepth(mp.startDepth, mp.loadout.maxDepth);
     this.mpApplyViewGroupsForRemotes();
     this.buildLevel(startDepth);
     this.loadingRun = false;

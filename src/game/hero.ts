@@ -9,7 +9,7 @@ import {
 } from './classes';
 import type { HeroClassId, UpgradeKind } from './classes';
 import type { HeroRig, createHeroSetAura } from './models';
-import { computeRelicSummary } from './relics';
+import { computeRelicSummary, scaleRelicSummary } from './relics';
 import type { AngelBuff, RelicItem, RelicSetId, RelicSummaryStats, UniqueEffectId } from './relics';
 
 /** Persistent per-character state a hero can load from / export to a cloud save. */
@@ -196,6 +196,8 @@ export class Hero {
   public stashOpen = false;
   public discoveredRelicIds = new Set<string>();
   public relicStats: RelicSummaryStats = computeRelicSummary([]);
+  /** Multiplier applied to every numeric relic bonus (1 for players; bots run at BOT_RELIC_SCALE). */
+  public relicScale = 1;
   public angelBuff: AngelBuff | null = null;
   public phantomCritTimer = 0;
   public alchemistShieldTimer = 0;
@@ -370,7 +372,10 @@ export class Hero {
   public recomputeRelicStats(adjustHp = true): void {
     const prevEffMax = this.getEffectiveMaxHp();
     const prevMaxShield = this.getEffectiveMaxShield();
-    this.relicStats = computeRelicSummary(this.equippedRelics, this.angelBuff?.stats);
+    this.relicStats = scaleRelicSummary(
+      computeRelicSummary(this.equippedRelics, this.angelBuff?.stats),
+      this.relicScale
+    );
     const nextEffMax = this.getEffectiveMaxHp();
     const nextMaxShield = this.getEffectiveMaxShield();
 

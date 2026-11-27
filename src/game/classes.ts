@@ -2,6 +2,8 @@
 // All gameplay numbers for each class live here so balance tweaks stay in one place.
 // Distances are WORLD UNITS (1 tile = TILE_SIZE = 2.0 world units).
 
+import { UPGRADE_KEYS, emptyUpgrades, type CharacterUpgrades } from '../../shared/character';
+
 export type HeroClassId = 'warrior' | 'frost_mage' | 'hunter';
 
 export type PetSpecies = 'bear' | 'chocobo' | 'wolf';
@@ -238,4 +240,63 @@ export const PET_NAMES: Record<PetSpecies, readonly string[]> = {
 
 export function getHunterPetMaxHp(depth: number): number {
   return Math.round(HUNTER.petBaseHp * (1 + Math.max(0, depth - 1) * HUNTER.petDepthHpScale));
+}
+
+// ---------------------------------------------------------------------------
+// Single-player bot teammates
+// ---------------------------------------------------------------------------
+/** Most bot teammates a single-player run can have. */
+export const MAX_BOTS = 3;
+/** Fraction of the player's numeric relic bonuses that a bot receives. */
+export const BOT_RELIC_SCALE = 0.8;
+
+/** Altar upgrade tracks of each class (same options and caps the Altar of Ascension offers), in display order. */
+export const CLASS_UPGRADE_OPTIONS: Record<HeroClassId, ReadonlyArray<{ key: keyof CharacterUpgrades; max: number }>> = {
+  warrior: [
+    { key: 'hp', max: WARRIOR.maxHpUpgrades },
+    { key: 'atk', max: WARRIOR.maxAtkUpgrades },
+    { key: 'armor', max: WARRIOR.maxArmorUpgrades },
+    { key: 'crit', max: WARRIOR.maxCritUpgrades },
+  ],
+  frost_mage: [
+    { key: 'hpShield', max: FROST_MAGE.maxHpShieldUpgrades },
+    { key: 'atk', max: FROST_MAGE.maxAtkUpgrades },
+    { key: 'shieldSpeed', max: FROST_MAGE.maxShieldSpeedUpgrades },
+    { key: 'crit', max: FROST_MAGE.maxCritUpgrades },
+  ],
+  hunter: [
+    { key: 'hp', max: HUNTER.maxHpUpgrades },
+    { key: 'atk', max: HUNTER.maxAtkUpgrades },
+    { key: 'atkSpeed', max: HUNTER.maxAtkSpeedUpgrades },
+    { key: 'crit', max: HUNTER.maxCritUpgrades },
+  ],
+};
+
+/** Sum of all upgrade levels of a character (its "total upgrade level"). */
+export function sumUpgradeLevels(u: CharacterUpgrades): number {
+  let n = 0;
+  for (const k of UPGRADE_KEYS) n += Math.max(0, Math.floor(u[k] ?? 0));
+  return n;
+}
+
+/**
+ * Spreads `total` upgrade points round-robin over the class's altar options. A capped option is skipped, so its
+ * share goes to the others; leftover points are dropped once every option is capped.
+ */
+export function distributeUpgradePoints(classId: HeroClassId, total: number): CharacterUpgrades {
+  const out = emptyUpgrades();
+  const options = CLASS_UPGRADE_OPTIONS[classId];
+  let left = Math.max(0, Math.floor(total));
+  while (left > 0) {
+    let gave = false;
+    for (const o of options) {
+      if (left <= 0) break;
+      if (out[o.key] >= o.max) continue;
+      out[o.key] += 1;
+      left -= 1;
+      gave = true;
+    }
+    if (!gave) break;
+  }
+  return out;
 }
