@@ -162,11 +162,23 @@ import {
   MinimapSnapshot,
   PartyMemberInfo,
   ProjectileKind,
-  RunSummary,
   TerrainTheme,
   TileType,
   TownPortalOption,
 } from './types';
+
+import {
+  _camGoal,
+  _camTarget,
+  _color,
+  _mat4,
+  _pos,
+  _projVec,
+  _quat,
+  _scale,
+  _upAxis,
+} from './engine/scratch';
+import { hudMethods } from './engine/hud';
 
 export type { CharacterLoadout } from './hero';
 export { STASH_CAP } from './hero';
@@ -931,173 +943,161 @@ interface SpikeInstance {
   phaseOffset: number;
   extended: boolean;
 }
-
-// Module-scoped scratch vectors for zero GC churn in render loop
-const _projVec = new THREE.Vector3();
-const _camTarget = new THREE.Vector3();
 /** A teammate's predicted crate break is undone if the host's snapshot has not confirmed it after this long (ms). */
 const MP_BREAK_CONFIRM_MS = 1500;
-const _camGoal = new THREE.Vector3();
-const _mat4 = new THREE.Matrix4();
-const _quat = new THREE.Quaternion();
-const _scale = new THREE.Vector3();
-const _pos = new THREE.Vector3();
-const _upAxis = new THREE.Vector3(0, 1, 0);
-const _color = new THREE.Color();
-
 export class EmbervaultEngine {
-  private container: HTMLElement;
-  private callbacks: EngineCallbacks;
-  private renderer!: THREE.WebGLRenderer;
-  private scene!: THREE.Scene;
-  private camera!: THREE.PerspectiveCamera;
-  private audio = new DungeonAudio();
-  private isSoftwareGl = false;
+  container: HTMLElement;
+  callbacks: EngineCallbacks;
+  renderer!: THREE.WebGLRenderer;
+  scene!: THREE.Scene;
+  camera!: THREE.PerspectiveCamera;
+  audio = new DungeonAudio();
+  isSoftwareGl = false;
 
   // Groups
   // The dungeon owns these three groups, the town owns `townGroup` (P4-C). Only the group set of the level the local
   // hero stands in is visible, so the other level costs nothing to render.
-  private levelGroup = new THREE.Group();
-  private dynamicGroup = new THREE.Group();
-  private debrisGroup = new THREE.Group();
+  levelGroup = new THREE.Group();
+  dynamicGroup = new THREE.Group();
+  debrisGroup = new THREE.Group();
   /**
    * Built without touching the global RNG: THREE draws object UUIDs from Math.random, and keeping the draw order of
    * the dungeon identical to before P4-C is what lets the deterministic regression run compare 0 differences.
    */
-  private townGroup = EmbervaultEngine.createQuietGroup();
+  townGroup = EmbervaultEngine.createQuietGroup();
 
   /**
    * Every hero in the run: the local player first, then the bot teammates (`?bots=N`, P4-B).
    * The camera, HUD, minimap, keyboard / pointer input, death screen and saving are bound to the local hero only.
    */
-  private heroes: Hero[] = [];
-  private localHeroId = 'hero-0';
+  heroes: Hero[] = [];
+  localHeroId = 'hero-0';
   /** Room game state (P5-B). Null = plain single player: every multiplayer path below is skipped. */
-  private mp: MpState | null = null;
+  mp: MpState | null = null;
   /** P7: the room link dropped; the simulation (host) / dungeon view (teammate) stands still until it is back. */
-  private mpPaused = false;
+  mpPaused = false;
   /**
    * The hero ("actor") that the per-hero engine code currently operates on. All the combat / skill / relic /
    * pickup methods read their hero from here. Outside of a per-hero context it is always the local hero;
    * `setActor()` switches it while the engine loops over heroes (and back with `setActor(localHero)`).
    */
-  private hero: Hero = new Hero('hero-0');
+  hero: Hero = new Hero('hero-0');
   /** The hero the camera, HUD and input follow. */
-  private get localHero(): Hero {
+  get localHero(): Hero {
     return this.heroById(this.localHeroId) ?? this.heroes[0];
   }
   /** Dev override: `?bots=N` (0-3) forces N bots and wins over the UI setup. Null when the parameter is absent. */
-  private readonly botUrlOverride: number | null = EmbervaultEngine.readBotCount();
+  readonly botUrlOverride: number | null = EmbervaultEngine.readBotCount();
   /** Bot classes picked in the single-player pre-run screen (one entry per bot, at most MAX_BOTS). */
-  private botClasses: HeroClassId[] = [];
+  botClasses: HeroClassId[] = [];
   /** Last gear fingerprint the bots were synced to (see syncBotGear). */
-  private botGearKey = '';
-  private botGearTimer = 0;
+  botGearKey = '';
+  botGearTimer = 0;
   /** Nameplate / ground ring of each bot (cheap, one sprite + one ring per bot). */
-  private botMarkers = new Map<string, { ring: THREE.Mesh; plate: THREE.Sprite; label: string }>();
+  botMarkers = new Map<string, { ring: THREE.Mesh; plate: THREE.Sprite; label: string }>();
   /** Progress bar floating over a downed hero while someone revives them. */
-  private rescueBars = new Map<string, { group: THREE.Group; fill: THREE.Mesh }>();
+  rescueBars = new Map<string, { group: THREE.Group; fill: THREE.Mesh }>();
   /** Visual of each hero's dungeon portal (`hero.portal` holds the data). The town gate is `townPortalRig`. */
-  private heroPortalRigs = new Map<string, TownPortalRig>();
+  heroPortalRigs = new Map<string, TownPortalRig>();
 
   // Persistent lights & hero
-  private heroLight!: THREE.PointLight;
-  private heroFloorGlow!: THREE.Mesh;
-  private propLightPool: THREE.PointLight[] = [];
-  private hemiLight!: THREE.HemisphereLight;
-  private rimLight!: THREE.DirectionalLight;
-  private textures: DungeonTextureSet | null = null;
-  private sharedShadowMap!: THREE.CanvasTexture;
+  heroLight!: THREE.PointLight;
+  heroFloorGlow!: THREE.Mesh;
+  propLightPool: THREE.PointLight[] = [];
+  hemiLight!: THREE.HemisphereLight;
+  rimLight!: THREE.DirectionalLight;
+  textures: DungeonTextureSet | null = null;
+  sharedShadowMap!: THREE.CanvasTexture;
 
   // Level data & entities
-  private dungeon!: DungeonData;
-  private enemies: EnemyEntity[] = [];
-  private projectiles: ProjectileEntity[] = [];
-  private loots: LootEntity[] = [];
-  private breakables: BreakableEntity[] = [];
-  private lightProps: AnimatedLightProp[] = [];
-  private spikes: SpikeInstance[] = [];
-  private keyPedestal: { root: THREE.Group; keyMesh: THREE.Group; halo: THREE.Sprite } | null =
+  dungeon!: DungeonData;
+  enemies: EnemyEntity[] = [];
+  projectiles: ProjectileEntity[] = [];
+  loots: LootEntity[] = [];
+  breakables: BreakableEntity[] = [];
+  lightProps: AnimatedLightProp[] = [];
+  spikes: SpikeInstance[] = [];
+  keyPedestal: { root: THREE.Group; keyMesh: THREE.Group; halo: THREE.Sprite } | null =
     null;
-  private altarRig: StationRig | null = null;
-  private shopRig: StationRig | null = null;
-  private gateRig: GateRig | null = null;
-  private gateOpenProgress = 0;
+  altarRig: StationRig | null = null;
+  shopRig: StationRig | null = null;
+  gateRig: GateRig | null = null;
+  gateOpenProgress = 0;
 
   // Sanctuary Town & Angel Blessing State
-  private inTown = false;
+  inTown = false;
   /** Set while the local hero is in town and the dungeon is frozen (nobody alive in it): monsters respawn on return. */
-  private savedDungeon: SavedDungeonSnapshot | null = null;
+  savedDungeon: SavedDungeonSnapshot | null = null;
   /** The dungeon's own level fields, parked here while the local hero is in town and teammates keep it running. */
-  private dungeonCtx: LevelCtx | null = null;
+  dungeonCtx: LevelCtx | null = null;
   /** True while the town scene exists (the local hero is in it or is on the way). */
-  private townBuilt = false;
+  townBuilt = false;
   /** True while the dungeon is simulated in the background (local hero in town): nothing may touch the screen. */
-  private bgSim = false;
+  bgSim = false;
   /** Where the bots wait while the local hero is away from the dungeon (the hero's last spot / portal). */
-  private awayAnchor: { x: number; z: number } | null = null;
+  awayAnchor: { x: number; z: number } | null = null;
   /** Depth of a floor change that happened while the local hero was in town (shown as a town banner). */
-  private pendingAwayFloor: number | null = null;
+  pendingAwayFloor: number | null = null;
   /** Town-side gate (walk in to return to the dungeon). */
-  private townGatePos: { x: number; z: number } | null = null;
-  private angelPos: { x: number; z: number } | null = null;
-  private angelRig: AngelRig | null = null;
+  townGatePos: { x: number; z: number } | null = null;
+  angelPos: { x: number; z: number } | null = null;
+  angelRig: AngelRig | null = null;
   /** The town-side gate (walk in to return to the dungeon). */
-  private townPortalRig: TownPortalRig | null = null;
-  private portalSafePos: { x: number; z: number } | null = null;
-  private extraTextures: THREE.Texture[] = [];
+  townPortalRig: TownPortalRig | null = null;
+  portalSafePos: { x: number; z: number } | null = null;
+  extraTextures: THREE.Texture[] = [];
 
   // Dynamic 50% translucency for foreground walls occluding the hero
-  private readonly wallHeight = 2.65;
-  private wallOpaqueMeshes: THREE.InstancedMesh[] = [];
-  private wallFadeMeshes: THREE.InstancedMesh[] = [];
-  private capOpaqueMeshes: THREE.InstancedMesh[] = [];
-  private capFadeMeshes: THREE.InstancedMesh[] = [];
-  private wallTiles: WallOcclusionTile[] = [];
-  private wallOcclusionActive = false;
+  readonly wallHeight = 2.65;
+  wallOpaqueMeshes: THREE.InstancedMesh[] = [];
+  wallFadeMeshes: THREE.InstancedMesh[] = [];
+  capOpaqueMeshes: THREE.InstancedMesh[] = [];
+  capFadeMeshes: THREE.InstancedMesh[] = [];
+  wallTiles: WallOcclusionTile[] = [];
+  wallOcclusionActive = false;
 
   // Pools
-  private particles: Particle[] = [];
-  private slashArcs: SlashArc[] = [];
-  private particleGeo = new THREE.BoxGeometry(0.11, 0.11, 0.11);
+  particles: Particle[] = [];
+  slashArcs: SlashArc[] = [];
+  particleGeo = new THREE.BoxGeometry(0.11, 0.11, 0.11);
 
   // Game state shared by everyone in the run (per-hero state lives in `hero`, see hero.ts)
-  private depth = 1;
-  private queuedRestartClass: HeroClassId | null = null;
-  private queuedRestartLoadout: CharacterLoadout | null = null;
-  private queuedRestartDepth: number | undefined;
+  depth = 1;
+  queuedRestartClass: HeroClassId | null = null;
+  queuedRestartLoadout: CharacterLoadout | null = null;
+  queuedRestartDepth: number | undefined;
   /** True while a cloud-saved character is loaded (enables save checkpoints). */
-  private persistRun = false;
+  persistRun = false;
   /** Suppresses save checkpoints while a run is being (re)built from a save. */
-  private loadingRun = false;
-  private heroProjectiles: HeroProjectileEntity[] = [];
+  loadingRun = false;
+  heroProjectiles: HeroProjectileEntity[] = [];
   /** Active Hunter pet companions, keyed by owner heroId (max 1 per hunter). */
-  private pets: Map<string, PetEntity> = new Map();
-  private hasKey = false;
-  private doorUnlocked = false;
-  private runElapsedSec = 0;
+  pets: Map<string, PetEntity> = new Map();
+  hasKey = false;
+  doorUnlocked = false;
+  runElapsedSec = 0;
 
   // Town stash chest (the stash contents themselves belong to the hero)
-  private stashPos: { x: number; z: number } | null = null;
-  private stashRig: StashChestRig | null = null;
+  stashPos: { x: number; z: number } | null = null;
+  stashRig: StashChestRig | null = null;
 
   // Camera & Juice
-  private camZoom = 1.0;
-  private shakeTime = 0;
-  private shakeMag = 0;
-  private hitStopTimer = 0;
-  private fadeOpacity = 1.0;
-  private transitionState: 'none' | 'fadeOut' | 'fadeIn' = 'fadeIn';
-  private pendingTransitionAction: (() => void) | null = null;
+  camZoom = 1.0;
+  shakeTime = 0;
+  shakeMag = 0;
+  hitStopTimer = 0;
+  fadeOpacity = 1.0;
+  transitionState: 'none' | 'fadeOut' | 'fadeIn' = 'fadeIn';
+  pendingTransitionAction: (() => void) | null = null;
 
   // Loop & Bookkeeping
-  private frameId = 0;
-  private disposed = false;
-  private lastTime = 0;
-  private elapsed = 0;
-  private nextId = 1;
-  private hudSyncTimer = 0;
-  private minimapTimer = 0;
+  frameId = 0;
+  disposed = false;
+  lastTime = 0;
+  elapsed = 0;
+  nextId = 1;
+  hudSyncTimer = 0;
+  minimapTimer = 0;
 
   constructor(container: HTMLElement, callbacks: EngineCallbacks) {
     this.container = container;
@@ -1119,7 +1119,7 @@ export class EmbervaultEngine {
   // Heroes[] plumbing (P4-B): actor switching, bots, rescue
   // ---------------------------------------------------------------------------------------------------------
 
-  private static createQuietGroup(): THREE.Group {
+  static createQuietGroup(): THREE.Group {
     const real = Math.random;
     Math.random = () => 0.5;
     let g: THREE.Group;
@@ -1133,7 +1133,7 @@ export class EmbervaultEngine {
   }
 
   /** `?bots=N` (0-3): dev override for the number of local bot teammates; null when absent. */
-  private static readBotCount(): number | null {
+  static readBotCount(): number | null {
     try {
       const raw = new URLSearchParams(window.location.search).get('bots');
       if (raw === null) return null;
@@ -1145,7 +1145,7 @@ export class EmbervaultEngine {
   }
 
   /** Clamps a requested start floor to [1, maxDepth]; a missing / invalid request means "the deepest floor". */
-  private static clampStartDepth(requested: number | undefined, maxDepth: number): number {
+  static clampStartDepth(requested: number | undefined, maxDepth: number): number {
     const max = Math.max(1, Math.floor(Number(maxDepth) || 1));
     const want = Number.isFinite(requested) ? Math.floor(requested as number) : max;
     return Math.max(1, Math.min(max, want));
@@ -1156,24 +1156,24 @@ export class EmbervaultEngine {
     this.botClasses = classes.slice(0, MAX_BOTS);
   }
 
-  private heroById(id: string): Hero | undefined {
+  heroById(id: string): Hero | undefined {
     for (const h of this.heroes) if (h.id === id) return h;
     return undefined;
   }
 
   /** Makes `h` the hero that the per-hero engine code operates on (bots and remote teammates are silent). */
-  private setActor(h: Hero): void {
+  setActor(h: Hero): void {
     this.hero = h;
     this.audio.suppressed = h.isBot || h.isRemote || this.bgSim;
   }
 
   /** The current actor is not the local player: nothing it does may reach this screen (HUD, shake, banners ...). */
-  private isSilentActor(): boolean {
+  isSilentActor(): boolean {
     return this.hero.isBot || this.hero.isRemote;
   }
 
   /** A hero that is part of the dungeon simulation: on its feet and not away in the local town. */
-  private isInDungeonAlive(h: Hero): boolean {
+  isInDungeonAlive(h: Hero): boolean {
     return !h.isDead && !h.inTown;
   }
 
@@ -1182,7 +1182,7 @@ export class EmbervaultEngine {
   // ---------------------------------------------------------------------------------------------------------
 
   /** A fresh, empty level field set (the town starts from it). Key / gate flags carry over for the HUD. */
-  private blankCtx(): LevelCtx {
+  blankCtx(): LevelCtx {
     return {
       dungeon: this.dungeon,
       enemies: [],
@@ -1211,7 +1211,7 @@ export class EmbervaultEngine {
     };
   }
 
-  private captureCtx(): LevelCtx {
+  captureCtx(): LevelCtx {
     return {
       dungeon: this.dungeon,
       enemies: this.enemies,
@@ -1240,7 +1240,7 @@ export class EmbervaultEngine {
     };
   }
 
-  private applyCtx(c: LevelCtx): void {
+  applyCtx(c: LevelCtx): void {
     this.dungeon = c.dungeon;
     this.enemies = c.enemies;
     this.projectiles = c.projectiles;
@@ -1268,7 +1268,7 @@ export class EmbervaultEngine {
   }
 
   /** Shows the group set of the level the local hero is in (the other one is not rendered at all). */
-  private setViewGroups(town: boolean): void {
+  setViewGroups(town: boolean): void {
     this.levelGroup.visible = !town;
     this.dynamicGroup.visible = !town;
     this.debrisGroup.visible = !town;
@@ -1278,7 +1278,7 @@ export class EmbervaultEngine {
   }
 
   /** Runs `fn` once for every living hero with that hero as the actor, then restores the previous actor. */
-  private forEachLiveHero(fn: (h: Hero) => void): void {
+  forEachLiveHero(fn: (h: Hero) => void): void {
     const prev = this.hero;
     for (const h of this.heroes) {
       if (h.isDead || h.inTown) continue;
@@ -1289,7 +1289,7 @@ export class EmbervaultEngine {
   }
 
   /** Enemy targeting (spec §3.3 / §6): the nearest hero that is not downed, or null. */
-  private nearestLiveHero(x: number, z: number): Hero | null {
+  nearestLiveHero(x: number, z: number): Hero | null {
     let best: Hero | null = null;
     let bestD = Infinity;
     for (const h of this.heroes) {
@@ -1304,11 +1304,11 @@ export class EmbervaultEngine {
   }
 
   /** Difficulty scaling input (spec §4): everybody in the run counts, bots included. */
-  private getHeroCount(): number {
+  getHeroCount(): number {
     return this.heroes.length;
   }
 
-  private createHeroRigForClass(classId: HeroClassId): HeroRig {
+  createHeroRigForClass(classId: HeroClassId): HeroRig {
     const sm = this.sharedShadowMap!;
     const rig =
       classId === 'frost_mage'
@@ -1326,7 +1326,7 @@ export class EmbervaultEngine {
    * bot gets the player's total upgrade level plus 80% of the player's relic bonuses; without one (attract mode) only the
    * `?bots=N` dev override creates (bare) bots.
    */
-  private setupBots(base: CharacterLoadout | null): void {
+  setupBots(base: CharacterLoadout | null): void {
     for (const h of this.heroes) if (h.isBot || h.isRemote) this.disposeBot(h);
     this.heroes = this.heroes.filter((h) => !h.isBot && !h.isRemote);
     this.botGearKey = '';
@@ -1377,7 +1377,7 @@ export class EmbervaultEngine {
    * their share on) and the player's equipped relics (numeric bonuses scaled by `bot.relicScale`). Never touches the
    * player, the save or the API.
    */
-  private applyBotGear(bot: Hero, level: number, equipped: RelicItem[], potions: number): void {
+  applyBotGear(bot: Hero, level: number, equipped: RelicItem[], potions: number): void {
     bot.applyLoadout({
       gold: 0,
       maxDepth: 1,
@@ -1395,7 +1395,7 @@ export class EmbervaultEngine {
    * purchase, relic swap, coming back from town), every bot's gear is recomputed. Checked twice a second; bots keep their
    * current HP / shield (the increase of max HP is granted as healing, like a relic swap on the player).
    */
-  private syncBotGear(dt: number): void {
+  syncBotGear(dt: number): void {
     if (this.mp || !this.heroes.some((h) => h.isBot)) return;
     this.botGearTimer -= dt;
     if (this.botGearTimer > 0) return;
@@ -1422,7 +1422,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private disposeBot(bot: Hero): void {
+  disposeBot(bot: Hero): void {
     this.scene.remove(bot.rig.root);
     bot.rig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
@@ -1448,7 +1448,7 @@ export class EmbervaultEngine {
   }
 
   /** Lightweight bot look: a coloured ring under the feet and a "Bot N" nameplate above the head. */
-  private createBotMarker(bot: Hero): void {
+  createBotMarker(bot: Hero): void {
     const colors = [0x4fd8ff, 0x7dff8a, 0xff7ad9];
     const col = colors[(bot.botIndex - 1) % colors.length];
     const ring = new THREE.Mesh(
@@ -1482,7 +1482,7 @@ export class EmbervaultEngine {
     this.refreshBotPlate(bot, col);
   }
 
-  private refreshBotPlate(bot: Hero, colorHex?: number): void {
+  refreshBotPlate(bot: Hero, colorHex?: number): void {
     const marker = this.botMarkers.get(bot.id);
     if (!marker) return;
     const baseName = bot.displayName || `Bot ${bot.botIndex}`;
@@ -1512,7 +1512,7 @@ export class EmbervaultEngine {
    * health) and teammates are put around (cx, cz), the floor entrance. The local hero positions themself, and a
    * local hero who is in town is not part of the dungeon: they stay where they are.
    */
-  private placeTeamAround(cx: number, cz: number): void {
+  placeTeamAround(cx: number, cz: number): void {
     const local = this.localHero;
     let slot = 0;
     for (const h of this.heroes) {
@@ -1531,7 +1531,7 @@ export class EmbervaultEngine {
   }
 
   /** Moves `h` to a free spot around (cx, cz); `slot` spreads teammates on different sides. */
-  private warpHeroNear(h: Hero, cx: number, cz: number, slot: number): void {
+  warpHeroNear(h: Hero, cx: number, cz: number, slot: number): void {
     const a0 = 0.8 + slot * ((Math.PI * 2) / 3);
     let px = cx;
     let pz = cz;
@@ -1564,13 +1564,13 @@ export class EmbervaultEngine {
     h.ai.noProgressTimer = 0;
   }
 
-  private static readonly RESCUE_RADIUS = 1.5;
-  private static readonly RESCUE_SECONDS = 3.0;
+  static readonly RESCUE_RADIUS = 1.5;
+  static readonly RESCUE_SECONDS = 3.0;
   /** True while a rescue that involves the local hero is in progress (drives a faster HUD refresh). */
-  private rescueHudActive = false;
+  rescueHudActive = false;
 
   /** Rescue progress (0-1) of the best rescuer currently working on `target`. */
-  private getRescueProgress(target: Hero): number {
+  getRescueProgress(target: Hero): number {
     let best = 0;
     for (const h of this.heroes) {
       if (h.rescueTargetId === target.id) best = Math.max(best, h.rescueProgress);
@@ -1583,7 +1583,7 @@ export class EmbervaultEngine {
    * player holds F; a bot's AI "holds" it) for 3 seconds gets the downed hero back on their feet.
    * Taking damage resets the rescuer's progress (see damageHero).
    */
-  private updateRescue(dt: number): void {
+  updateRescue(dt: number): void {
     const R = EmbervaultEngine.RESCUE_RADIUS;
     let anyDowned = false;
     for (const h of this.heroes) if (h.isDead) anyDowned = true;
@@ -1676,7 +1676,7 @@ export class EmbervaultEngine {
   }
 
   /** What the HUD shows for rescues: progress on the (downed) local hero and the "hold F" prompt. */
-  private getRescueHud(): { beingRescued: number; prompt: { name: string; progress: number } | null } {
+  getRescueHud(): { beingRescued: number; prompt: { name: string; progress: number } | null } {
     const local = this.localHero;
     if (local.isDead) return { beingRescued: this.getRescueProgress(local), prompt: null };
     if (this.inTown) return { beingRescued: 0, prompt: null };
@@ -1697,7 +1697,7 @@ export class EmbervaultEngine {
     };
   }
 
-  private detectSoftwareGl(): boolean {
+  detectSoftwareGl(): boolean {
     const probe = document.createElement('canvas');
     const gl = probe.getContext('webgl2') || probe.getContext('webgl');
     if (!gl) return true;
@@ -1708,7 +1708,7 @@ export class EmbervaultEngine {
     return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
   }
 
-  private initRenderer(): void {
+  initRenderer(): void {
     this.isSoftwareGl = this.detectSoftwareGl();
 
     try {
@@ -1737,7 +1737,7 @@ export class EmbervaultEngine {
     this.container.appendChild(this.renderer.domElement);
   }
 
-  private initScene(): void {
+  initScene(): void {
     if (!this.renderer) return;
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x05060b);
@@ -1852,7 +1852,7 @@ export class EmbervaultEngine {
     this.scene.add(this.townGroup);
   }
 
-  private initParticlePool(): void {
+  initParticlePool(): void {
     const poolSize = 140;
     for (let i = 0; i < poolSize; i++) {
       const mat = new THREE.MeshBasicMaterial({
@@ -1878,7 +1878,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private spawnParticle(
+  spawnParticle(
     x: number,
     y: number,
     z: number,
@@ -1914,7 +1914,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private disposeGroupContents(group: THREE.Group): void {
+  disposeGroupContents(group: THREE.Group): void {
     group.traverse((obj) => {
       if (obj instanceof THREE.Mesh || obj instanceof THREE.InstancedMesh) {
         obj.geometry.dispose();
@@ -1937,7 +1937,7 @@ export class EmbervaultEngine {
    * Throws away the dungeon level the engine currently holds (its fields must be the active ones): scene groups,
    * textures, entities and the per-level bits of every hero's AI. The town is untouched (see clearTown).
    */
-  private clearLevel(): void {
+  clearLevel(): void {
     this.disposeGroupContents(this.levelGroup);
     this.disposeGroupContents(this.dynamicGroup);
     this.disposeGroupContents(this.debrisGroup);
@@ -1987,7 +1987,7 @@ export class EmbervaultEngine {
   }
 
   /** Disposes the town scene (the town's level fields must be the active ones). Safe when no town exists. */
-  private clearTown(): void {
+  clearTown(): void {
     this.disposeGroupContents(this.townGroup);
     if (this.textures) {
       this.textures.dispose();
@@ -2014,7 +2014,7 @@ export class EmbervaultEngine {
    * Leaves the town view for good (new floor / new run): disposes the town, then disposes (or re-activates, so the
    * caller can dispose) the parked dungeon. Afterwards the dungeon's fields are the active ones.
    */
-  private leaveTownScene(): void {
+  leaveTownScene(): void {
     if (this.townBuilt) {
       this.clearTown();
       if (this.dungeonCtx) {
@@ -2031,7 +2031,7 @@ export class EmbervaultEngine {
     this.setViewGroups(false);
   }
 
-  private buildLevel(
+  buildLevel(
     depth: number,
     options?: { savedSnapshot?: SavedDungeonSnapshot; tickBuffFloor?: boolean; mpSeed?: number; guest?: boolean }
   ): void {
@@ -2951,7 +2951,7 @@ export class EmbervaultEngine {
   }
 
   /** Scene atmosphere (background, fog, ambient / rim light, lantern colour) of the dungeon floor in `this.dungeon`. */
-  private applyDungeonAtmosphere(): void {
+  applyDungeonAtmosphere(): void {
     const biome = this.dungeon.biome;
     const isAlienDeck = biome.terrainTheme === 'alien';
     this.scene.background = new THREE.Color(biome.fogColor);
@@ -2966,7 +2966,7 @@ export class EmbervaultEngine {
   }
 
   /** Moody dusk-night town atmosphere: low ambient lighting so facility & lantern lights drive the mood. */
-  private applyTownAtmosphere(): void {
+  applyTownAtmosphere(): void {
     this.scene.background = new THREE.Color(0x090c14);
     this.scene.fog = new THREE.Fog(0x090c14, 36, 72);
     this.hemiLight.color.setHex(0x6c88b8);
@@ -2978,7 +2978,7 @@ export class EmbervaultEngine {
     this.heroLight.color.setHex(0xffbe66);
   }
 
-  private buildTown(): void {
+  buildTown(): void {
     // The caller has already parked or disposed the dungeon and activated an empty level field set for the town.
     for (const pet of this.pets.values()) pet.rig.root.visible = false;
     this.townBuilt = true;
@@ -3394,7 +3394,7 @@ export class EmbervaultEngine {
     this.emitMinimap();
   }
 
-  private spawnEnemies(): void {
+  spawnEnemies(): void {
     const biome = this.dungeon.biome;
     const theme = biome.terrainTheme;
     const isBossFloor = this.depth % 5 === 0;
@@ -3640,24 +3640,24 @@ export class EmbervaultEngine {
   }
 
   /** Spec §4: monster HP x (1 + (n - 1)) for n heroes - 2 heroes = 2x, 4 heroes = 4x (bosses and elites included). */
-  private getEnemyHpScale(): number {
+  getEnemyHpScale(): number {
     return 1 + (this.getHeroCount() - 1);
   }
 
-  private getDepthDamageScale(): number {
+  getDepthDamageScale(): number {
     return 1 + (this.depth - 1) * 0.12;
   }
 
-  private getSwarmDepthDamageScale(): number {
+  getSwarmDepthDamageScale(): number {
     return 1 + (this.depth - 1) * 0.06;
   }
 
-  private getDepthGoldScale(): number {
+  getDepthGoldScale(): number {
     // +6.5% gold per floor (within 5-8% per floor progression)
     return Math.pow(1.065, Math.max(0, this.depth - 1));
   }
 
-  private addEnemy(
+  addEnemy(
     kind: EnemyKind,
     gx: number,
     gz: number,
@@ -3836,7 +3836,7 @@ export class EmbervaultEngine {
     });
   }
 
-  private bindEvents(): void {
+  bindEvents(): void {
     window.addEventListener('resize', this.handleResize);
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
@@ -3849,7 +3849,7 @@ export class EmbervaultEngine {
     this.renderer?.domElement.addEventListener('webglcontextlost', this.handleContextLost);
   }
 
-  private handleResize = (): void => {
+  handleResize = (): void => {
     if (!this.renderer || !this.camera) return;
     const w = this.container.clientWidth || window.innerWidth;
     const h = this.container.clientHeight || window.innerHeight;
@@ -3858,20 +3858,20 @@ export class EmbervaultEngine {
     this.renderer.setSize(w, h);
   };
 
-  private handleContextLost = (e: Event): void => {
+  handleContextLost = (e: Event): void => {
     e.preventDefault();
     this.callbacks.onWebGLError('WebGL context was lost. Please reload the page.');
   };
 
-  private handleContextMenu = (e: MouseEvent): void => {
+  handleContextMenu = (e: MouseEvent): void => {
     e.preventDefault();
   };
 
-  private handleWheel = (e: WheelEvent): void => {
+  handleWheel = (e: WheelEvent): void => {
     this.camZoom = THREE.MathUtils.clamp(this.camZoom + e.deltaY * 0.0005, 0.72, 1.35);
   };
 
-  private activateManualMode(): void {
+  activateManualMode(): void {
     if (!this.audio.isEnabled()) {
       this.audio.unlockAndEnable();
     }
@@ -3880,9 +3880,9 @@ export class EmbervaultEngine {
   }
 
   /** When true (menus / account screens), keyboard and pointer input no longer takes over the hero. */
-  private inputLocked = false;
+  inputLocked = false;
   /** P6: a trade is being set up or running; gold / bag / stash actions are refused (see setTradeLock). */
-  private tradeLocked = false;
+  tradeLocked = false;
 
   public setInputLocked(locked: boolean): void {
     this.inputLocked = locked;
@@ -3892,7 +3892,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private handleKeyDown = (e: KeyboardEvent): void => {
+  handleKeyDown = (e: KeyboardEvent): void => {
     if (this.hero.isDead || this.inputLocked) return;
     const tag = (e.target as HTMLElement | null)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -3981,11 +3981,11 @@ export class EmbervaultEngine {
     }
   };
 
-  private handleKeyUp = (e: KeyboardEvent): void => {
+  handleKeyUp = (e: KeyboardEvent): void => {
     this.hero.input.keys.delete(e.code);
   };
 
-  private handlePointerDown = (e: PointerEvent): void => {
+  handlePointerDown = (e: PointerEvent): void => {
     if (this.hero.isDead || this.inTown || this.inputLocked) return;
     this.activateManualMode();
     if (e.button === 2) {
@@ -3999,22 +3999,22 @@ export class EmbervaultEngine {
     }
   };
 
-  private handlePointerMove = (e: PointerEvent): void => {
+  handlePointerMove = (e: PointerEvent): void => {
     this.hero.input.pointerClientX = e.clientX;
     this.hero.input.pointerClientY = e.clientY;
   };
 
-  private handlePointerUp = (e: PointerEvent): void => {
+  handlePointerUp = (e: PointerEvent): void => {
     if (e.button === 0) this.hero.input.leftMouseHeld = false;
   };
 
-  private handleWindowBlur = (): void => {
+  handleWindowBlur = (): void => {
     this.hero.input.leftMouseHeld = false;
     this.hero.input.keys.delete('KeyF'); // never keep "holding" the rescue key after the window loses focus
   };
 
   /** Turns the hero toward the cursor. Returns false if the cursor can't be projected. */
-  private faceCursor(): boolean {
+  faceCursor(): boolean {
     if (this.hero.isRemote) {
       // A remote teammate on the host has no cursor here: its client reports the facing it aimed at
       this.hero.facing = this.hero.input.aimFacing;
@@ -4032,7 +4032,7 @@ export class EmbervaultEngine {
   }
 
   /** While the left mouse button is held in manual mode: face the cursor and attack whenever ready. */
-  private updateHeldAttack(): void {
+  updateHeldAttack(): void {
     if (!this.hero.input.leftMouseHeld) return;
     if (this.hero.isDead || this.inTown || this.hero.controlMode !== 'manual' || this.transitionState !== 'none') {
       return;
@@ -4085,7 +4085,7 @@ export class EmbervaultEngine {
     });
   }
 
-  private triggerSkipFloorCheat(): void {
+  triggerSkipFloorCheat(): void {
     if (this.mp || this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
     if (this.audio.isEnabled()) {
       this.audio.playDescend();
@@ -4101,7 +4101,7 @@ export class EmbervaultEngine {
   }
 
   /** Freezes the current floor so the town portal can bring the hero back to `portal`. */
-  private snapshotDungeon(portal: { x: number; z: number }): SavedDungeonSnapshot {
+  snapshotDungeon(portal: { x: number; z: number }): SavedDungeonSnapshot {
     // Record consumed rune wells & broken crates so the floor stays consistent on return
     const usedRuneKeys = new Set<string>();
     for (const lp of this.lightProps) {
@@ -4132,7 +4132,7 @@ export class EmbervaultEngine {
   }
 
   /** Places a hero's lingering portal landmark (replacing that hero's previous one) in the current dungeon floor. */
-  private placeHeroPortal(hero: Hero, x: number, z: number, depth: number): void {
+  placeHeroPortal(hero: Hero, x: number, z: number, depth: number): void {
     if (!this.textures) return;
     const old = this.heroPortalRigs.get(hero.id);
     if (old) {
@@ -4170,7 +4170,7 @@ export class EmbervaultEngine {
   }
 
   /** True while some other hero is alive in the dungeon, i.e. the dungeon keeps running without the local hero. */
-  private partyHoldsDungeon(): boolean {
+  partyHoldsDungeon(): boolean {
     const local = this.localHero;
     return this.heroes.some((h) => h !== local && this.isInDungeonAlive(h));
   }
@@ -4180,7 +4180,7 @@ export class EmbervaultEngine {
    * in the dungeon it is parked and keeps being simulated; otherwise it is frozen exactly like the single player
    * flow (saved, discarded, rebuilt with fresh monsters when somebody comes back).
    */
-  private enterTownFromDungeon(): void {
+  enterTownFromDungeon(): void {
     const local = this.localHero;
     this.awayAnchor = { x: local.x, z: local.z };
     local.inTown = true;
@@ -4261,7 +4261,7 @@ export class EmbervaultEngine {
   }
 
   /** Removes a hero's dungeon portal data and 3D rig (used when the owner returns from town). */
-  private clearHeroPortal(hero: Hero): void {
+  clearHeroPortal(hero: Hero): void {
     hero.portal = null;
     for (const map of [this.heroPortalRigs, this.dungeonCtx?.heroPortalRigs]) {
       const rig = map?.get(hero.id);
@@ -4279,7 +4279,7 @@ export class EmbervaultEngine {
   }
 
   /** Returns the owner of a nearby active dungeon portal on the current floor, or null. */
-  private findNearbyDungeonPortal(hero: Hero = this.hero): Hero | null {
+  findNearbyDungeonPortal(hero: Hero = this.hero): Hero | null {
     if (this.inTown) return null;
     for (const h of this.heroes) {
       if (!h.portal || h.portal.depth !== this.depth) continue;
@@ -4360,7 +4360,7 @@ export class EmbervaultEngine {
   }
 
   /** The dungeon data behind the town gate (parked while running, kept in the frozen snapshot otherwise). */
-  private getParkedDungeon(): DungeonData | null {
+  getParkedDungeon(): DungeonData | null {
     return this.dungeonCtx?.dungeon ?? this.savedDungeon?.dungeon ?? null;
   }
 
@@ -4368,7 +4368,7 @@ export class EmbervaultEngine {
    * Doors the town gate can lead to (spec §3.1): everybody's portal on the current floor, the local hero's first.
    * No portal at all (e.g. after a floor change): the floor entrance (spec §5.3).
    */
-  private getTownPortalOptions(): TownPortalOption[] {
+  getTownPortalOptions(): TownPortalOption[] {
     if (!this.inTown) return [];
     const local = this.localHero;
     const opts: TownPortalOption[] = [];
@@ -4394,7 +4394,7 @@ export class EmbervaultEngine {
     return opts;
   }
 
-  private resolveGateTarget(portalId?: string): { x: number; z: number } | null {
+  resolveGateTarget(portalId?: string): { x: number; z: number } | null {
     const opts = this.getTownPortalOptions();
     const pick = opts.find((o) => o.id === portalId) ?? opts[0];
     if (!pick) return null;
@@ -4408,7 +4408,7 @@ export class EmbervaultEngine {
   }
 
   /** The local hero steps out of the town gate into the dungeon (runs at the black of the fade). */
-  private enterDungeonFromTown(target: { x: number; z: number }): void {
+  enterDungeonFromTown(target: { x: number; z: number }): void {
     // Owner returning from town closes their own portal (teammates' portals stay open)
     this.clearHeroPortal(this.localHero);
     const snap = this.savedDungeon;
@@ -4537,7 +4537,7 @@ export class EmbervaultEngine {
   }
 
   /** Swap the hero 3D rig to match the given class (no-op if already matching). */
-  private applyHeroClassRig(classId: HeroClassId): void {
+  applyHeroClassRig(classId: HeroClassId): void {
     if (!this.hero.rig || !this.sharedShadowMap) return;
     const currentClass = this.hero.rig.root.userData.heroClassId as HeroClassId | undefined;
     if (currentClass === classId) return;
@@ -4638,7 +4638,7 @@ export class EmbervaultEngine {
     return this.localHero.exportLoadout(this.localHero.inTown ? this.localHero.maxDepthReached : this.depth);
   }
 
-  private requestSave(reason: SaveCheckpointReason): void {
+  requestSave(reason: SaveCheckpointReason): void {
     // Only the local character is ever saved (bots and remote teammates never touch the API)
     if (this.hero.isBot || this.hero.isRemote) return;
     if (this.persistRun && !this.loadingRun) this.callbacks.onSaveCheckpoint?.(reason);
@@ -4896,19 +4896,19 @@ export class EmbervaultEngine {
     return this.depth * 10;
   }
 
-  private isHeroNearAltar(): boolean {
+  isHeroNearAltar(): boolean {
     if (!this.dungeon?.altarPos) return false;
     const aw = gridToWorld(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
     return Math.hypot(this.hero.x - aw.x, this.hero.z - aw.z) < 2.55;
   }
 
-  private isHeroNearShop(): boolean {
+  isHeroNearShop(): boolean {
     if (!this.dungeon?.shopPos) return false;
     const sw = gridToWorld(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
     return Math.hypot(this.hero.x - sw.x, this.hero.z - sw.z) < 2.55;
   }
 
-  private isHeroNearPortal(): boolean {
+  isHeroNearPortal(): boolean {
     if (this.inTown) {
       if (!this.townGatePos) return false;
       return Math.hypot(this.hero.x - this.townGatePos.x, this.hero.z - this.townGatePos.z) < 2.25;
@@ -4916,7 +4916,7 @@ export class EmbervaultEngine {
     return this.findNearbyDungeonPortal(this.localHero) !== null;
   }
 
-  private isHeroNearStash(): boolean {
+  isHeroNearStash(): boolean {
     if (!this.inTown || !this.stashPos) return false;
     return Math.hypot(this.hero.x - this.stashPos.x, this.hero.z - this.stashPos.z) < 2.75;
   }
@@ -4989,7 +4989,7 @@ export class EmbervaultEngine {
     return { ok: true };
   }
 
-  private isHeroNearAngel(): boolean {
+  isHeroNearAngel(): boolean {
     if (!this.inTown || !this.angelPos) return false;
     return Math.hypot(this.hero.x - this.angelPos.x, this.hero.z - this.angelPos.z) < 2.75;
   }
@@ -5175,12 +5175,12 @@ export class EmbervaultEngine {
     return true;
   }
 
-  private beginTransition(action: () => void): void {
+  beginTransition(action: () => void): void {
     this.transitionState = 'fadeOut';
     this.pendingTransitionAction = action;
   }
 
-  private usePotion(): void {
+  usePotion(): void {
     const effMax = this.hero.getEffectiveMaxHp();
     // Single player: the local hero's elixir also heals the bot teammates, so drinking is allowed while any of them is hurt
     const healsBots = !this.mp && this.hero === this.localHero && !this.hero.isBot;
@@ -5248,7 +5248,7 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
-  private performDash(): void {
+  performDash(): void {
     if (this.hero.dashCooldown > 0 || this.hero.dashTimer > 0) return;
     if (this.mpGuestDungeon()) this.mpQueueAction(ACT_DASH); // predicted here, executed by the host too
     if (this.hero.isMage()) {
@@ -5315,7 +5315,7 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
-  private applyBonusEnemyDamage(
+  applyBonusEnemyDamage(
     enemy: EnemyEntity,
     bonusDmg: number,
     label: string,
@@ -5347,7 +5347,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private performAttack(): void {
+  performAttack(): void {
     if (this.hero.attackCooldown > 0) return;
     if (this.hero.isMage()) {
       this.performMageAttack();
@@ -5487,7 +5487,7 @@ export class EmbervaultEngine {
    * floating text, and every "on hit" relic / set effect. Shared by the warrior's
    * sword arc and the Frost Mage's ice spike explosions.
    */
-  private applyHeroHit(enemy: EnemyEntity, hit: HeroHitParams): void {
+  applyHeroHit(enemy: EnemyEntity, hit: HeroHitParams): void {
     const dx = enemy.x - hit.originX;
     const dz = enemy.z - hit.originZ;
     const dist = Math.hypot(dx, dz);
@@ -5730,7 +5730,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private performPommelStrike(): void {
+  performPommelStrike(): void {
     if (this.hero.isDead || this.hero.pommelCooldown > 0) return;
     if (this.mpGuestDungeon()) this.mpQueueAction(ACT_POMMEL);
     if (this.hero.isMage()) {
@@ -5976,7 +5976,7 @@ export class EmbervaultEngine {
   // =========================================================================
 
   /** Rough collision radius of an enemy body for projectile / AoE checks. */
-  private getEnemyHitRadius(e: EnemyEntity): number {
+  getEnemyHitRadius(e: EnemyEntity): number {
     if (e.isBoss) return 1.0;
     if (isGuardianEnemy(e.kind) || e.isElite) return 0.55;
     if (isSwarmEnemy(e.kind)) return 0.3;
@@ -5984,7 +5984,7 @@ export class EmbervaultEngine {
   }
 
   /** Visual scale for the frozen-ice shell per enemy size. */
-  private getFrozenShellScale(e: EnemyEntity): number {
+  getFrozenShellScale(e: EnemyEntity): number {
     if (e.isBoss) return 2.2;
     if (isGuardianEnemy(e.kind)) return 1.35;
     if (e.isElite) return 1.3;
@@ -5992,7 +5992,7 @@ export class EmbervaultEngine {
     return 1.05;
   }
 
-  private applySlow(e: EnemyEntity): void {
+  applySlow(e: EnemyEntity): void {
     if (e.dead) return;
     const factor = e.isBoss
       ? FROST_MAGE.bossSlowFactor
@@ -6016,7 +6016,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private applyFreeze(e: EnemyEntity, duration: number): void {
+  applyFreeze(e: EnemyEntity, duration: number): void {
     if (e.dead) return;
     e.frozenTimer = Math.max(e.frozenTimer ?? 0, duration);
     // Freezing interrupts boss windups / ranged casts, exactly like Pommel Strike
@@ -6040,7 +6040,7 @@ export class EmbervaultEngine {
   }
 
   /** Rotates the hero to face the nearest valid enemy. Returns true if a target was found. */
-  private autoFaceNearestEnemy(): boolean {
+  autoFaceNearestEnemy(): boolean {
     const ranged = this.hero.isRangedClass();
     const range = this.hero.isHunter()
       ? HUNTER.projectileRange
@@ -6069,7 +6069,7 @@ export class EmbervaultEngine {
   }
 
   /** Projects a screen point onto the ground plane (y = 0.85, ice spike height). */
-  private screenToGround(clientX: number, clientY: number): { x: number; z: number } | null {
+  screenToGround(clientX: number, clientY: number): { x: number; z: number } | null {
     if (!this.camera || !this.renderer) return null;
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
@@ -6086,7 +6086,7 @@ export class EmbervaultEngine {
   }
 
   /** Frost Mage basic attack: fires one ice spike along heroFacing (3-shot cycle, never resets). */
-  private performMageAttack(): void {
+  performMageAttack(): void {
     if (this.hero.attackCooldown > 0) return;
     const shotIdx = this.hero.mageShotIndex;
     const empowered = shotIdx === 2;
@@ -6116,7 +6116,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private spawnIceSpike(x: number, z: number, dirX: number, dirZ: number, shotIdx: number): void {
+  spawnIceSpike(x: number, z: number, dirX: number, dirZ: number, shotIdx: number): void {
     const empowered = shotIdx === 2;
     const mesh = createIceSpikeMesh(empowered);
     mesh.position.set(x, 0.85, z);
@@ -6137,7 +6137,7 @@ export class EmbervaultEngine {
   }
 
   /** Hunter basic attack: fast single-target arrow along heroFacing (no 3-hit cycle). */
-  private performHunterAttack(): void {
+  performHunterAttack(): void {
     if (this.hero.attackCooldown > 0) return;
     this.hero.attackCooldown = this.hero.getHunterShotCooldown();
     this.hero.attackAnim = 0.18;
@@ -6165,7 +6165,7 @@ export class EmbervaultEngine {
     this.hero.phantomCritTimer = 0;
   }
 
-  private hitHunterArrow(
+  hitHunterArrow(
     x: number,
     z: number,
     target: EnemyEntity | null,
@@ -6226,7 +6226,7 @@ export class EmbervaultEngine {
   }
 
   /** Hunter right-click skill (CD 7s): summon a random pet if none alive, else buff (+20% atk/spd/def for 5s) + heal 50%. */
-  private performHunterPetSkill(): void {
+  performHunterPetSkill(): void {
     if (this.hero.pommelCooldown > 0 || this.hero.isDead || this.inTown) return;
     if (this.mpGuestDungeon()) {
       this.mpQueueAction(ACT_POMMEL);
@@ -6327,7 +6327,7 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
-  private disposePetRig(rig: PetRig): void {
+  disposePetRig(rig: PetRig): void {
     this.scene.remove(rig.root);
     rig.root.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {
@@ -6341,20 +6341,20 @@ export class EmbervaultEngine {
     });
   }
 
-  private dismissPet(ownerId: string): void {
+  dismissPet(ownerId: string): void {
     const pet = this.pets.get(ownerId);
     if (!pet) return;
     this.disposePetRig(pet.rig);
     this.pets.delete(ownerId);
   }
 
-  private clearAllPets(): void {
+  clearAllPets(): void {
     for (const id of Array.from(this.pets.keys())) {
       this.dismissPet(id);
     }
   }
 
-  private repositionPetsForNewFloor(): void {
+  repositionPetsForNewFloor(): void {
     const newMaxHp = getHunterPetMaxHp(this.depth);
     for (const pet of this.pets.values()) {
       const owner = this.heroById(pet.ownerId);
@@ -6377,7 +6377,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private damagePet(pet: PetEntity, rawDamage: number, srcX: number, srcZ: number): void {
+  damagePet(pet: PetEntity, rawDamage: number, srcX: number, srcZ: number): void {
     if (pet.invuln > 0 || pet.hp <= 0) return;
     const defMult = pet.buffTimer > 0 ? HUNTER.petBuffDamageTakenMult : 1;
     const dmg = Math.max(1, Math.round(rawDamage * defMult));
@@ -6414,7 +6414,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private damagePetsInRadius(cx: number, cz: number, radius: number, rawDamage: number): void {
+  damagePetsInRadius(cx: number, cz: number, radius: number, rawDamage: number): void {
     for (const pet of Array.from(this.pets.values())) {
       if (pet.hp <= 0) continue;
       const owner = this.heroById(pet.ownerId);
@@ -6425,7 +6425,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private updatePets(dt: number): void {
+  updatePets(dt: number): void {
     const prevActor = this.hero;
     for (const [ownerId, pet] of Array.from(this.pets.entries())) {
       const owner = this.heroById(ownerId);
@@ -6545,7 +6545,7 @@ export class EmbervaultEngine {
     this.setActor(prevActor);
   }
 
-  private animatePetRig(pet: PetEntity, moveSpeed: number, dt: number): void {
+  animatePetRig(pet: PetEntity, moveSpeed: number, dt: number): void {
     pet.rig.root.position.set(pet.x, 0, pet.z);
     pet.rig.body.rotation.y = pet.facing;
     const moving = moveSpeed > 0.25;
@@ -6578,7 +6578,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private removeHeroProjectileAt(idx: number): void {
+  removeHeroProjectileAt(idx: number): void {
     const p = this.heroProjectiles[idx];
     this.dynamicGroup.remove(p.mesh);
     p.mesh.traverse((obj) => {
@@ -6591,12 +6591,12 @@ export class EmbervaultEngine {
     this.heroProjectiles.splice(idx, 1);
   }
 
-  private isPointInWall(x: number, z: number): boolean {
+  isPointInWall(x: number, z: number): boolean {
     const g = worldToGrid(x, z);
     return !isTileWalkable(this.dungeon, g.gx, g.gz, this.doorUnlocked);
   }
 
-  private updateHeroProjectiles(dt: number): void {
+  updateHeroProjectiles(dt: number): void {
     for (let i = this.heroProjectiles.length - 1; i >= 0; i--) {
       const p = this.heroProjectiles[i];
       if (p.pid !== undefined) continue; // teammate view: another hero's spike is moved by mpGuestWorld
@@ -6697,7 +6697,7 @@ export class EmbervaultEngine {
     this.setActor(this.localHero);
   }
 
-  private explodeIceSpike(x: number, z: number, shotIdx: number, phantomCrit = false): void {
+  explodeIceSpike(x: number, z: number, shotIdx: number, phantomCrit = false): void {
     const empowered = shotIdx === 2;
     const radius = FROST_MAGE.shotExplosionRadius[shotIdx];
     this.audio.playIceShatter(empowered);
@@ -6801,7 +6801,7 @@ export class EmbervaultEngine {
   }
 
   /** Frost Mage right-click: screen-wide expanding ice nova — freeze, damage, push. */
-  private performFrostNova(): void {
+  performFrostNova(): void {
     if (this.hero.isDead || this.hero.pommelCooldown > 0) return;
     this.hero.pommelCooldown = this.hero.pommelMaxCooldown;
     this.hero.attackAnim = 0.34;
@@ -6929,7 +6929,7 @@ export class EmbervaultEngine {
   }
 
   /** Phoenix Plume fire ring at a point (shared by Dash and Blink). */
-  private triggerPhoenixRingAt(x: number, z: number): void {
+  triggerPhoenixRingAt(x: number, z: number): void {
     const fireDmg = Math.max(8, Math.round(14 * (1 + this.hero.atkUpgrades * 0.1 + this.hero.relicStats.atkPct / 100)));
     for (const e of this.enemies) {
       if (e.dead) continue;
@@ -6961,7 +6961,7 @@ export class EmbervaultEngine {
   }
 
   /** Frost Mage mobility: instant short teleport along the move direction (or facing). */
-  private performBlink(dirOverride?: { x: number; z: number }): void {
+  performBlink(dirOverride?: { x: number; z: number }): void {
     if (this.hero.dashCooldown > 0 || this.hero.dashTimer > 0) return;
     // Direction priority: explicit (AI) > current move input (manual) > facing
     let dirX = Math.sin(this.hero.facing);
@@ -7027,7 +7027,7 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
-  private breakProp(br: BreakableEntity): void {
+  breakProp(br: BreakableEntity): void {
     if (this.mpGuestDungeon()) {
       // Teammate client: the host decides what breaks (and what drops). My own hit shatters the crate right away
       // (purely visual); the host's snapshot confirms it, otherwise it comes back (see mpGuestWorld)
@@ -7080,7 +7080,7 @@ export class EmbervaultEngine {
     this.setActor(breaker);
   }
 
-  private killEnemy(enemy: EnemyEntity): void {
+  killEnemy(enemy: EnemyEntity): void {
     enemy.dead = true;
     enemy.rig.root.visible = false;
     if (this.mp?.role === 'host') this.mpEmit(['x', q100(enemy.x), q100(enemy.z), enemy.isBoss || enemy.isElite ? 1 : 0]);
@@ -7394,7 +7394,7 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
-  private spawnRelicDrops(
+  spawnRelicDrops(
     x: number,
     z: number,
     source: RelicDropSource,
@@ -7442,7 +7442,7 @@ export class EmbervaultEngine {
     });
   }
 
-  private spawnRelicLoot(
+  spawnRelicLoot(
     x: number,
     z: number,
     relic: RelicItem,
@@ -7500,7 +7500,7 @@ export class EmbervaultEngine {
   }
 
   /** Bot gold / potion drops go straight into the bot's own purse (same values the pickup would give). */
-  private grantBotLoot(type: 'gold' | 'potion', customValue?: number): void {
+  grantBotLoot(type: 'gold' | 'potion', customValue?: number): void {
     const h = this.hero;
     if (type === 'gold') {
       const base =
@@ -7515,7 +7515,7 @@ export class EmbervaultEngine {
   }
 
   /** Mirrors the relic pickup rules of updateLoot for a bot (equip into a free slot, else upgrade, else bag, else sell). */
-  private grantBotRelic(item: RelicItem): void {
+  grantBotRelic(item: RelicItem): void {
     const h = this.hero;
     h.discoveredRelicIds.add(item.templateId);
     if (h.equippedRelics.length < 4) {
@@ -7531,7 +7531,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private spawnLoot(x: number, z: number, type: 'gold' | 'potion', customValue?: number): void {
+  spawnLoot(x: number, z: number, type: 'gold' | 'potion', customValue?: number): void {
     if (this.hero.isBot) {
       this.grantBotLoot(type, customValue);
       return;
@@ -7558,7 +7558,7 @@ export class EmbervaultEngine {
     });
   }
 
-  private getEnemyBaseLabel(kind: EnemyKind): string {
+  getEnemyBaseLabel(kind: EnemyKind): string {
     switch (kind) {
       case 'skeleton':
         return '骷髏戰士';
@@ -7621,52 +7621,14 @@ export class EmbervaultEngine {
     }
   }
 
-  private getEnemyLabel(e: EnemyEntity): string {
+  getEnemyLabel(e: EnemyEntity): string {
     if (e.isBoss) return e.bossName ?? '地城頭目';
     if (e.customName) return e.customName;
     const base = this.getEnemyBaseLabel(e.kind);
     return e.isElite ? `菁英 ${base}` : base;
   }
 
-  private buildRunSummary(): RunSummary {
-    return {
-      heroClass: this.hero.classId,
-      depth: this.depth,
-      biomeName: this.dungeon.biome.name,
-      durationSec: Math.max(1, Math.floor(this.runElapsedSec)),
-      totalGoldEarned: this.hero.totalGoldEarned,
-      goldRemaining: this.hero.gold,
-      totalKills: this.hero.kills,
-      normalKills: this.hero.normalKills,
-      eliteKills: this.hero.eliteKills,
-      bossKills: this.hero.bossKills,
-      upgradeLevel: this.hero.getTotalUpgradeLevel(),
-      // For the Frost Mage, "hpUpgrades" reports HP+shield upgrades and "armorUpgrades" reports shield-speed upgrades.
-      // For the Hunter, "armorUpgrades" reports attack-speed upgrades and crit gives +3% per level.
-      hpUpgrades: this.hero.isMage() ? this.hero.hpShieldUpgrades : this.hero.hpUpgrades,
-      atkUpgrades: this.hero.atkUpgrades,
-      armorUpgrades: this.hero.isMage()
-        ? this.hero.shieldSpeedUpgrades
-        : this.hero.isHunter()
-        ? this.hero.atkSpeedUpgrades
-        : this.hero.armorUpgrades,
-      critUpgrades: this.hero.critUpgrades,
-      maxHp: this.hero.maxHp,
-      atkBonusPct: this.hero.atkUpgrades * 10,
-      armorBonusPct: this.hero.armorUpgrades * 10,
-      atkSpeedBonusPct: this.hero.isHunter()
-        ? Math.round(this.hero.atkSpeedUpgrades * HUNTER.atkSpeedStep * 100)
-        : 0,
-      critBonusPct: this.hero.critUpgrades * (this.hero.isHunter() ? HUNTER.critPerUpgradePct : 2),
-      potionsUsed: this.hero.potionsUsed,
-      potionsLeft: this.hero.potions,
-      totalDamageDealt: this.hero.totalDamageDealt,
-      critCount: this.hero.critCount,
-      slainBy: this.hero.slainBy,
-    };
-  }
-
-  private damageHero(
+  damageHero(
     amount: number,
     sourceX: number,
     sourceZ: number,
@@ -7956,221 +7918,14 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
-  private addScreenShake(magnitude: number, duration: number): void {
+  addScreenShake(magnitude: number, duration: number): void {
     if (this.mp?.role === 'host' && this.hero.isRemote) this.mpEmit(['k', q100(magnitude), q100(duration), this.hero.id]);
     if (this.bgSim || this.isSilentActor()) return; // only the local player feels the shake
     this.shakeMag = Math.max(this.shakeMag, magnitude);
     this.shakeTime = Math.max(this.shakeTime, duration);
   }
 
-  /** Bot actions stay quiet unless `force` (team-wide events like the key / gate / boss kill). */
-  private pushBanner(title: string, subtitle?: string, force = false): void {
-    if (this.mp?.role === 'host' && (force || this.hero.isRemote)) {
-      this.mpEmit(['b', title, subtitle ?? '', force ? '' : this.hero.id]);
-    }
-    if (this.bgSim || (this.isSilentActor() && !force)) return;
-    this.callbacks.onBanner({ id: this.nextId++, title, subtitle });
-  }
-
-  private emitFloatingText(
-    wx: number,
-    wy: number,
-    wz: number,
-    text: string,
-    tone: FloatingLabelData['tone'],
-    force = false
-  ): void {
-    if (this.mp?.role === 'host') this.mpCaptureFloat(wx, wy, wz, text, tone);
-    if (!this.camera || !this.renderer || this.bgSim) return;
-    if (this.isSilentActor() && !force) return;
-    _projVec.set(wx, wy, wz).project(this.camera);
-    if (_projVec.z > 1) return;
-    const w = this.container.clientWidth || window.innerWidth;
-    const h = this.container.clientHeight || window.innerHeight;
-    const sx = (_projVec.x * 0.5 + 0.5) * w;
-    const sy = (-_projVec.y * 0.5 + 0.5) * h;
-    this.callbacks.onFloatingLabel({
-      id: this.nextId++,
-      text,
-      x: sx,
-      y: sy,
-      tone,
-    });
-  }
-
-  private emitHud(): void {
-    if (this.bgSim || this.isSilentActor()) return; // the HUD only ever shows the local hero
-    const lh = this.localHero;
-    const rescueHud = this.getRescueHud();
-    const activeBoss = this.viewEnemies().find(
-      (e) =>
-        e.isBoss &&
-        !e.dead &&
-        Math.hypot(e.x - lh.x, e.z - lh.z) < 15.5
-    );
-
-    this.callbacks.onHudChange({
-      hp: lh.hp,
-      maxHp: lh.getEffectiveMaxHp(),
-      baseMaxHp: lh.maxHp,
-      maxHpCap: lh.getBaseMaxHpCap(),
-      potions: lh.potions,
-      hasKey: this.hasKey,
-      doorUnlocked: this.doorUnlocked,
-      depth: this.depth,
-      biomeName: this.inTown ? '庇護小鎮' : this.dungeon.biome.name,
-      gold: lh.gold,
-      kills: lh.kills,
-      atkBonusPct: lh.atkUpgrades * 10,
-      armorBonusPct: lh.armorUpgrades * 10,
-      armorMaxPct: lh.maxArmorUpgrades * 10,
-      atkSpeedBonusPct: lh.isHunter() ? Math.round(lh.atkSpeedUpgrades * HUNTER.atkSpeedStep * 100) : 0,
-      atkSpeedMaxPct: Math.round(HUNTER.maxAtkSpeedUpgrades * HUNTER.atkSpeedStep * 100),
-      critBonusPct: lh.critUpgrades * (lh.isHunter() ? HUNTER.critPerUpgradePct : 2),
-      critMaxPct: lh.getUpgradeMax('crit') * (lh.isHunter() ? HUNTER.critPerUpgradePct : 2),
-      upgradeLevel: lh.getTotalUpgradeLevel(),
-      upgradeCost: this.getUpgradeCost(),
-      potionCost: this.getPotionCost(),
-      nearAltar: this.isHeroNearAltar(),
-      hasAltarOnFloor: Boolean(this.dungeon.altarPos),
-      nearShop: this.isHeroNearShop(),
-      hasShopOnFloor: Boolean(this.dungeon.shopPos),
-      inTown: this.inTown,
-      nearPortal: this.isHeroNearPortal(),
-      portalOptions: this.getTownPortalOptions(),
-      dungeonRunning: this.inTown && this.dungeonCtx !== null,
-      nearAngel: this.isHeroNearAngel(),
-      townReturnCost: this.getTownReturnCost(),
-      angelBuff: lh.angelBuff ? { ...lh.angelBuff } : null,
-      controlMode: lh.controlMode,
-      soundOn: this.audio.isEnabled(),
-      dashReady: lh.dashCooldown <= 0,
-      pommelCooldown: lh.pommelCooldown,
-      pommelMaxCooldown: lh.pommelMaxCooldown,
-      fadeOpacity: this.fadeOpacity,
-      aiStatus: lh.ai.status,
-      boss: activeBoss
-        ? {
-            name: activeBoss.bossName ?? 'DUNGEON BOSS',
-            title: activeBoss.bossTitle ?? '',
-            hp: Math.max(0, activeBoss.hp),
-            maxHp: activeBoss.maxHp,
-            state: activeBoss.bossState ?? 'chase',
-          }
-        : null,
-      isDead: lh.isDead,
-      runSummary: lh.isDead ? this.buildRunSummary() : null,
-      beingRescued: rescueHud.beingRescued,
-      rescuePrompt: rescueHud.prompt,
-      partySize: this.heroes.length,
-      party: this.mpPartyInfo(),
-      mpWait: this.mp?.hold ? this.mp.holdText || null : null,
-      equippedRelics: [...lh.equippedRelics],
-      relicBag: [...lh.relicBag],
-      relicBagCap: lh.relicBagCap,
-      nearStash: this.isHeroNearStash(),
-      stashOpen: lh.stashOpen,
-      // The trade window picks from the stash too (P6), so it is exposed while a trade holds the lock
-      stash: lh.stashOpen || this.tradeLocked ? [...lh.stash] : [],
-      stashCount: lh.stash.length,
-      stashCap: STASH_CAP,
-      relicStats: lh.relicStats,
-      activeSets: lh.relicStats.activeSets,
-      discoveredRelicIds: Array.from(lh.discoveredRelicIds),
-      heroClass: lh.classId,
-      shield: Math.round(lh.shield),
-      maxShield: lh.getEffectiveMaxShield(),
-      shieldRegenerating:
-        lh.isMage() &&
-        lh.shield < lh.getEffectiveMaxShield() &&
-        lh.timeSinceDamaged >= lh.getShieldRegenDelay(),
-      skillName: HERO_CLASSES[lh.classId].skillName,
-      mobilityName: HERO_CLASSES[lh.classId].mobilityName,
-      upgradeOptions: this.getUpgradeOptions(),
-      pet: (() => {
-        const p = this.pets.get(lh.id);
-        if (!p || lh.isDead) return null;
-        return {
-          species: p.species,
-          name: p.name,
-          hp: Math.max(0, Math.round(p.hp)),
-          maxHp: p.maxHp,
-          buffRemaining: Math.max(0, p.buffTimer),
-          buffMax: HUNTER.petBuffDuration,
-          regenerating: p.hp < p.maxHp && p.timeSinceDamaged >= HUNTER.petRegenDelay,
-        };
-      })(),
-      companions: this.heroes
-        .filter((h) => h !== lh && (h.isBot || h.isRemote))
-        .map((h) => ({
-          id: h.id,
-          name: h.displayName || (h.isBot ? `Bot ${h.botIndex}` : this.mp ? this.mpNameOf(h.id) : '隊友'),
-          classId: h.classId,
-          level: h.netLevel ?? 1 + h.getTotalUpgradeLevel(),
-          hp: Math.max(0, Math.round(h.hp)),
-          maxHp: Math.max(1, Math.round(h.getEffectiveMaxHp())),
-          shield: Math.max(0, Math.round(h.shield)),
-          maxShield: Math.round(h.netMaxShield ?? h.getEffectiveMaxShield()),
-          isDead: h.isDead,
-          inTown: h.inTown,
-        })),
-    });
-  }
-
-  private emitMinimap(): void {
-    if (this.bgSim || this.isSilentActor()) return;
-    const lh = this.localHero;
-    const heroG = worldToGrid(lh.x, lh.z);
-    this.callbacks.onMinimapUpdate({
-      width: this.dungeon.width,
-      height: this.dungeon.height,
-      tiles: this.dungeon.tiles,
-      explored: this.dungeon.explored,
-      playerX: heroG.gx,
-      playerZ: heroG.gz,
-      keyX: this.dungeon.keyPos.gx,
-      keyZ: this.dungeon.keyPos.gz,
-      hasKey: this.hasKey,
-      doorX: this.dungeon.doorPos.gx,
-      doorZ: this.dungeon.doorPos.gz,
-      doorUnlocked: this.doorUnlocked,
-      stairsX: this.dungeon.stairsPos.gx,
-      stairsZ: this.dungeon.stairsPos.gz,
-      altarX: this.dungeon.altarPos?.gx,
-      altarZ: this.dungeon.altarPos?.gz,
-      shopX: this.dungeon.shopPos?.gx,
-      shopZ: this.dungeon.shopPos?.gz,
-      terrainTheme: this.dungeon.biome.terrainTheme,
-      enemies: this.viewEnemies()
-        .filter((e) => !e.dead)
-        .map((e) => {
-          const g = worldToGrid(e.x, e.z);
-          return { x: g.gx, z: g.gz, isBoss: e.isBoss, isElite: e.isElite };
-        }),
-      relics: this.loots
-        .filter((l) => !l.collected && l.type === 'relic' && (l.relic || l.rarity) && l.ownerId === this.localHeroId)
-        .map((l) => {
-          const g = worldToGrid(l.x, l.z);
-          return { x: g.gx, z: g.gz, rarity: (l.relic?.rarity ?? l.rarity)! };
-        }),
-    });
-  }
-
-  private markExplored(cgx: number, cgz: number): void {
-    const radius = 5;
-    for (let dz = -radius; dz <= radius; dz++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        if (dx * dx + dz * dz > radius * radius) continue;
-        const nx = cgx + dx;
-        const nz = cgz + dz;
-        if (nx >= 0 && nz >= 0 && nx < this.dungeon.width && nz < this.dungeon.height) {
-          this.dungeon.explored[nz][nx] = true;
-        }
-      }
-    }
-  }
-
-  private canMoveTo(wx: number, wz: number, radius = 0.38): boolean {
+  canMoveTo(wx: number, wz: number, radius = 0.38): boolean {
     const checks = [
       [wx - radius, wz - radius],
       [wx + radius, wz - radius],
@@ -8208,7 +7963,7 @@ export class EmbervaultEngine {
     return true;
   }
 
-  private moveWithSlide(
+  moveWithSlide(
     x: number,
     z: number,
     dx: number,
@@ -8283,7 +8038,7 @@ export class EmbervaultEngine {
     return { x: nx, z: nz };
   }
 
-  private buildSafeGridPath(
+  buildSafeGridPath(
     goalGx: number,
     goalGz: number
   ): Array<{ gx: number; gz: number }> {
@@ -8310,7 +8065,7 @@ export class EmbervaultEngine {
     return path;
   }
 
-  private followGridPath(
+  followGridPath(
     path: Array<{ gx: number; gz: number }>
   ): { moveX: number; moveZ: number } | null {
     while (path.length > 0) {
@@ -8328,7 +8083,7 @@ export class EmbervaultEngine {
     return null;
   }
 
-  private nudgeHeroToClearTile(): void {
+  nudgeHeroToClearTile(): void {
     const cur = worldToGrid(this.hero.x, this.hero.z);
     const targetTile =
       this.hero.ai.path.length > 0 && isTileWalkable(this.dungeon, this.hero.ai.path[0].gx, this.hero.ai.path[0].gz, this.doorUnlocked)
@@ -8368,7 +8123,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private tryAutoTravelDash(moveX: number, moveZ: number, distToGoal: number): void {
+  tryAutoTravelDash(moveX: number, moveZ: number, distToGoal: number): void {
     // Warrior dash travels ~2.15 units; the mage's Blink teleports 5 units, so every
     // safety check below scales with the actual travel distance.
     const mage = this.hero.isMage();
@@ -8430,7 +8185,7 @@ export class EmbervaultEngine {
     this.performDash();
   }
 
-  private getPathDashDirection(
+  getPathDashDirection(
     path: Array<{ gx: number; gz: number }>,
     fallback: { moveX: number; moveZ: number }
   ): { moveX: number; moveZ: number; distToGoal: number } {
@@ -8475,7 +8230,7 @@ export class EmbervaultEngine {
     return { moveX: fallback.moveX, moveZ: fallback.moveZ, distToGoal };
   }
 
-  private triggerStuckRecovery(emergencyWarp: boolean): void {
+  triggerStuckRecovery(emergencyWarp: boolean): void {
     this.hero.ai.strafeSign *= -1;
     this.hero.ai.path = [];
     this.hero.ai.combatPath = [];
@@ -8583,7 +8338,7 @@ export class EmbervaultEngine {
    * shoot only with line of sight, Frost Nova / Blink to escape crowds and swarms.
    * Returns null when the target has no line of sight (caller then path-finds toward it).
    */
-  private updateMageCombatAI(
+  updateMageCombatAI(
     target: EnemyEntity,
     targetDist: number
   ): { moveX: number; moveZ: number } | null {
@@ -8724,7 +8479,7 @@ export class EmbervaultEngine {
    * Auto-pilot for any hero (attract mode, the local hero in auto mode, and every bot teammate). The engine's
    * per-hero code reads its hero from `this.hero`, so the body below runs with `hero` as the actor.
    */
-  private updateAI(hero: Hero, dt: number): { moveX: number; moveZ: number } {
+  updateAI(hero: Hero, dt: number): { moveX: number; moveZ: number } {
     const prev = this.hero;
     this.setActor(hero);
     try {
@@ -8734,7 +8489,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private runAI(dt: number): { moveX: number; moveZ: number } {
+  runAI(dt: number): { moveX: number; moveZ: number } {
     this.hero.ai.forcePathTimer = Math.max(0, this.hero.ai.forcePathTimer - dt);
 
     // 0a. Macro Stuck Detector: if hero's XY/XZ position barely changes for 2.5s AND no enemy took damage,
@@ -9550,7 +9305,7 @@ export class EmbervaultEngine {
    * rescue through `rescueTargetId`, which `updateRescue` turns into progress). Returns null when there is nothing
    * to rescue, or when enemies are standing on the downed hero (fight them first so the rescue is not cancelled).
    */
-  private aiRescueStep(dt: number): { moveX: number; moveZ: number } | null {
+  aiRescueStep(dt: number): { moveX: number; moveZ: number } | null {
     const me = this.hero;
     me.rescueTargetId = null;
     if (this.inTown) return null;
@@ -9606,7 +9361,7 @@ export class EmbervaultEngine {
    * True when a companion (bot or pet) at (x, z) is far enough from its leader/owner to be warped back: near the
    * screen edge when the leader is the camera's hero, otherwise beyond COMPANION_WARP_DIST.
    */
-  private isCompanionTooFar(leader: { x: number; z: number }, x: number, z: number): boolean {
+  isCompanionTooFar(leader: { x: number; z: number }, x: number, z: number): boolean {
     const d = Math.hypot(x - leader.x, z - leader.z);
     if (d < 4) return false;
     if (leader !== this.localHero || this.inTown) return d > COMPANION_WARP_DIST;
@@ -9615,11 +9370,11 @@ export class EmbervaultEngine {
   }
 
   /** Bot while the local hero is in town (spec §3.4): wait at the post the local hero left from. */
-  private isAwayMode(me: Hero): boolean {
+  isAwayMode(me: Hero): boolean {
     return me.isBot && this.localHero.inTown;
   }
 
-  private withinLeash(x: number, z: number, radius: number): boolean {
+  withinLeash(x: number, z: number, radius: number): boolean {
     const a = this.awayAnchor;
     if (!a) return true;
     return Math.hypot(x - a.x, z - a.z) <= radius;
@@ -9629,7 +9384,7 @@ export class EmbervaultEngine {
    * Bot teammates: keep within a few tiles of the local hero (or, while the local hero is in town, of the post
    * they left from); hold still (no stuck-detector churn) when close.
    */
-  private aiFollowLeader(dt: number): { moveX: number; moveZ: number } {
+  aiFollowLeader(dt: number): { moveX: number; moveZ: number } {
     const me = this.hero;
     const ai = me.ai;
     const away = this.isAwayMode(me);
@@ -9676,7 +9431,7 @@ export class EmbervaultEngine {
     return { moveX: dx / dist, moveZ: dz / dist };
   }
 
-  private findApproachTile(gx: number, gz: number): { gx: number; gz: number } {
+  findApproachTile(gx: number, gz: number): { gx: number; gz: number } {
     const start = worldToGrid(this.hero.x, this.hero.z);
     const dirs = [
       [1, 0],
@@ -9697,7 +9452,7 @@ export class EmbervaultEngine {
     return { gx, gz };
   }
 
-  private update(dt: number): void {
+  update(dt: number): void {
     // P7: while the room connection is being re-established the host freezes everything; a teammate freezes the dungeon view
     // (their own town keeps running: it is local)
     if (this.mpPaused && this.mp && (this.mp.role === 'host' || !this.inTown)) return;
@@ -9869,7 +9624,7 @@ export class EmbervaultEngine {
    * step and nothing may reach the screen (HUD, particles, floating text, sounds ...). When nobody is left alive
    * there the floor is frozen the same way a single player return freezes it.
    */
-  private runDungeonBackground(dt: number): void {
+  runDungeonBackground(dt: number): void {
     if (!this.dungeonCtx) return;
     if (!this.heroes.some((h) => this.isInDungeonAlive(h))) {
       this.freezeDungeonAway();
@@ -9918,7 +9673,7 @@ export class EmbervaultEngine {
   }
 
   /** The last teammate in the dungeon went down while the local hero is in town: freeze the floor (spec §3.4). */
-  private freezeDungeonAway(): void {
+  freezeDungeonAway(): void {
     if (!this.dungeonCtx) return;
     const townCtx = this.captureCtx();
     this.applyCtx(this.dungeonCtx);
@@ -9932,7 +9687,7 @@ export class EmbervaultEngine {
   }
 
   /** The parts of updateEnvironment that change the game (not the looks): rune wells and spike traps. */
-  private updateEnvironmentBackground(): void {
+  updateEnvironmentBackground(): void {
     for (const lp of this.lightProps) {
       if (lp.kind === 'rune' && !lp.used) this.tryRuneDrink(lp);
     }
@@ -9951,7 +9706,7 @@ export class EmbervaultEngine {
   /** One frame of one living hero (the actor must already be set to it): timers, input or AI, movement, rig animation.
    * Camera / light / minimap work only happens for the local hero.
    */
-  private updateHeroFrame(dt: number, isLocal: boolean): void {
+  updateHeroFrame(dt: number, isLocal: boolean): void {
     // Cooldowns & Relic Timers
     this.hero.attackCooldown = Math.max(0, this.hero.attackCooldown - dt);
     this.hero.attackAnim = Math.max(0, this.hero.attackAnim - dt);
@@ -10202,7 +9957,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private updateObjectives(dt: number): void {
+  updateObjectives(dt: number): void {
     // Key Pickup
     if (this.keyPedestal && !this.hasKey) {
       this.keyPedestal.keyMesh.rotation.y += dt * 2.1;
@@ -10306,7 +10061,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private updateBoss(e: EnemyEntity, dt: number, dx: number, dz: number, dist: number): void {
+  updateBoss(e: EnemyEntity, dt: number, dx: number, dz: number, dist: number): void {
     if (!isFloorBoss(e.kind)) return;
     const cfg = BOSS_CONFIGS[e.kind];
     const state = e.bossState ?? 'chase';
@@ -10815,7 +10570,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private spawnProjectile(
+  spawnProjectile(
     kind: ProjectileKind,
     x: number,
     z: number,
@@ -10851,7 +10606,7 @@ export class EmbervaultEngine {
     });
   }
 
-  private removeProjectileAt(idx: number): void {
+  removeProjectileAt(idx: number): void {
     const p = this.projectiles[idx];
     this.dynamicGroup.remove(p.mesh);
     p.mesh.traverse((obj) => {
@@ -10864,7 +10619,7 @@ export class EmbervaultEngine {
     this.projectiles.splice(idx, 1);
   }
 
-  private updateProjectiles(dt: number): void {
+  updateProjectiles(dt: number): void {
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       p.life += dt;
@@ -11014,7 +10769,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private updateRangedEnemy(e: EnemyEntity, dt: number, dx: number, dz: number, dist: number): void {
+  updateRangedEnemy(e: EnemyEntity, dt: number, dx: number, dz: number, dist: number): void {
     const isArcher = isArcherLikeRanged(e.kind);
     const fireRange = isArcher ? 9.2 : 8.6;
     const minKeepDist = isArcher ? 3.5 : 3.2;
@@ -11172,7 +10927,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private updateEnemies(dt: number): void {
+  updateEnemies(dt: number): void {
     for (const e of this.enemies) {
       if (e.dead) continue;
 
@@ -11426,7 +11181,7 @@ export class EmbervaultEngine {
     this.setActor(this.localHero);
   }
 
-  private tryAutoEquipBetterRelic(item: RelicItem): boolean {
+  tryAutoEquipBetterRelic(item: RelicItem): boolean {
     if (this.hero.equippedRelics.length < 4) return false;
 
     const currentScore = evaluateRelicLoadoutScore(this.hero.equippedRelics);
@@ -11458,7 +11213,7 @@ export class EmbervaultEngine {
     return true;
   }
 
-  private updateLoot(dt: number): void {
+  updateLoot(dt: number): void {
     const loopActor = this.hero;
     for (const l of this.loots) {
       if (l.collected) continue;
@@ -11611,12 +11366,12 @@ export class EmbervaultEngine {
   }
 
   /** Animates the swirling cyan portals (the town gate, or the portals the heroes left behind in the dungeon). */
-  private animateHeroPortal(dt: number): void {
+  animateHeroPortal(dt: number): void {
     if (this.townPortalRig) this.animatePortalRig(this.townPortalRig, dt);
     for (const rig of this.heroPortalRigs.values()) this.animatePortalRig(rig, dt);
   }
 
-  private animatePortalRig(rig: TownPortalRig, dt: number): void {
+  animatePortalRig(rig: TownPortalRig, dt: number): void {
     rig.vortex.rotation.z += dt * 1.9;
     rig.outerRing.rotation.z -= dt * 1.2;
     rig.innerRing.rotation.z += dt * 2.5;
@@ -11643,7 +11398,7 @@ export class EmbervaultEngine {
   }
 
   /** The first living hero that is hurt and stands in an unused rune well drinks from it. */
-  private tryRuneDrink(lp: AnimatedLightProp): void {
+  tryRuneDrink(lp: AnimatedLightProp): void {
     // The first living hero that is hurt and stands in the circle drinks from it
     const drinker = lp.used
       ? undefined
@@ -11689,7 +11444,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private updateEnvironment(dt: number): void {
+  updateEnvironment(dt: number): void {
     // Animate props and collect active light candidates sorted by proximity to hero
     const activeLights: Array<{ prop: AnimatedLightProp; dist: number; intensity: number }> = [];
 
@@ -11904,7 +11659,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private getBreakableDebrisColor(kind: 'crate' | 'urn'): number {
+  getBreakableDebrisColor(kind: 'crate' | 'urn'): number {
     const theme = this.dungeon.biome.terrainTheme;
     if (theme === 'alien') return 0x70d8ff;
     if (theme === 'cavern') return kind === 'crate' ? 0x5e4d3c : 0x62cc94;
@@ -11912,7 +11667,7 @@ export class EmbervaultEngine {
     return kind === 'crate' ? 0x7c502d : 0xb38252;
   }
 
-  private updateWallOcclusion(): void {
+  updateWallOcclusion(): void {
     if (this.wallTiles.length === 0 || this.capOpaqueMeshes.length === 0 || this.capFadeMeshes.length === 0) return;
 
     // 1. Check with slight hysteresis whether any foreground wall is currently blocking the hero
@@ -12039,7 +11794,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private updateParticles(dt: number): void {
+  updateParticles(dt: number): void {
     for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
       if (!p.active) continue;
@@ -12085,7 +11840,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private afterDraw(cb: () => void): void {
+  afterDraw(cb: () => void): void {
     const gl = this.renderer.getContext() as WebGL2RenderingContext;
     if (typeof gl.fenceSync === 'function') {
       const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -12106,7 +11861,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private tick = (): void => {
+  tick = (): void => {
     if (this.disposed || !this.renderer) return;
 
     const now = performance.now();
@@ -12130,8 +11885,8 @@ export class EmbervaultEngine {
   // None of this runs unless `mp` is set (single player and the attract mode never touch it).
   // ---------------------------------------------------------------------------------------------------------
 
-  private static readonly MP_PRIVATE_TONES = new Set(['gold', 'heal', 'key', 'info', 'relicBlue', 'relicYellow', 'relicOrange', 'relicGreen']);
-  private static readonly MP_PRIVATE_SOUNDS = new Set([
+  static readonly MP_PRIVATE_TONES = new Set(['gold', 'heal', 'key', 'info', 'relicBlue', 'relicYellow', 'relicOrange', 'relicGreen']);
+  static readonly MP_PRIVATE_SOUNDS = new Set([
     'playCoin',
     'playPotion',
     'playRelicEquip',
@@ -12142,7 +11897,7 @@ export class EmbervaultEngine {
     'playShieldBreak',
   ]);
   /** Sounds a teammate's own client already played when it predicted the action. */
-  private static readonly MP_PREDICTED_SOUNDS = new Set([
+  static readonly MP_PREDICTED_SOUNDS = new Set([
     'playSwordSlash',
     'playDash',
     'playPommelStrike',
@@ -12152,16 +11907,16 @@ export class EmbervaultEngine {
     'playMageCast',
     'playBowShot',
   ]);
-  private static readonly MP_BOSS_STATES: BossAttackState[] = ['chase', 'windup', 'strike', 'recover'];
-  private static readonly MP_RARITIES: Array<'blue' | 'yellow' | 'orange' | 'green'> = ['blue', 'yellow', 'orange', 'green'];
+  static readonly MP_BOSS_STATES: BossAttackState[] = ['chase', 'windup', 'strike', 'recover'];
+  static readonly MP_RARITIES: Array<'blue' | 'yellow' | 'orange' | 'green'> = ['blue', 'yellow', 'orange', 'green'];
 
   /** True while this engine is a teammate's (guest) client with the camera in the dungeon. */
-  private mpGuestDungeon(): boolean {
+  mpGuestDungeon(): boolean {
     return this.mp?.role === 'guest' && !this.inTown;
   }
 
   /** The monsters to show on the HUD / minimap (a guest keeps its puppets out of `enemies` so nothing hits them). */
-  private viewEnemies(): EnemyEntity[] {
+  viewEnemies(): EnemyEntity[] {
     return this.mp?.role === 'guest' ? this.mp.guest.enemyList : this.enemies;
   }
 
@@ -12235,7 +11990,7 @@ export class EmbervaultEngine {
     if (cfg.role === 'guest') cfg.send('loadout', { classId, loadout: { ...loadout, stash: [] }, angel: null } as LoadoutPayload, cfg.hostId);
   }
 
-  private mpNewGuest(): MpGuestState {
+  mpNewGuest(): MpGuestState {
     return {
       enemies: new Map(),
       enemyList: [],
@@ -12305,7 +12060,7 @@ export class EmbervaultEngine {
    * P7 adaptive interpolation: smoothed variation of the snapshot transit time (RFC 3550 style, measured on arrival, so
    * it needs no extra messages). The remote entities are drawn `base + K * jitter` in the past, bounded.
    */
-  private mpMeasureJitter(s: SnapshotPayload): void {
+  mpMeasureJitter(s: SnapshotPayload): void {
     const g = this.mp?.guest;
     if (!g || typeof s.ts !== 'number') return;
     const transit = performance.now() - s.ts;
@@ -12350,7 +12105,7 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
-  private mpRemoveHero(h: Hero): void {
+  mpRemoveHero(h: Hero): void {
     const rig = this.heroPortalRigs.get(h.id);
     if (rig) {
       rig.root.parent?.remove(rig.root);
@@ -12377,7 +12132,7 @@ export class EmbervaultEngine {
   }
 
   /** A remote teammate (host: simulated from their inputs; guest: puppet driven by snapshots). */
-  private mpCreateHero(id: string, name: string, classId: HeroClassId, loadout: CharacterLoadout | null, angel: AngelBuff | null): Hero {
+  mpCreateHero(id: string, name: string, classId: HeroClassId, loadout: CharacterLoadout | null, angel: AngelBuff | null): Hero {
     const h = new Hero(id);
     h.isRemote = true;
     h.displayName = name;
@@ -12402,27 +12157,27 @@ export class EmbervaultEngine {
   }
 
   /** Room games: a spike trap's phase comes from its tile, so every client's trap cycle lines up with the host's. */
-  private mpSpikePhase(gx: number, gz: number): number {
+  mpSpikePhase(gx: number, gz: number): number {
     return (((gx * 73856093) ^ (gz * 19349663)) >>> 0) % 4000 / 1000;
   }
 
   /** Offset that lines the trap clock of a teammate client up with the host's (0 everywhere else). */
-  private mpSpikeClock(): number {
+  mpSpikeClock(): number {
     return this.mp?.role === 'guest' ? this.mp.guest.spikeOffset ?? 0 : 0;
   }
 
-  private mpNameOf(id: string): string {
+  mpNameOf(id: string): string {
     return this.mp?.members.find((m) => m.playerId === id)?.name ?? '隊友';
   }
 
   /** P7: class of a member that joined mid-game (its rig must match; a puppet made from a snapshot has no roster entry). */
-  private mpClassOf(id: string): HeroClassId {
+  mpClassOf(id: string): HeroClassId {
     const cls = this.mp?.members.find((m) => m.playerId === id)?.classId;
     return cls && cls in HERO_CLASSES ? (cls as HeroClassId) : 'warrior';
   }
 
   /** Per-frame work that must run for every frame, whatever state the fade is in (message inbox, host launch). */
-  private mpPump(dt: number): void {
+  mpPump(dt: number): void {
     const mp = this.mp;
     if (!mp) return;
     if (mp.role === 'host') {
@@ -12484,7 +12239,7 @@ export class EmbervaultEngine {
   }
 
   /** Holds the screen at black with a message (P5-C): the player always sees what the game is waiting for. */
-  private mpHold(kind: NonNullable<MpState['holdKind']>, text: string): void {
+  mpHold(kind: NonNullable<MpState['holdKind']>, text: string): void {
     const mp = this.mp;
     if (!mp) return;
     mp.hold = true;
@@ -12493,7 +12248,7 @@ export class EmbervaultEngine {
     mp.holdSince = performance.now();
   }
 
-  private mpReleaseHold(): void {
+  mpReleaseHold(): void {
     const mp = this.mp;
     if (!mp) return;
     mp.hold = false;
@@ -12501,7 +12256,7 @@ export class EmbervaultEngine {
     mp.holdText = '';
   }
 
-  private mpHostTryLaunch(): void {
+  mpHostTryLaunch(): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
@@ -12527,7 +12282,7 @@ export class EmbervaultEngine {
     this.mpReleaseHold();
   }
 
-  private mpApplyViewGroupsForRemotes(): void {
+  mpApplyViewGroupsForRemotes(): void {
     for (const h of this.heroes) if (h.isRemote) h.rig.root.visible = !this.inTown && !h.inTown;
   }
 
@@ -12535,7 +12290,7 @@ export class EmbervaultEngine {
   // Host
   // ---------------------------------------------------------------------------------------------------------
 
-  private mpHostOnMessage(from: string, kind: GameKind, payload: unknown): void {
+  mpHostOnMessage(from: string, kind: GameKind, payload: unknown): void {
     const mp = this.mp!;
     const host = mp.host!;
     if (kind === 'loadout') {
@@ -12589,7 +12344,7 @@ export class EmbervaultEngine {
    * in the dungeon and nobody has a portal open) it is put at the floor entrance (room 0) at once with the same hand-off a
    * town gate would do. Monsters already spawned keep their HP; the party size is read again when the next floor is built.
    */
-  private mpHostAddJoiner(from: string, p: LoadoutPayload): void {
+  mpHostAddJoiner(from: string, p: LoadoutPayload): void {
     const mp = this.mp!;
     const host = mp.host!;
     const member = mp.members.find((m) => m.playerId === from);
@@ -12627,7 +12382,7 @@ export class EmbervaultEngine {
     this.emitHud();
   }
 
-  private mpHostDrainJoiners(): void {
+  mpHostDrainJoiners(): void {
     const host = this.mp!.host!;
     if (host.joiners.length === 0) return;
     const list = host.joiners;
@@ -12651,7 +12406,7 @@ export class EmbervaultEngine {
   }
 
   /** P7: runs inside the dungeon simulation (also the background one) after `mpHostResume`: every teammate in the floor gets a fresh `level`. */
-  private mpHostResyncNow(): void {
+  mpHostResyncNow(): void {
     const host = this.mp!.host!;
     host.resync = false;
     for (const h of this.heroes) if (h.isRemote && !h.inTown) this.mpHostSendLevelTo(h.id, false);
@@ -12661,7 +12416,7 @@ export class EmbervaultEngine {
   }
 
   /** Applies the teammates' latest inputs to their heroes (before the hero loop of the dungeon in progress). */
-  private mpHostPre(): void {
+  mpHostPre(): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
@@ -12713,7 +12468,7 @@ export class EmbervaultEngine {
   }
 
   /** After the dungeon simulation step: UI commands, hand-backs from town, snapshot / private state sending. */
-  private mpHostPost(dt: number): void {
+  mpHostPost(dt: number): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
@@ -12739,7 +12494,7 @@ export class EmbervaultEngine {
   }
 
   /** The doors (portals heroes left behind) of the current floor, as sent in snapshots and party states. */
-  private mpDoors(): DoorSnap[] {
+  mpDoors(): DoorSnap[] {
     const dr: DoorSnap[] = [];
     for (const h of this.heroes) {
       if (h.portal && h.portal.depth === this.depth) dr.push([h.id, q100(h.portal.x), q100(h.portal.z), h.isDead ? 1 : 0]);
@@ -12751,7 +12506,7 @@ export class EmbervaultEngine {
    * P5-C party state, host -> everybody, only when it changes: which hero is in town / downed and where the doors are.
    * Snapshots stop while the floor is frozen or nobody is in it, but the town UI (door list, member panel) must keep up.
    */
-  private mpHostSendParty(force: boolean): void {
+  mpHostSendParty(force: boolean): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host' || !mp.host!.launched) return;
     const host = mp.host!;
@@ -12763,7 +12518,7 @@ export class EmbervaultEngine {
     mp.send('st', st);
   }
 
-  private mpPartyPayload(): PartyStatePayload {
+  mpPartyPayload(): PartyStatePayload {
     return {
       d: this.depth,
       h: this.heroes.map((x) => [x.id, x.isDead ? 2 : x.inTown ? 1 : 0]),
@@ -12775,7 +12530,7 @@ export class EmbervaultEngine {
    * The dungeon is about to freeze (nobody alive in it, spec 3.4): the downed teammates still in it get a last snapshot and
    * their private state (death flags, doors) because no snapshot is sent from now until somebody comes back.
    */
-  private mpHostFreezeFlush(): void {
+  mpHostFreezeFlush(): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host' || !mp.host!.launched) return;
     const host = mp.host!;
@@ -12787,7 +12542,7 @@ export class EmbervaultEngine {
   }
 
   /** Teammates that asked to go to town while the whole dungeon is parked / frozen (nobody can run commands). */
-  private mpHostFrozenTick(): void {
+  mpHostFrozenTick(): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
@@ -12814,7 +12569,7 @@ export class EmbervaultEngine {
     host.cmds = keep;
   }
 
-  private mpHostRunCmd(from: string, cmd: CommandPayload): void {
+  mpHostRunCmd(from: string, cmd: CommandPayload): void {
     const h = this.heroById(from);
     if (!h || !h.isRemote || h.inTown) return;
     const prev = this.hero;
@@ -12856,7 +12611,7 @@ export class EmbervaultEngine {
   }
 
   /** `h` (a remote hero) goes to the town: it leaves the simulation and receives its final state. */
-  private mpHostSendToTown(h: Hero, fromDeath: boolean, viaExistingPortal = false): void {
+  mpHostSendToTown(h: Hero, fromDeath: boolean, viaExistingPortal = false): void {
     const mp = this.mp!;
     const cost = viaExistingPortal ? 0 : this.getTownReturnCost();
     const spent = Math.min(h.gold, cost);
@@ -12887,7 +12642,7 @@ export class EmbervaultEngine {
   }
 
   /** A teammate comes back from town through one of the doors (or the entrance). */
-  private mpHostOnHandback(from: string, hb: HandbackPayload): void {
+  mpHostOnHandback(from: string, hb: HandbackPayload): void {
     const mp = this.mp!;
     const h = this.heroById(from);
     if (!h || !h.isRemote || !h.inTown) return;
@@ -12948,7 +12703,7 @@ export class EmbervaultEngine {
    * change that happens while the local hero is in town: the new level becomes the parked dungeon (`dungeonCtx`) and
    * keeps being simulated, so the host can step into it later through any door.
    */
-  private mpHostRebuildAway(snap: SavedDungeonSnapshot, target: { x: number; z: number }): void {
+  mpHostRebuildAway(snap: SavedDungeonSnapshot, target: { x: number; z: number }): void {
     const local = this.localHero;
     this.savedDungeon = null;
     snap.returnX = target.x;
@@ -12976,7 +12731,7 @@ export class EmbervaultEngine {
   }
 
   /** Called at the end of `buildLevel` on the host: every teammate in the dungeon gets the new floor. */
-  private mpHostAnnounceLevel(isNewFloor: boolean): void {
+  mpHostAnnounceLevel(isNewFloor: boolean): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host' || !mp.host!.launched) return;
     const host = mp.host!;
@@ -12997,13 +12752,13 @@ export class EmbervaultEngine {
     this.mpHostFlushPrivate(true);
   }
 
-  private mpHostSendLevelTo(id: string, isNewFloor: boolean): void {
+  mpHostSendLevelTo(id: string, isNewFloor: boolean): void {
     const h = this.heroById(id);
     if (!h) return;
     this.mpSendLevel(h, this.mpBuildSnapshot(true), isNewFloor);
   }
 
-  private mpSendLevel(h: Hero, snap: SnapshotPayload, isNewFloor: boolean): void {
+  mpSendLevel(h: Hero, snap: SnapshotPayload, isNewFloor: boolean): void {
     const mp = this.mp!;
     const roster: RosterEntry[] = this.heroes.map((o) => ({
       id: o.id,
@@ -13024,7 +12779,7 @@ export class EmbervaultEngine {
     mp.send('level', payload, h.id);
   }
 
-  private mpPrivOf(h: Hero): PrivatePayload {
+  mpPrivOf(h: Hero): PrivatePayload {
     return {
       ld: { ...h.exportLoadout(this.depth), stash: [] },
       ab: h.angelBuff ? { ...h.angelBuff } : null,
@@ -13035,7 +12790,7 @@ export class EmbervaultEngine {
   }
 
   /** Sends each teammate's private state when it changed (gold, potions, relics, upgrades, death ...). */
-  private mpHostFlushPrivate(force: boolean, only?: string): void {
+  mpHostFlushPrivate(force: boolean, only?: string): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
@@ -13067,7 +12822,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private mpEmit(ev: GameEvent): void {
+  mpEmit(ev: GameEvent): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const host = mp.host!;
@@ -13079,7 +12834,7 @@ export class EmbervaultEngine {
     host.events.push(ev);
   }
 
-  private mpCaptureFloat(wx: number, wy: number, wz: number, text: string, tone: string): void {
+  mpCaptureFloat(wx: number, wy: number, wz: number, text: string, tone: string): void {
     if (EmbervaultEngine.MP_PRIVATE_TONES.has(tone)) {
       if (!this.hero.isRemote) return; // the host sees its own pickups itself
       this.mpEmit(['f', q100(wx), q100(wy), q100(wz), text, tone, this.hero.id]);
@@ -13088,7 +12843,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private mpInstallAudioTap(): void {
+  mpInstallAudioTap(): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host' || mp.host!.tapped) return;
     const audio = this.audio as unknown as Record<string, unknown>;
@@ -13105,7 +12860,7 @@ export class EmbervaultEngine {
     mp.host!.tapped = true;
   }
 
-  private mpRemoveAudioTap(): void {
+  mpRemoveAudioTap(): void {
     const audio = this.audio as unknown as Record<string, unknown>;
     const proto = Object.getPrototypeOf(this.audio) as Record<string, unknown>;
     for (const name of Object.getOwnPropertyNames(proto)) {
@@ -13115,7 +12870,7 @@ export class EmbervaultEngine {
     if (this.mp?.host) this.mp.host.tapped = false;
   }
 
-  private mpAudioEvent(name: string, args: unknown[]): void {
+  mpAudioEvent(name: string, args: unknown[]): void {
     const mp = this.mp;
     if (!mp || mp.role !== 'host') return;
     const actor = this.hero;
@@ -13129,7 +12884,7 @@ export class EmbervaultEngine {
 
   // --- Host: snapshot builder -----------------------------------------------------------------------------------
 
-  private mpPid(host: MpHostState, obj: object): number {
+  mpPid(host: MpHostState, obj: object): number {
     let pid = host.pids.get(obj);
     if (pid === undefined) {
       pid = host.nextPid++;
@@ -13138,7 +12893,7 @@ export class EmbervaultEngine {
     return pid;
   }
 
-  private mpEnemyEntry(e: EnemyEntity): EnemySnap {
+  mpEnemyEntry(e: EnemyEntity): EnemySnap {
     let flags = 0;
     if (e.stunTimer > 0) flags |= EF_STUN;
     if ((e.frozenTimer ?? 0) > 0) flags |= EF_FROZEN;
@@ -13159,7 +12914,7 @@ export class EmbervaultEngine {
    * The world as the teammates should see it. `full` = everything (a new floor / a teammate coming back from town),
    * otherwise only what changed since the last delta. `commit` records what was sent (and takes the queued events).
    */
-  private mpBuildSnapshot(full: boolean, commit = true): SnapshotPayload {
+  mpBuildSnapshot(full: boolean, commit = true): SnapshotPayload {
     const mp = this.mp!;
     const host = mp.host!;
     const now = performance.now();
@@ -13340,7 +13095,7 @@ export class EmbervaultEngine {
     return snap;
   }
 
-  private mpHostSendSnapshot(): void {
+  mpHostSendSnapshot(): void {
     const mp = this.mp!;
     const host = mp.host!;
     const anyRemote = this.heroes.some((h) => h.isRemote);
@@ -13374,7 +13129,7 @@ export class EmbervaultEngine {
   // ---------------------------------------------------------------------------------------------------------
 
   /** Drops every puppet entity (the meshes themselves go with the level groups). */
-  private mpGuestClearEntities(): void {
+  mpGuestClearEntities(): void {
     const g = this.mp?.guest;
     if (!g) return;
     g.enemies.clear();
@@ -13392,7 +13147,7 @@ export class EmbervaultEngine {
     g.doorSig = '';
   }
 
-  private mpGuestBuild(lv: LevelPayload): void {
+  mpGuestBuild(lv: LevelPayload): void {
     const mp = this.mp!;
     const g = mp.guest;
     this.mpGuestClearEntities();
@@ -13431,7 +13186,7 @@ export class EmbervaultEngine {
     this.emitMinimap();
   }
 
-  private mpGuestApplyPrivate(p: PrivatePayload): void {
+  mpGuestApplyPrivate(p: PrivatePayload): void {
     const h = this.localHero;
     const ownStash = h.stash; // never sent over the wire: this machine owns it
     h.applyLoadout(p.ld);
@@ -13447,7 +13202,7 @@ export class EmbervaultEngine {
   }
 
   /** Remote hero's pose when downed / back up. */
-  private mpSetDownedPose(h: Hero, downed: boolean): void {
+  mpSetDownedPose(h: Hero, downed: boolean): void {
     if (downed) {
       h.vx = 0;
       h.vz = 0;
@@ -13465,7 +13220,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private mpGuestApplySnapshot(s: SnapshotPayload, full: boolean): void {
+  mpGuestApplySnapshot(s: SnapshotPayload, full: boolean): void {
     const mp = this.mp!;
     const g = mp.guest;
     if (!full && s.d !== this.depth) return;
@@ -13761,7 +13516,7 @@ export class EmbervaultEngine {
   }
 
   /** In town the teammate client only follows which floor the party is on and where the doors (portals) are. */
-  private mpGuestTownSnapshot(s: SnapshotPayload): void {
+  mpGuestTownSnapshot(s: SnapshotPayload): void {
     const g = this.mp!.guest;
     if (s.d !== this.depth) {
       this.depth = s.d;
@@ -13771,7 +13526,7 @@ export class EmbervaultEngine {
     if (s.dr) this.mpGuestApplyDoors(s.dr);
   }
 
-  private mpHistoryAt(g: MpGuestState, t: number): { x: number; z: number } | null {
+  mpHistoryAt(g: MpGuestState, t: number): { x: number; z: number } | null {
     const h = g.history;
     if (h.length === 0) return null;
     if (t <= h[0].t) return h[0];
@@ -13786,7 +13541,7 @@ export class EmbervaultEngine {
     return h[h.length - 1];
   }
 
-  private mpGuestSpawnEnemy(st: EnemyStatic): void {
+  mpGuestSpawnEnemy(st: EnemyStatic): void {
     const g = this.mp!.guest;
     if (g.enemies.has(st.i)) return;
     const kind = st.k as EnemyKind;
@@ -13835,7 +13590,7 @@ export class EmbervaultEngine {
     g.enemyList.push(e);
   }
 
-  private mpGuestRemoveEnemy(id: number): void {
+  mpGuestRemoveEnemy(id: number): void {
     const g = this.mp!.guest;
     const p = g.enemies.get(id);
     if (!p) return;
@@ -13848,7 +13603,7 @@ export class EmbervaultEngine {
     g.enemyList = g.enemyList.filter((e) => e !== p.e);
   }
 
-  private mpGuestApplyDoors(dr: DoorSnap[]): void {
+  mpGuestApplyDoors(dr: DoorSnap[]): void {
     const g = this.mp!.guest;
     const sig = JSON.stringify(dr);
     if (sig === g.doorSig) return;
@@ -13879,7 +13634,7 @@ export class EmbervaultEngine {
   }
 
   /** Visual-only shatter of a crate / urn my hero just hit on a teammate client (P5-C). */
-  private mpGuestPredictBreak(br: BreakableEntity): void {
+  mpGuestPredictBreak(br: BreakableEntity): void {
     const g = this.mp!.guest;
     if (this.hero !== this.localHero || br.broken) return; // only my own hits are predicted
     br.broken = true;
@@ -13889,7 +13644,7 @@ export class EmbervaultEngine {
     this.mpBreakBurst(br);
   }
 
-  private mpBreakBurst(br: BreakableEntity): void {
+  mpBreakBurst(br: BreakableEntity): void {
     const color = this.getBreakableDebrisColor(br.kind);
     for (let i = 0; i < 10; i++) {
       this.spawnParticle(
@@ -13908,7 +13663,7 @@ export class EmbervaultEngine {
   }
 
   /** Predicted crates the host never confirmed within the grace period come back (the host did not break them). */
-  private mpGuestCheckBreaks(): void {
+  mpGuestCheckBreaks(): void {
     const g = this.mp!.guest;
     if (g.pendingBreaks.size === 0) return;
     const now = performance.now();
@@ -13920,7 +13675,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private mpGuestApplyWorld(w: WorldSnap): void {
+  mpGuestApplyWorld(w: WorldSnap): void {
     const g = this.mp!.guest;
     this.hasKey = w.k === 1;
     this.doorUnlocked = w.u === 1;
@@ -13967,7 +13722,7 @@ export class EmbervaultEngine {
     }
   }
 
-  private mpGuestEvent(ev: GameEvent): void {
+  mpGuestEvent(ev: GameEvent): void {
     const mp = this.mp!;
     const t = ev[0];
     if (t === 'f') {
@@ -14001,7 +13756,7 @@ export class EmbervaultEngine {
   }
 
   /** Samples a buffer of host-timestamped positions at the (delayed) render time. */
-  private mpSample(buf: MpSample[], t: number, out: { x: number; z: number; f: number }): boolean {
+  mpSample(buf: MpSample[], t: number, out: { x: number; z: number; f: number }): boolean {
     const n = buf.length;
     if (n === 0) return false;
     if (n === 1 || t <= buf[0].t) {
@@ -14034,7 +13789,7 @@ export class EmbervaultEngine {
   }
 
   /** One frame of the teammate client in the dungeon: predict my hero, draw the others from the host's snapshots. */
-  private mpGuestFrame(dt: number): void {
+  mpGuestFrame(dt: number): void {
     const mp = this.mp!;
     const g = mp.guest;
     const local = this.localHero;
@@ -14068,7 +13823,7 @@ export class EmbervaultEngine {
     this.setActor(local);
   }
 
-  private mpAnimatePuppetHero(h: Hero, dt: number, speed: number, at?: { x: number; z: number; f: number }): void {
+  mpAnimatePuppetHero(h: Hero, dt: number, speed: number, at?: { x: number; z: number; f: number }): void {
     // `at`: drawn in my town at the position its owner broadcast (their dungeon position `h.x / h.z` stays untouched)
     h.rig.root.visible = at ? true : !this.inTown && !h.inTown;
     h.rig.root.position.set(at ? at.x : h.x, 0, at ? at.z : h.z);
@@ -14110,7 +13865,7 @@ export class EmbervaultEngine {
   }
 
   /** The teammate's controls to the host: only on change, at most 20 per second, one keepalive per second. */
-  private mpGuestSendInput(now: number): void {
+  mpGuestSendInput(now: number): void {
     const mp = this.mp!;
     const g = mp.guest;
     const local = this.localHero;
@@ -14139,13 +13894,13 @@ export class EmbervaultEngine {
     mp.send('in', payload, mp.hostId);
   }
 
-  private mpQueueAction(a: number): void {
+  mpQueueAction(a: number): void {
     const mp = this.mp;
     if (mp?.role === 'guest' && mp.guest.actions.length < 8) mp.guest.actions.push(a);
   }
 
   /** Teammate: everything that is not the hero's own movement (monsters, projectiles, loot, objectives). */
-  private mpGuestWorld(dt: number): void {
+  mpGuestWorld(dt: number): void {
     // Smoothly interpolate puppet Hunter pets on guest clients
     for (const pet of this.pets.values()) {
       pet.rig.root.visible = !this.inTown;
@@ -14316,7 +14071,7 @@ export class EmbervaultEngine {
   }
 
   /** I am in town (and not fading): broadcast my position at 5 Hz while moving, once more when I stop (spec 5.2). */
-  private mpTownSend(dt: number): void {
+  mpTownSend(dt: number): void {
     const mp = this.mp!;
     const t = mp.town;
     t.acc += dt;
@@ -14343,7 +14098,7 @@ export class EmbervaultEngine {
   }
 
   /** Draws the teammates that are in town right now (host: their town is their own machine's; guest: same). */
-  private mpTownRemotes(dt: number): void {
+  mpTownRemotes(dt: number): void {
     const mp = this.mp!;
     const tmp = { x: 0, z: 0, f: 0 };
     for (const h of this.heroes) {
@@ -14366,7 +14121,7 @@ export class EmbervaultEngine {
   }
 
   /** 0 in the dungeon, 1 in town, 2 downed: what this client believes about a hero. */
-  private mpHeroState(h: Hero): 0 | 1 | 2 {
+  mpHeroState(h: Hero): 0 | 1 | 2 {
     const mp = this.mp;
     if (mp?.role === 'guest' && h !== this.localHero && this.inTown) {
       // In town the host's party messages are the freshest source (no snapshots flow while the floor is frozen)
@@ -14377,7 +14132,7 @@ export class EmbervaultEngine {
   }
 
   /** The member panel (town and dungeon): who is where. Empty outside room games. */
-  private mpPartyInfo(): PartyMemberInfo[] {
+  mpPartyInfo(): PartyMemberInfo[] {
     const mp = this.mp;
     if (!mp) return [];
     return this.heroes.map((h) => ({
@@ -14391,7 +14146,7 @@ export class EmbervaultEngine {
   }
 
   /** Guest: the host's party state (P5-C): who is in town / downed, which floor and which doors. Applied while in town. */
-  private mpGuestApplyParty(p: PartyStatePayload): void {
+  mpGuestApplyParty(p: PartyStatePayload): void {
     const mp = this.mp!;
     const g = mp.guest;
     for (const [id, st] of p.h) {
@@ -14432,7 +14187,7 @@ export class EmbervaultEngine {
   // --- Guest: town hand-off -----------------------------------------------------------------------------------
 
   /** The host sent me to town: I own my character from here on (the town runs locally, spec 5.2). */
-  private mpGuestEnterTown(tw: TownPayload): void {
+  mpGuestEnterTown(tw: TownPayload): void {
     const mp = this.mp!;
     const g = mp.guest;
     const local = this.localHero;
@@ -14466,7 +14221,7 @@ export class EmbervaultEngine {
   }
 
   /** Town gate: tell the host which door and hand my final state back. */
-  private mpGuestReturn(portalId?: string): void {
+  mpGuestReturn(portalId?: string): void {
     const mp = this.mp!;
     const local = this.localHero;
     const opts = this.getTownPortalOptions();
@@ -14490,7 +14245,7 @@ export class EmbervaultEngine {
   }
 
   /** The host did not answer my hand-back in time (or refused): stay in town and tell the host to keep me there. */
-  private mpGuestReturnFailed(notice: string): void {
+  mpGuestReturnFailed(notice: string): void {
     const mp = this.mp!;
     this.mpReleaseHold();
     mp.send('hbc', {}, mp.hostId);
@@ -14499,7 +14254,7 @@ export class EmbervaultEngine {
   }
 
   /** At the black of a fade: the town is dropped, the next 'level' message builds the dungeon. */
-  private mpGuestTownToHold(): void {
+  mpGuestTownToHold(): void {
     const local = this.localHero;
     this.leaveTownScene();
     local.inTown = false;
@@ -14508,13 +14263,13 @@ export class EmbervaultEngine {
   }
 
   /** Guest: send a UI command to the host (the answer is a `priv` message). */
-  private mpGuestCmd(cmd: CommandPayload): void {
+  mpGuestCmd(cmd: CommandPayload): void {
     const mp = this.mp;
     if (mp?.role === 'guest') mp.send('cmd', cmd, mp.hostId);
   }
 
   /** Guest in the dungeon asked for town (B / death screen / existing portal): hold at black until the host's reply arrives. */
-  private mpGuestAskTown(death: boolean, viaExistingPortal = false): void {
+  mpGuestAskTown(death: boolean, viaExistingPortal = false): void {
     const mp = this.mp!;
     this.mpHold('town', '正在返回城鎮…');
     this.audio.playPortal();
@@ -14579,3 +14334,8 @@ export class EmbervaultEngine {
     }
   }
 }
+
+// ---- method modules (src/game/engine/*): the bodies live there, mounted on the prototype ----
+type HudMethods = typeof hudMethods;
+export interface EmbervaultEngine extends HudMethods {}
+Object.assign(EmbervaultEngine.prototype, hudMethods);
