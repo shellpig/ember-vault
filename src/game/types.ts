@@ -266,7 +266,7 @@ export interface PartyMemberInfo {
 export interface HudState {
   hp: number;
   maxHp: number; // Effective max HP (baseMaxHp + relic HP bonus)
-  baseMaxHp: number; // Altar base max HP (60..300)
+  baseMaxHp: number; // Altar base max HP (warrior 70..310)
   maxHpCap: number;
   potions: number;
   hasKey: boolean;

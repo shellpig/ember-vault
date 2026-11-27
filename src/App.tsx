@@ -158,8 +158,8 @@ function HeartIcon({
 const INITIAL_HUD: HudState = {
   hp: 60,
   maxHp: 60,
-  baseMaxHp: 60,
-  maxHpCap: 300,
+  baseMaxHp: 70,
+  maxHpCap: 310,
   potions: 3,
   hasKey: false,
   doorUnlocked: false,

@@ -69,7 +69,7 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClassDef> = {
     title: 'Lantern Warden',
     description: '手持符文巨劍與魂燈的近戰鬥士。厚實血量與護甲，三段連斬第三擊大範圍橫掃，藥水回復量為1.5倍。',
     highlights: ['近戰三段連斬', '右鍵：劍柄重擊（暈眩）', '高血量＋護甲減傷，藥水回復量為1.5倍'],
-    baseHp: 60,
+    baseHp: 70,
     baseShield: 0,
     potionHealMult: 1.5,
     moveSpeedMult: 1.0,
@@ -123,7 +123,7 @@ export const SELECTABLE_CLASS_IDS: HeroClassId[] = ['warrior', 'frost_mage', 'hu
 export const WARRIOR = {
   // Altar upgrades (total 60)
   hpPerUpgrade: 12,
-  maxHpUpgrades: 20, // 60 + 20 * 12 = 300 HP
+  maxHpUpgrades: 20, // 70 + 20 * 12 = 310 HP
   maxAtkUpgrades: 20,
   maxArmorUpgrades: 5,
   maxCritUpgrades: 15,

@@ -144,9 +144,9 @@ export class Hero {
   /** Frost Mage ice spike cycle index: 0, 1, 2 (2 = empowered). Never resets on idle. */
   public mageShotIndex = 0;
 
-  // Health (HP scaled 10x: 60 start, 300 cap)
-  public hp = 60;
-  public maxHp = 60;
+  // Health (HP scaled 10x: warrior 70 start, 310 cap)
+  public hp = 70;
+  public maxHp = 70;
   public readonly maxHpCap =
     HERO_CLASSES.warrior.baseHp + WARRIOR.hpPerUpgrade * WARRIOR.maxHpUpgrades;
   public shield = 0;
