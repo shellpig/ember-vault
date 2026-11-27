@@ -70,6 +70,8 @@ interface RoomMeta {
   hostToken?: string;
   /** P7: the host's socket dropped; the room waits until this time (epoch ms) for the same page to come back. */
   hostGoneUntil?: number;
+  /** P7: the dropped host's player id; a resuming host page keeps it so every client's host / hero ids still match. */
+  hostPlayerId?: string;
 }
 
 /** Stored with serializeAttachment so it survives hibernation. */
@@ -249,6 +251,9 @@ export class Room extends DurableObject<Env> {
 
     // Same account again (second tab / reconnect): the new connection takes over the old one's player id.
     let playerId = crypto.randomUUID().slice(0, 8);
+    // P7: a host resuming within the grace window (validated above) keeps its old player id: the teammates' engines and
+    // its own still address the host hero / handbacks by that id
+    if (inGrace && meta.hostPlayerId) playerId = meta.hostPlayerId;
     if (existing) {
       playerId = existing.att.playerId;
       existing.ws.serializeAttachment({ ...existing.att, replaced: true } satisfies Attachment);
@@ -279,6 +284,7 @@ export class Room extends DurableObject<Env> {
       if (inGrace || (resume && meta.hostToken !== resume)) {
         if (resume) meta.hostToken = resume;
         delete meta.hostGoneUntil;
+        delete meta.hostPlayerId;
         await this.ctx.storage.put('meta', meta);
       }
     }
@@ -701,6 +707,7 @@ export class Room extends DurableObject<Env> {
       if (meta?.started && meta.hostToken) {
         // P7: a running game gets a short grace window; the same host page may come back and keep its authority
         meta.hostGoneUntil = Date.now() + HOST_GRACE_MS;
+        meta.hostPlayerId = att.playerId;
         await this.ctx.storage.put('meta', meta);
         await this.ctx.storage.setAlarm(meta.hostGoneUntil);
         this.broadcast({ type: 'hostState', state: 'reconnecting', graceMs: HOST_GRACE_MS }, ws);
