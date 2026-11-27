@@ -2,9 +2,9 @@
 
 本文件供新 session 快速了解專案全貌；需要細節時按下方文件索引深入。**本檔是唯一「隨進度持續更新」的文件**（每個階段收尾更新一次）。
 
-最後更新：2026-11-27
+最後更新：2026-11-28
 
-> **當前進度**：單人完整玩法（三職業、40 層四大區域、遺物與套裝、城鎮與倉庫、倒地與傳送門、多英雄引擎與本機 bot 隊友）以及 **Cloudflare 帳號存檔（P1）**、**倉庫（P2）**、**死亡與傳送門改版（P3）**、**多英雄與城鎮場景分離（P4-A／P4-B／P4-C）**、**多人房間基礎設施（P5-A）**、**多人地城即時同步（P5-B）**、**城鎮同步與多人進出流程（P5-C）** 皆已完成並合併至 `main`，Room Worker 也已部署更新至 P5-C 版本；**P6 城鎮交易與 P7 中途加入／重連＋打磨也已合併至 `main`（P7 merge `43c0e9d`，雙瀏覽器端到端驗收仍待進行）**。目前 1–4 人可完整開房協力打地城、在城鎮互看模型與名牌、全員回城後任一人先行解凍回地城、使用隊伍面板與遊戲內聊天；遊戲開始後可中途加入、斷線自動重連。路線圖外另新增第三職業**亞馬遜獵人**（`8520060`，弓箭普攻、隨機戰寵與多人戰寵同步）與戰士／法師祭壇升級平衡（`3ff73a3`、`cdb7369`）。
+> **當前進度**：單人完整玩法（三職業、40 層四大區域、遺物與套裝、城鎮與倉庫、倒地與傳送門、多英雄引擎與本機 bot 隊友）以及 **Cloudflare 帳號存檔（P1）**、**倉庫（P2）**、**死亡與傳送門改版（P3）**、**多英雄與城鎮場景分離（P4-A／P4-B／P4-C）**、**多人房間基礎設施（P5-A）**、**多人地城即時同步（P5-B）**、**城鎮同步與多人進出流程（P5-C）** 皆已完成並合併至 `main`，Room Worker 也已部署更新至 P5-C 版本；**P6 城鎮交易與 P7 中途加入／重連＋打磨也已合併至 `main`（P7 merge `43c0e9d`，雙瀏覽器端到端驗收仍待進行）**。目前 1–4 人可完整開房協力打地城、在城鎮互看模型與名牌、全員回城後任一人先行解凍回地城、使用隊伍面板與遊戲內聊天；遊戲開始後可中途加入、斷線自動重連。路線圖外另新增第三職業**亞馬遜獵人**（`8520060`，弓箭普攻、隨機戰寵與多人戰寵同步）與戰士／法師祭壇升級平衡（`3ff73a3`、`cdb7369`）；**engine.ts 拆檔（merge `03b54da`）、Boss 強化第一輪（merge `31eb740`）與寶箱房（merge `d3d5adf`）亦已合併 `main`**，之後持續在 `main` 上打磨 Boss 招式與特效（新增 `prism_cone`／`orbital_barrage`／`warp_ambush`、第 40 層雙 Boss、PC 隱藏 Boss 測試場）並加入自動攻擊與觸控操作。
 
 ---
 
@@ -30,9 +30,13 @@
 │   ├── hunter-spec.md            # 亞馬遜獵人規格書（弓箭、戰寵、升級、遺物特例）
 │   ├── p1-setup.md               # P1 Google OAuth、D1 與本機開發設定指南
 │   ├── p5-setup.md               # P5-A Room Worker 部署、本機三開與流量預算指南
-│   └── engine-refactor-plan.md   # engine.ts 拆檔重構施工規格與完成狀態（R0～R5）
+│   ├── engine-refactor-plan.md   # engine.ts 拆檔重構施工規格與完成狀態（R0～R5）
+│   ├── boss-spec.md              # Boss 強化規格（血量、招式、普攻、狂暴、掉寶、輪替、閃避 AI、devDepth）
+│   └── treasure-room-spec.md     # 寶箱房規格（生成機率與保底、寶箱結果表、多人同步）
 ├── migrations/
-│   └── 0001_init.sql             # D1 schema：accounts, sessions, characters, trades
+│   ├── 0001_init.sql             # D1 schema：accounts, sessions, characters, trades
+│   ├── 0002_room_creates.sql     # P7 建房限流
+│   └── 0003_treasure_pity.sql    # 寶箱房保底計數 characters.treasure_pity
 ├── shared/                       # 瀏覽器／Pages Functions／Room Worker 共用純 TS
 │   ├── character.ts              # 角色存檔型別與數量上限（8 角色 / 4 裝 / 30 包 / 200 倉）
 │   ├── trade.ts                  # P6 交易提供型別與純函式 `applyTrade`（驗證物品／金幣／空間並算出新存檔）
@@ -52,13 +56,14 @@
 ├── src/                          # 前端 React + Three.js 應用
 │   ├── App.tsx / main.tsx / api.ts / saveManager.ts
 │   ├── net/roomClient.ts         # 瀏覽器房間 WebSocket 客戶端
-│   ├── components/               # AccountScreens, RoomScreens, StashModal, RelicModals, ClassEmblem
+│   ├── components/               # AccountScreens, RoomScreens, StashModal, RelicModals, ClassEmblem, TouchControls
 │   └── game/                     # engine.ts（引擎本體：欄位／建構子／主迴圈／公開 API／組裝）、hero.ts、classes.ts、
-│       │                         # dungeon.ts、relics.ts、models.ts、textures.ts、audio.ts、types.ts
+│       │                         # dungeon.ts、relics.ts、treasure.ts（TREASURE_CONFIG）、models.ts、textures.ts、audio.ts、types.ts
 │       └── engine/               # engine.ts 拆出的方法模組（`this: EmbervaultEngine` 方法物件，掛回原型）
 │           ├── data.ts / entities.ts / scratch.ts      # Boss 設定與判斷函式、內部型別、共用暫存向量
 │           ├── party.ts / scene.ts / levelBuild.ts / town.ts / spawn.ts / input.ts
 │           ├── travel.ts / economy.ts / heroCombat.ts / classSkills.ts / loot.ts / enemies.ts
+│           ├── bossVfx.ts / treasure.ts                 # Boss 招式特效（shader、預熱）、寶箱房開箱與掉落
 │           ├── movement.ts / ai.ts / frame.ts / hud.ts
 │           └── mp/                # core.ts, host.ts, guest.ts, town.ts（多人 `mp*` 方法）
 ├── scripts/
@@ -129,6 +134,8 @@ npm run deploy:room
 | [`docs/hunter-spec.md`](docs/hunter-spec.md) | 亞馬遜獵人完整規格（弓箭普攻、疾步、戰寵召喚／強化與生命週期、升級、遺物特例、HUD 與多人同步） | 修改獵人或戰寵機制、平衡或遺物互動時查閱 |
 | [`docs/p1-setup.md`](docs/p1-setup.md) | Google OAuth、D1 建立與 migration、Pages 設定與本機開發 | 設定環境、除錯登入／存檔 API 時查閱 |
 | [`docs/engine-refactor-plan.md`](docs/engine-refactor-plan.md) | `engine.ts` 拆檔重構的施工規格、驗證方式與完成狀態 | 重構引擎檔案結構、或想知道 engine 方法為什麼分檔時查閱 |
+| [`docs/boss-spec.md`](docs/boss-spec.md) | Boss 血量、招式、普攻、狂暴、掉寶、輪替、閃避 AI 與 `?devDepth` | 修改 Boss 機制、平衡或特效時查閱 |
+| [`docs/treasure-room-spec.md`](docs/treasure-room-spec.md) | 寶箱房生成與保底、寶箱結果表、多人同步與部署順序 | 修改寶箱房或掉落公式時查閱 |
 | [`docs/p5-setup.md`](docs/p5-setup.md) | Room Worker 部署順序、本機三開開發、多開發帳號與 DO 免費額度估算 | 設定／部署房間後端或設計 P5-B 流量上限時查閱 |
 
 ---
@@ -136,9 +143,10 @@ npm run deploy:room
 ## 近期動態與下一步
 
 - **自動攻擊與觸控操作**：下方操作列新增「自動攻擊」開關（全平台，快捷鍵 `T`，記在 `localStorage`）：手動模式下攻擊範圍內有怪就自動轉向並普攻（戰士 2.25、法師／獵人射程內且需視線），不會自動放技能、衝刺或喝藥；按住左鍵手動瞄準時優先。觸控主裝置（`(hover: none) and (pointer: coarse)`）顯示左下移動搖桿（8 方向，對應 WASD，因此多人輸入協定不變）與右下技能／位移按鈕，觸控裝置預設開啟自動攻擊。實作在 `src/game/engine/input.ts`、`src/components/TouchControls.tsx`。手機直式版面尚未調整。
-- **寶箱房（分支 `feat/treasure-room`，規格 `docs/treasure-room-spec.md`，待使用者驗收後合併）**：非 Boss 層、至少 3 個戰鬥房時有 10% 機率（連 8 個非 Boss 層沒出現則強制；Boss 層不出現也不累積計數）把一間死路戰鬥房改成寶箱房（無怪、3～6 個寶箱、F 開啟，結果 20/50/20/9/1：金幣＋小怪掉落／菁英／具名菁英／Boss 寶藏／Boss 寶藏＋額外橙綠遺物）。保底計數存 D1 新欄位 `characters.treasure_pity`（**migration `0003_treasure_pity.sql`**），多人只用房主的計數，`?devDepth` 不讀寫。協定只新增選用欄位（`cmd` `chest`、`level.tr`、`world.tc`），**不需要 `npm run deploy:room`**。掉落公式抽成 `dropEnemyLoot`／`dropBossHoard`，數值集中在 `src/game/treasure.ts` 的 `TREASURE_CONFIG`。**部署順序：先 `npm run db:migrate:remote`，再合併 `main`**（欄位不存在時存檔 UPDATE 會失敗）。實作決定見規格末段。
-- **Boss 強化第一輪（分支 `feat/boss-rework`，規格 `docs/boss-spec.md`，待使用者驗收後合併）**：九隻 Boss 血量改為「最硬菁英小怪基準 × 層數成長 × 個體係數」（第 5 層單人約 380、第 40 層約 1,900，多人再乘人數）；近戰型受傷 −25%、法師／射手型普攻 +25% 速；新增 5 種招式新時序（0.5–0.8s 預警、硬直 0.5s、冷卻 0.5s）與每隻 Boss 的普攻（無地面紅圈），50/50 選擇放招或普攻且不連續 3 次同類；血量 ≤ 50% 狂暴（速度 ×1.5、傷害 ×1.25、紅光環＋橫幅＋震動，以敵人快照旗標 `EF_ENRAGED` 同步，**不需 `deploy:room`**）；Boss 寶藏金幣 ×1.5 並保底一件黃色以上遺物；第 10 層隨機骸骨大巫妖／熔岩巨像（取自地城 `genSeed`，房內一致）；自動模式與 bot 一看到紅圈就閃、側移 Boss 投射物。開發用 `?devDepth=N`（僅 Vite 開發伺服器或 `DEV_AUTH=1` 後端；不改 `max_depth`、不存檔）可直接從第 N 層開局測 Boss。實作決定與偏差見 boss-spec §13。
-- **engine.ts 拆檔重構（分支 `refactor/engine-split`，R0～R4 完成，待實玩確認後合併 `main`）**：14,581 行的 `src/game/engine.ts` 拆成 `engine.ts`（約 840 行：欄位、建構子、`update`、`tick`、`dispose`、組裝）＋ `src/game/engine/` 23 個模組（方法物件 `this: EmbervaultEngine`，以 `export interface EmbervaultEngine extends …Methods` 宣告合併＋`Object.assign(EmbervaultEngine.prototype, …)` 掛回；只 `import type` 引擎，僅在用到 `EmbervaultEngine.XXX` 靜態成員的模組做值 import）。方法內容逐字搬移、行為不變、`App.tsx` 與公開 API 未動；以 `node scripts/verify-engine-split.mjs` 逐方法比對（391 個成員與 55 個模組層級宣告全數一致）。**之後新方法請放進 `src/game/engine/<領域>.ts`（見 `AGENTS.md` 實作守則 8）**；施工細節與 R5（拆超大函式，選做）見 `docs/engine-refactor-plan.md`。
+- **Boss 招式與特效打磨（`afa83ec`～`f8948e5`，直接提交 `main`）**：五種招式改為程序化 shader 特效（`src/game/engine/bossVfx.ts`，開局預熱 shader 與爆光燈），新增 `prism_cone`（彩繪玻璃扇形）、`orbital_barrage`、`warp_ambush`（寶藍傳送伏擊）三招；`ranged_volley` 改為兩段式 railgun（35% 即時光束＋75% 高速砲彈）；`charge_slam` 熔岩裂縫與衝刺走廊判定；Boss 仇恨追擊。Boss 配置改為第 10 層固定骸骨大巫妖、熔岩巨像移到**第 40 層雙 Boss 終局**（與 Omega Core AI 同場）。PC 大廳左上角隱藏按鈕可解鎖起始層滑桿最右側的「BOSS 測試戰」（`BOSS_ARENA_DEPTH = 99`，依序 5F～40F 波次循環）——**此入口未限開發環境，正式站同樣可點開**。另有獵人戰寵攻擊動畫（`8ad0b32`）。招式已補記於 `docs/boss-spec.md` §3，但 §8 輪替仍寫第 10 層隨機抽、未記第 40 層雙 Boss 與測試戰入口。
+- **寶箱房（merge `d3d5adf`，規格 `docs/treasure-room-spec.md`）**：非 Boss 層、至少 3 個戰鬥房時有 10% 機率（連 8 個非 Boss 層沒出現則強制；Boss 層不出現也不累積計數）把一間死路戰鬥房改成寶箱房（無怪、3～6 個寶箱、F 開啟，結果 20/50/20/9/1：金幣＋小怪掉落／菁英／具名菁英／Boss 寶藏／Boss 寶藏＋額外橙綠遺物）。保底計數存 D1 新欄位 `characters.treasure_pity`（**migration `0003_treasure_pity.sql`**），多人只用房主的計數，`?devDepth` 不讀寫。協定只新增選用欄位（`cmd` `chest`、`level.tr`、`world.tc`），**不需要 `npm run deploy:room`**。掉落公式抽成 `dropEnemyLoot`／`dropBossHoard`，數值集中在 `src/game/treasure.ts` 的 `TREASURE_CONFIG`。**部署順序：先 `npm run db:migrate:remote`，再部署 Pages**（欄位不存在時存檔 UPDATE 會失敗）。實作決定見規格末段。
+- **Boss 強化第一輪（merge `31eb740`，規格 `docs/boss-spec.md`）**：九隻 Boss 血量改為「最硬菁英小怪基準 × 層數成長 × 個體係數」（第 5 層單人約 380、第 40 層約 1,900，多人再乘人數）；近戰型受傷 −25%、法師／射手型普攻 +25% 速；新增 5 種招式新時序（0.5–0.8s 預警、硬直 0.5s、冷卻 0.5s）與每隻 Boss 的普攻（無地面紅圈），50/50 選擇放招或普攻且不連續 3 次同類；血量 ≤ 50% 狂暴（速度 ×1.5、傷害 ×1.25、紅光環＋橫幅＋震動，以敵人快照旗標 `EF_ENRAGED` 同步，**不需 `deploy:room`**）；Boss 寶藏金幣 ×1.5 並保底一件黃色以上遺物；第 10 層原為隨機骸骨大巫妖／熔岩巨像（後續已改為固定大巫妖，見上一條）；自動模式與 bot 一看到紅圈就閃、側移 Boss 投射物。開發用 `?devDepth=N`（僅 Vite 開發伺服器或 `DEV_AUTH=1` 後端；不改 `max_depth`、不存檔）可直接從第 N 層開局測 Boss。實作決定與偏差見 boss-spec §13。
+- **engine.ts 拆檔重構（merge `03b54da`，R0～R4 完成）**：14,581 行的 `src/game/engine.ts` 拆成 `engine.ts`（約 840 行：欄位、建構子、`update`、`tick`、`dispose`、組裝）＋ `src/game/engine/` 23 個模組（方法物件 `this: EmbervaultEngine`，以 `export interface EmbervaultEngine extends …Methods` 宣告合併＋`Object.assign(EmbervaultEngine.prototype, …)` 掛回；只 `import type` 引擎，僅在用到 `EmbervaultEngine.XXX` 靜態成員的模組做值 import）。方法內容逐字搬移、行為不變、`App.tsx` 與公開 API 未動；以 `node scripts/verify-engine-split.mjs` 逐方法比對（391 個成員與 55 個模組層級宣告全數一致）。**之後新方法請放進 `src/game/engine/<領域>.ts`（見 `AGENTS.md` 實作守則 8）**；施工細節與 R5（拆超大函式，選做）見 `docs/engine-refactor-plan.md`。
 - **隊友 HUD 與 bot 打磨（`2baa5c2`、`2992098`、`6b06926`）**：左上角狀態板下方新增精簡隊友列（單人 bot／多人其他玩家：職業色點、LV、名字、血條、法師護盾細條、倒地／城鎮標記，寬約狀態板一半）；戰寵卡縮成同款精簡列（保留動物圖示，狂野激勵倒數顯示在列外右側）；bot 隨機取名（`BOT_NAMES`，含搞笑名）；單人喝藥水同時幫受傷 bot 回同量 HP；`HeroSnap` 尾端新增選用欄位 `level`、`maxShield` 供隊友列顯示（Room DO 只轉送，不需 `deploy:room`）。
 - **同伴跟隨（`e0d0a4b`）**：bot 與戰寵快到螢幕邊緣（NDC 0.9）即瞬移回玩家／主人身旁（非本機鏡頭的戰寵以距離 12 判斷）；bot 離玩家 > 7.5 放棄戰鬥優先歸隊、回到 5 以內才重新參戰。常數在 `classes.ts`。
 - **獵人 UI 修正（`d49f365`）**：祭壇攻速選項改用藍色 `Gauge` 圖示（新 accent `atkSpeed`），左上角新增攻速加成標籤，結算畫面獵人顯示「攻速／射速」。
@@ -159,6 +167,7 @@ npm run deploy:room
 - **P1～P3（PR #1～#3，`0ef1c99`、`d04e527`、`f687a02`）**：完成 Google 登入、D1 雲端存檔與 8 角色管理（P1）、200 格城鎮倉庫（P2）、倒地原地開門與死亡不結束本局（P3）。
 
 ### 下一步
-1. **確認 P6／P7 遠端部署**：`npm run db:migrate:remote`（migration `0002`，建房限流）與 `npm run deploy:room`（P6 起 Room Worker 綁 D1、P7 DO 變更）是否已對正式環境執行；未執行時正式站開房／交易會失敗。
+1. **確認遠端部署**：`npm run db:migrate:remote`（migration `0002` 建房限流、`0003` 寶箱房保底）與 `npm run deploy:room`（P6 起 Room Worker 綁 D1、P7 DO 變更）是否已對正式環境執行；未執行時正式站開房／交易會失敗。
 2. **P6／P7 端到端驗收**：兩個帳號實測交易（提出／修改／確認／取消、斷線與離開城鎮、重新載入後存檔）與中途加入、成員重連、房主 15 秒接管、自選起始層（房主）、隊友 HUD 列。
-3. **後續候選**（[`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §10）：難度系統內容（大廳目前為灰字）、房主轉移、公開配對、伺服器端防作弊驗證；`src/game/engine.ts` 拆檔已完成（R5 拆超大函式為選做，見 `docs/engine-refactor-plan.md`）。
+3. **Boss 打磨收尾**：把第 10 層固定大巫妖、第 40 層雙 Boss 與 BOSS 測試戰補記進 `docs/boss-spec.md` §8／§10；決定 BOSS 測試戰入口是否只限開發環境。
+4. **後續候選**（[`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §10）：難度系統內容（大廳目前為灰字）、房主轉移、公開配對、伺服器端防作弊驗證；`src/game/engine.ts` 拆檔已完成（R5 拆超大函式為選做，見 `docs/engine-refactor-plan.md`）。
