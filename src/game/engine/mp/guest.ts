@@ -72,8 +72,10 @@ export const guestMpMethods = {
   mpGuestApplyPrivate(this: EmbervaultEngine, p: PrivatePayload): void {
     const h = this.localHero;
     const ownStash = h.stash; // never sent over the wire: this machine owns it
+    const ownPity = h.treasurePity; // the treasure room counter is the host's business only: never take theirs over mine
     h.applyLoadout(p.ld);
     h.stash = ownStash;
+    h.treasurePity = ownPity;
     h.angelBuff = p.ab ? { ...p.ab } : null;
     [h.kills, h.normalKills, h.eliteKills, h.bossKills, h.totalGoldEarned, h.totalDamageDealt, h.critCount, h.potionsUsed] = p.st;
     h.chronosUsedThisFloor = p.ch === 1;

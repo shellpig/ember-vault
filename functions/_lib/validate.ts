@@ -6,6 +6,7 @@ import {
   MAX_EQUIPPED,
   MAX_NAME_LENGTH,
   MAX_STASH,
+  MAX_TREASURE_PITY,
   UPGRADE_KEYS,
 } from '../../shared/character';
 
@@ -75,6 +76,8 @@ export interface ValidatedSave {
   bag: RelicItem[];
   /** null = keep the stored stash. */
   stash: RelicItem[] | null;
+  /** null = keep the stored treasure room pity counter. */
+  treasurePity: number | null;
 }
 
 export function validateSaveBody(body: Record<string, unknown>): Validated<ValidatedSave> {
@@ -102,6 +105,12 @@ export function validateSaveBody(body: Record<string, unknown>): Validated<Valid
     stash = s.value;
   }
 
+  let treasurePity: number | null = null;
+  if (body.treasure_pity !== undefined) {
+    if (!isNonNegInt(body.treasure_pity, MAX_TREASURE_PITY)) return fail('invalid_treasure_pity');
+    treasurePity = body.treasure_pity;
+  }
+
   // An item may not appear in two containers at once.
   const ids = new Set<string>();
   for (const list of [equipped.value, bag.value, stash ?? []]) {
@@ -122,6 +131,7 @@ export function validateSaveBody(body: Record<string, unknown>): Validated<Valid
       equipped: equipped.value,
       bag: bag.value,
       stash,
+      treasurePity,
     },
   };
 }
