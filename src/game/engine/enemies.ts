@@ -476,45 +476,6 @@ export const enemiesMethods = {
       const tz = e.telegraphZ ?? e.z;
       const rad = e.telegraphRadius ?? cfg.telegraphRadius;
 
-      const emitShockwave = (cx: number, cz: number, r: number, colorHex: number) => {
-        const waveGeo = new THREE.RingGeometry(r * 0.35, r, 28);
-        const waveMat = new THREE.MeshBasicMaterial({
-          color: colorHex,
-          transparent: true,
-          opacity: 0.9,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        });
-        const waveMesh = new THREE.Mesh(waveGeo, waveMat);
-        waveMesh.rotation.x = -Math.PI / 2;
-        waveMesh.position.set(cx, 0.14, cz);
-        this.scene.add(waveMesh);
-        this.slashArcs.push({
-          mesh: waveMesh,
-          life: 0,
-          maxLife: 0.34,
-          isCleave: true,
-        });
-
-        for (let i = 0; i < 24; i++) {
-          const a = (i / 24) * Math.PI * 2;
-          const spd = 2.4 + Math.random() * 4.2;
-          this.spawnParticle(
-            cx + Math.cos(a) * r * 0.4,
-            0.25,
-            cz + Math.sin(a) * r * 0.4,
-            Math.cos(a) * spd,
-            2.0 + Math.random() * 3.0,
-            Math.sin(a) * spd,
-            i % 3 === 0 ? 0xffe484 : colorHex,
-            1.35,
-            0.55,
-            7.2
-          );
-        }
-      };
-
       if (isBasic) {
         if (!e.bossHitApplied) {
           e.bossHitApplied = true;
@@ -551,10 +512,11 @@ export const enemiesMethods = {
         if (p >= BOSS_CHARGE.impactProgress && !e.bossHitApplied) {
           e.bossHitApplied = true;
           if (e.telegraph) e.telegraph.group.visible = false;
+          this.hideBossWindupVfx(e.id);
           const dmg = this.bossDamage(e, BOSS_SKILLS.charge_slam.damage);
           this.audio.playBossSlam();
-          this.addScreenShake(0.4, 0.24);
-          emitShockwave(e.x, e.z, rad, cfg.telegraphColor);
+          this.forEachLiveHero(() => this.addScreenShake(0.62, 0.32));
+          this.spawnBossSlamVfx(e.x, e.z, rad, cfg.telegraphColor);
 
           this.forEachLiveHero(() => {
             const heroDistToImpact = Math.hypot(this.hero.x - e.x, this.hero.z - e.z);
@@ -579,7 +541,8 @@ export const enemiesMethods = {
           const projDmg = this.bossDamage(e, BOSS_SKILLS.ranged_volley.damage);
 
           this.audio.playMageCast();
-          this.addScreenShake(0.2, 0.14);
+          this.forEachLiveHero(() => this.addScreenShake(0.32, 0.18));
+          this.spawnBossVolleyVfx(e.x, e.z, baseAngle, cfg.telegraphColor);
           for (const offset of BOSS_VOLLEY.spread) {
             const a = baseAngle + offset;
             const sdx = Math.sin(a);
@@ -617,7 +580,7 @@ export const enemiesMethods = {
           const baseAng = e.bossNovaAngle ?? e.facing;
           const beams = this.computeNovaBeams(tx, tz, baseAng);
           this.audio.playBossLaser();
-          this.addScreenShake(0.45, 0.28);
+          this.forEachLiveHero(() => this.addScreenShake(0.55, 0.34));
           this.spawnBossNovaLaserVfx(tx, tz, rad, beams, cfg.telegraphColor);
 
           e.bossNovaActiveBeams = {
@@ -630,16 +593,28 @@ export const enemiesMethods = {
             hitIds: new Set<string>(),
           };
           this.checkBossNovaBeamHits(e);
+        } else if (skill === 'targeted_blast') {
+          // Void Black Hole detonation at locked target position
+          const dmg = this.bossDamage(e, BOSS_SKILLS.targeted_blast.damage);
+          this.audio.playBossBlackHole();
+          this.forEachLiveHero(() => this.addScreenShake(0.65, 0.34));
+          this.spawnBossBlackHoleVfx(tx, tz, rad, cfg.telegraphColor);
+
+          this.forEachLiveHero(() => {
+            const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
+            if (heroDistToImpact <= rad) {
+              this.damageHero(dmg, tx, tz, this.getEnemyLabel(e));
+            } else if (heroDistToImpact <= rad + 3.4) {
+              this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
+            }
+          });
+          this.damagePetsInRadius(tx, tz, rad, dmg);
         } else {
-          // 'slam' or 'targeted_blast' (remote psychic blast)
+          // 'slam' heavy floor smash with full-screen shake
           const dmg = this.bossDamage(e, BOSS_SKILLS[skill].damage);
           this.audio.playBossSlam();
-          this.addScreenShake(0.42, 0.24);
-          if (skill === 'slam') {
-            this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor);
-          } else {
-            emitShockwave(tx, tz, rad, cfg.telegraphColor);
-          }
+          this.forEachLiveHero(() => this.addScreenShake(0.68, 0.36));
+          this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor);
 
           this.forEachLiveHero(() => {
             const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
@@ -695,33 +670,59 @@ export const enemiesMethods = {
         ? 0.16 + Math.sin(this.elapsed * 3.2) * 0.1
         : 0;
 
+    const isCasterBasic = e.bossAction === 'basic' && cfg.bossType === 'caster';
+
     if (e.bossState === 'windup') {
       const p = THREE.MathUtils.clamp(
         1 - (e.bossStateTimer ?? 0) / (e.bossStateDuration || 1),
         0,
         1
       );
-      // Dramatically raise weapon/arms high overhead & lean back
-      e.rig.body.position.y = hoverY + p * 0.22;
-      e.rig.body.rotation.x = -p * 0.22;
-      if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = -p * 2.45;
-      if (e.rig.leftArm) {
-        e.rig.leftArm.rotation.x = e.kind === 'boss_juggernaut' ? -p * 0.8 : -p * 2.35;
+      if (isCasterBasic) {
+        // Poised floating cast (no backward recoil that looks like being hit)
+        e.rig.body.position.y = hoverY + p * 0.08;
+        e.rig.body.rotation.x = THREE.MathUtils.damp(e.rig.body.rotation.x, 0, 12, dt);
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = -p * 1.15;
+        if (e.rig.leftArm) e.rig.leftArm.rotation.x = -p * 0.75;
+      } else {
+        // Dramatically raise weapon/arms high overhead & lean back
+        e.rig.body.position.y = hoverY + p * 0.22;
+        e.rig.body.rotation.x = -p * 0.22;
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = -p * 2.45;
+        if (e.rig.leftArm) {
+          e.rig.leftArm.rotation.x = e.kind === 'boss_juggernaut' ? -p * 0.8 : -p * 2.35;
+        }
       }
     } else if (e.bossState === 'strike') {
-      // Violent downward slam or forward lunge!
-      e.rig.body.position.y = hoverY - 0.14;
-      e.rig.body.rotation.x = e.bossAction !== 'basic' && e.bossSkill === 'charge_slam' ? 0.42 : 0.34;
-      if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = 1.05;
-      if (e.rig.leftArm) {
-        e.rig.leftArm.rotation.x = e.kind === 'boss_juggernaut' ? 0.3 : 0.95;
+      if (isCasterBasic) {
+        // Crisp forward staff cast while staying upright
+        e.rig.body.position.y = hoverY + 0.04;
+        e.rig.body.rotation.x = 0.06;
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = -1.55;
+        if (e.rig.leftArm) e.rig.leftArm.rotation.x = -0.9;
+      } else {
+        // Violent downward slam or forward lunge!
+        e.rig.body.position.y = hoverY - 0.14;
+        e.rig.body.rotation.x = e.bossAction !== 'basic' && e.bossSkill === 'charge_slam' ? 0.42 : 0.34;
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = 1.05;
+        if (e.rig.leftArm) {
+          e.rig.leftArm.rotation.x = e.kind === 'boss_juggernaut' ? 0.3 : 0.95;
+        }
       }
     } else if (e.bossState === 'recover') {
-      // Hunched / catching breath — clear visual cue for player to counterattack!
-      e.rig.body.position.y = hoverY - 0.08 + Math.sin(this.elapsed * 6) * 0.03;
-      e.rig.body.rotation.x = 0.22;
-      if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = 0.65;
-      if (e.rig.leftArm) e.rig.leftArm.rotation.x = 0.45;
+      if (isCasterBasic) {
+        // Smooth upright settle after basic spell cast
+        e.rig.body.position.y = hoverY;
+        e.rig.body.rotation.x = THREE.MathUtils.damp(e.rig.body.rotation.x, 0.03, 10, dt);
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = THREE.MathUtils.damp(e.rig.weaponArm.rotation.x, -0.45, 10, dt);
+        if (e.rig.leftArm) e.rig.leftArm.rotation.x = THREE.MathUtils.damp(e.rig.leftArm.rotation.x, -0.25, 10, dt);
+      } else {
+        // Hunched / catching breath — clear visual cue for player to counterattack!
+        e.rig.body.position.y = hoverY - 0.08 + Math.sin(this.elapsed * 6) * 0.03;
+        e.rig.body.rotation.x = 0.22;
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = 0.65;
+        if (e.rig.leftArm) e.rig.leftArm.rotation.x = 0.45;
+      }
     } else {
       const walkSwing = dist < 12.0 && dist > 1.35 ? Math.sin(e.hopPhase) * 0.42 : 0;
       e.rig.body.position.y = hoverY + Math.abs(walkSwing) * 0.08;
@@ -753,7 +754,7 @@ export const enemiesMethods = {
         m.emissiveIntensity = 0.85;
       } else if (e.bossState === 'windup') {
         m.emissive.setHex(cfg.telegraphColor);
-        m.emissiveIntensity = 0.25 + Math.sin(this.elapsed * 22) * 0.18;
+        m.emissiveIntensity = isCasterBasic ? 0.16 : 0.25 + Math.sin(this.elapsed * 22) * 0.18;
       } else if (e.bossEnraged) {
         m.emissive.setHex(BOSS_ENRAGE.color);
         m.emissiveIntensity = 0.3 + Math.sin(this.elapsed * 6 + e.id) * 0.12;

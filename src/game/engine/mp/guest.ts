@@ -883,7 +883,7 @@ export const guestMpMethods = {
         const tz = e.telegraphZ ?? e.z;
         const rad = e.telegraphRadius ?? 0;
 
-        // Trigger burst VFX once on windup -> strike transition
+        // Trigger burst VFX once on windup -> strike transition (and on charge_slam arrival)
         if (e.prevBossState === 'windup' && e.bossState === 'strike' && rad > 0 && isFloorBoss(e.kind)) {
           const cfg = BOSS_CONFIGS[e.kind];
           this.hideBossWindupVfx(e.id);
@@ -892,7 +892,13 @@ export const guestMpMethods = {
           } else if (skill === 'nova_ring') {
             const beams = this.computeNovaBeams(tx, tz, e.facing);
             this.spawnBossNovaLaserVfx(tx, tz, rad, beams, cfg.telegraphColor);
+          } else if (skill === 'targeted_blast') {
+            this.spawnBossBlackHoleVfx(tx, tz, rad, cfg.telegraphColor);
+          } else if (skill === 'ranged_volley') {
+            this.spawnBossVolleyVfx(e.x, e.z, e.facing, cfg.telegraphColor);
           }
+        } else if (e.prevBossState === 'strike' && e.bossState === 'recover' && skill === 'charge_slam' && rad > 0 && isFloorBoss(e.kind)) {
+          this.spawnBossSlamVfx(e.x, e.z, rad, BOSS_CONFIGS[e.kind].telegraphColor);
         }
         e.prevBossState = e.bossState;
 

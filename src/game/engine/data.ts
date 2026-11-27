@@ -328,7 +328,7 @@ export interface BossSkillSpec {
 
 export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
   slam: { windup: 0.8, strike: 0.1, damage: 1.5, range: null, radius: null },
-  nova_ring: { windup: 0.6, strike: 0.1, damage: 0.9, range: null, rangeBonus: 0.55, radius: null },
+  nova_ring: { windup: 0.6, strike: 0.1, damage: 0.9, range: 8.5, radius: null },
   charge_slam: { windup: 0.7, strike: 0.3, damage: 1.25, range: 5.4, needsLos: true, radius: 2.25 },
   ranged_volley: { windup: 0.5, strike: 0.1, damage: 0.9, range: 7.8, needsLos: true, radius: 1.45 },
   targeted_blast: { windup: 0.7, strike: 0.1, damage: 1.5, range: 6.4, radius: 2.25 },
@@ -339,10 +339,10 @@ export const BOSS_NOVA = {
   beams: 6,
   beamsDeep: 8,
   deepFromDepth: 21,
-  beamMaxRange: 11,
-  beamHalfWidth: 0.42,
+  beamMaxRange: 18,
+  beamHalfWidth: 0.3,
   /** Duration (s) the fired laser beams actively check hits (each hero/pet can only be hit once). */
-  activeHitWindow: 0.18,
+  activeHitWindow: 0.58,
 } as const;
 
 /** charge_slam geometry (the dash itself lasts `BOSS_SKILLS.charge_slam.strike`). */

@@ -503,29 +503,29 @@ export class DungeonAudio {
     sub.start(now);
     sub.stop(now + 0.44);
 
-    // 2. High-energy downward-sweeping laser beam tone ("BU!~~~")
+    // 2. High-energy downward-sweeping laser beam tone ("BU!~~~") with extended sustain
     const beam = this.ctx.createOscillator();
     beam.type = 'sawtooth';
     beam.frequency.setValueAtTime(1480, now);
     beam.frequency.exponentialRampToValueAtTime(340, now + 0.14);
-    beam.frequency.exponentialRampToValueAtTime(220, now + 0.44);
+    beam.frequency.exponentialRampToValueAtTime(210, now + 0.74);
 
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.setValueAtTime(1800, now);
-    bp.frequency.exponentialRampToValueAtTime(620, now + 0.42);
+    bp.frequency.setValueAtTime(1850, now);
+    bp.frequency.exponentialRampToValueAtTime(580, now + 0.72);
     bp.Q.value = 1.6;
 
     const bg = this.ctx.createGain();
     bg.gain.setValueAtTime(0.28, now);
-    bg.gain.linearRampToValueAtTime(0.22, now + 0.2);
-    bg.gain.exponentialRampToValueAtTime(0.001, now + 0.46);
+    bg.gain.linearRampToValueAtTime(0.22, now + 0.5);
+    bg.gain.exponentialRampToValueAtTime(0.001, now + 0.76);
 
     beam.connect(bp);
     bp.connect(bg);
     bg.connect(this.masterGain);
     beam.start(now);
-    beam.stop(now + 0.48);
+    beam.stop(now + 0.78);
 
     // 3. Shimmering plasma crackle tail
     const src = this.ctx.createBufferSource();
@@ -535,11 +535,58 @@ export class DungeonAudio {
     hp.frequency.setValueAtTime(1400, now);
     const ng = this.ctx.createGain();
     ng.gain.setValueAtTime(0.18, now);
-    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.74);
     src.connect(hp);
     hp.connect(ng);
     ng.connect(this.masterGain);
-    src.start(now, 0.05, 0.44);
+    src.start(now, 0.05, 0.76);
+  }
+
+  public playBossBlackHole(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    // Deep gravitational implosion bass drop
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(260, now);
+    sub.frequency.exponentialRampToValueAtTime(30, now + 0.48);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.48, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + 0.52);
+    sub.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 0.54);
+
+    // Hollow cosmic resonance chord
+    const pad = this.ctx.createOscillator();
+    pad.type = 'triangle';
+    pad.frequency.setValueAtTime(420, now);
+    pad.frequency.exponentialRampToValueAtTime(110, now + 0.55);
+    const pg = this.ctx.createGain();
+    pg.gain.setValueAtTime(0.22, now);
+    pg.gain.exponentialRampToValueAtTime(0.001, now + 0.58);
+    pad.connect(pg);
+    pg.connect(this.masterGain);
+    pad.start(now);
+    pad.stop(now + 0.6);
+
+    // Void shockwave burst noise
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'bandpass';
+    lp.frequency.setValueAtTime(920, now);
+    lp.frequency.exponentialRampToValueAtTime(180, now + 0.5);
+    lp.Q.value = 1.2;
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.28, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.52);
+    src.connect(lp);
+    lp.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(now, 0.08, 0.54);
   }
 
   public playBossVictory(): void {
