@@ -180,14 +180,14 @@ export interface TreasurePlan {
 }
 
 /**
- * One floor's treasure decision (spec 1 + 2): boss floors and floors with fewer than `minCombatRooms` combat rooms never get
- * a room (the counter still grows); otherwise the room appears with `roomChance`, or for sure once the counter reached
+ * One floor's treasure decision (spec 1 + 2): boss floors never get a room and leave the counter untouched; floors with
+ * fewer than `minCombatRooms` combat rooms never get a room (the counter still grows); otherwise the room appears with `roomChance`, or for sure once the counter reached
  * `pityMisses`. Returns the new counter together with the room and its chests.
  */
 export function planTreasureForFloor(d: DungeonData, depth: number, pity: number, rng: Rng): TreasurePlan {
   const cfg = TREASURE_CONFIG;
   const miss = (): TreasurePlan => ({ treasure: null, pity: Math.min(MAX_TREASURE_PITY, Math.max(0, Math.floor(pity)) + 1) });
-  if (depth % cfg.bossFloorEvery === 0) return miss();
+  if (depth % cfg.bossFloorEvery === 0) return { treasure: null, pity: Math.max(0, Math.floor(pity)) };
   if (d.rooms.filter((r) => r.role === 'combat').length < cfg.minCombatRooms) return miss();
   const appear = pity >= cfg.pityMisses || rng() < cfg.roomChance;
   if (!appear) return miss();
