@@ -2194,9 +2194,7 @@ export default function App() {
               <span aria-hidden="true">·</span>
               <span>Right-Click {hud.skillName}</span>
               <span aria-hidden="true">·</span>
-              <span>Shift {hud.mobilityName}</span>
-              <span aria-hidden="true">·</span>
-              <span>Space 自動瞄準最近敵人</span>
+              <span>Shift / Space {hud.mobilityName}</span>
               <span aria-hidden="true">·</span>
               <span>E Heal</span>
               <span aria-hidden="true">·</span>

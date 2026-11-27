@@ -7,7 +7,6 @@ import type {
   GameKind,
 } from '../../shared/game';
 import {
-  ACT_ATTACK,
   RETURN_WAIT_MS,
 } from '../../shared/game';
 import {
@@ -471,14 +470,8 @@ export class EmbervaultEngine {
         this.activateManualMode();
       }
 
-      if (code === 'Space' && !this.inTown) {
-        // Space auto-turns toward the nearest enemy (both classes) before attacking
-        if (this.hero.attackCooldown <= 0) {
-          this.autoFaceNearestEnemy();
-          if (this.mpGuestDungeon()) this.mpQueueAction(ACT_ATTACK);
-        }
-        this.performAttack();
-      } else if (code === 'ShiftLeft' || code === 'ShiftRight') {
+      if (code === 'Space' || code === 'ShiftLeft' || code === 'ShiftRight') {
+        // Space and Shift both trigger the class mobility skill (warrior dash / mage blink / hunter sprint)
         this.performDash();
       } else if (code === 'KeyE' || code === 'KeyQ') {
         this.usePotion();
