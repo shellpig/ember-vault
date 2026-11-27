@@ -87,6 +87,7 @@ import {
 
 
 
+
 import {
   BOSS_CONFIGS,
   BossSkillKind,
@@ -129,6 +130,7 @@ import { sceneMethods } from './engine/scene';
 import { levelBuildMethods } from './engine/levelBuild';
 import { townMethods } from './engine/town';
 import { spawnMethods } from './engine/spawn';
+import { inputMethods } from './engine/input';
 
 export type { CharacterLoadout } from './hero';
 export { STASH_CAP } from './hero';
@@ -384,19 +386,6 @@ export class EmbervaultEngine {
   /** True while a rescue that involves the local hero is in progress (drives a faster HUD refresh). */
   rescueHudActive = false;
 
-  bindEvents(): void {
-    window.addEventListener('resize', this.handleResize);
-    window.addEventListener('keydown', this.handleKeyDown);
-    window.addEventListener('keyup', this.handleKeyUp);
-    this.renderer?.domElement.addEventListener('pointerdown', this.handlePointerDown);
-    this.renderer?.domElement.addEventListener('pointermove', this.handlePointerMove);
-    window.addEventListener('pointerup', this.handlePointerUp);
-    window.addEventListener('blur', this.handleWindowBlur);
-    this.renderer?.domElement.addEventListener('contextmenu', this.handleContextMenu);
-    this.renderer?.domElement.addEventListener('wheel', this.handleWheel, { passive: true });
-    this.renderer?.domElement.addEventListener('webglcontextlost', this.handleContextLost);
-  }
-
   handleResize = (): void => {
     if (!this.renderer || !this.camera) return;
     const w = this.container.clientWidth || window.innerWidth;
@@ -419,26 +408,10 @@ export class EmbervaultEngine {
     this.camZoom = THREE.MathUtils.clamp(this.camZoom + e.deltaY * 0.0005, 0.72, 1.35);
   };
 
-  activateManualMode(): void {
-    if (!this.audio.isEnabled()) {
-      this.audio.unlockAndEnable();
-    }
-    this.hero.controlMode = 'manual';
-    this.emitHud();
-  }
-
   /** When true (menus / account screens), keyboard and pointer input no longer takes over the hero. */
   inputLocked = false;
   /** P6: a trade is being set up or running; gold / bag / stash actions are refused (see setTradeLock). */
   tradeLocked = false;
-
-  public setInputLocked(locked: boolean): void {
-    this.inputLocked = locked;
-    if (locked) {
-      this.hero.input.keys.clear();
-      this.hero.input.leftMouseHeld = false;
-    }
-  }
 
   handleKeyDown = (e: KeyboardEvent): void => {
     if (this.hero.isDead || this.inputLocked) return;
@@ -560,93 +533,6 @@ export class EmbervaultEngine {
     this.hero.input.leftMouseHeld = false;
     this.hero.input.keys.delete('KeyF'); // never keep "holding" the rescue key after the window loses focus
   };
-
-  /** Turns the hero toward the cursor. Returns false if the cursor can't be projected. */
-  faceCursor(): boolean {
-    if (this.hero.isRemote) {
-      // A remote teammate on the host has no cursor here: its client reports the facing it aimed at
-      this.hero.facing = this.hero.input.aimFacing;
-      this.hero.rig.body.rotation.y = this.hero.facing;
-      return true;
-    }
-    const target = this.screenToGround(this.hero.input.pointerClientX, this.hero.input.pointerClientY);
-    if (!target) return false;
-    const ax = target.x - this.hero.x;
-    const az = target.z - this.hero.z;
-    if (Math.hypot(ax, az) < 0.05) return true;
-    this.hero.facing = Math.atan2(ax, az);
-    this.hero.rig.body.rotation.y = this.hero.facing;
-    return true;
-  }
-
-  /** While the left mouse button is held in manual mode: face the cursor and attack whenever ready. */
-  updateHeldAttack(): void {
-    if (!this.hero.input.leftMouseHeld) return;
-    if (this.hero.isDead || this.inTown || this.hero.controlMode !== 'manual' || this.transitionState !== 'none') {
-      return;
-    }
-    this.faceCursor();
-    if (this.hero.attackCooldown <= 0) this.performAttack();
-  }
-
-  // Public UI Control Methods
-  public triggerPommelStrike(): void {
-    if (this.hero.isDead) return;
-    if (!this.audio.isEnabled()) {
-      this.audio.unlockAndEnable();
-    }
-    this.performPommelStrike();
-  }
-
-  public toggleSound(): boolean {
-    const on = this.audio.toggle();
-    this.emitHud();
-    return on;
-  }
-
-  public setControlMode(mode: 'auto' | 'manual'): void {
-    if (this.mp?.role === 'guest' && mode === 'auto') return; // a teammate's hero is always steered by its player
-    this.hero.controlMode = mode;
-    this.hero.ai.path = [];
-    this.hero.ai.combatPath = [];
-    this.hero.ai.unstuckPath = [];
-    this.hero.ai.unstuckTimer = 0;
-    this.hero.ai.noProgressTimer = 0;
-    this.hero.ai.unstuckAttempts = 0;
-    this.hero.ai.progressAnchorX = this.hero.x;
-    this.hero.ai.progressAnchorZ = this.hero.z;
-    this.emitHud();
-  }
-
-  public triggerManualPotion(): void {
-    if (this.hero.isDead) return;
-    if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
-    this.usePotion();
-  }
-
-  public triggerNewDungeon(): void {
-    if (this.mp || this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
-    if (!this.audio.isEnabled()) this.audio.unlockAndEnable();
-    this.audio.playDescend();
-    this.beginTransition(() => {
-      this.buildLevel(this.depth + 1, { tickBuffFloor: true });
-    });
-  }
-
-  triggerSkipFloorCheat(): void {
-    if (this.mp || this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
-    if (this.audio.isEnabled()) {
-      this.audio.playDescend();
-    }
-    const nextDepth = this.depth + 1;
-    const bonusGold = nextDepth * 100;
-    this.beginTransition(() => {
-      this.hero.gold += bonusGold;
-      this.hero.totalGoldEarned += bonusGold;
-      this.buildLevel(nextDepth, { tickBuffFloor: true });
-      this.emitFloatingText(this.hero.x, 2.0, this.hero.z, `+${bonusGold} G`, 'gold');
-    });
-  }
 
   /** Freezes the current floor so the town portal can bring the hero back to `portal`. */
   snapshotDungeon(portal: { x: number; z: number }): SavedDungeonSnapshot {
@@ -2610,23 +2496,6 @@ export class EmbervaultEngine {
     this.hero.facing = Math.atan2(best.x - this.hero.x, best.z - this.hero.z);
     this.hero.rig.body.rotation.y = this.hero.facing;
     return true;
-  }
-
-  /** Projects a screen point onto the ground plane (y = 0.85, ice spike height). */
-  screenToGround(clientX: number, clientY: number): { x: number; z: number } | null {
-    if (!this.camera || !this.renderer) return null;
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    const ndc = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1
-    );
-    const ray = new THREE.Raycaster();
-    ray.setFromCamera(ndc, this.camera);
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.85);
-    const hitPoint = new THREE.Vector3();
-    if (!ray.ray.intersectPlane(plane, hitPoint)) return null;
-    return { x: hitPoint.x, z: hitPoint.z };
   }
 
   /** Frost Mage basic attack: fires one ice spike along heroFacing (3-shot cycle, never resets). */
@@ -8080,5 +7949,6 @@ type SceneMethods = typeof sceneMethods;
 type LevelBuildMethods = typeof levelBuildMethods;
 type TownMethods = typeof townMethods;
 type SpawnMethods = typeof spawnMethods;
-export interface EmbervaultEngine extends HudMethods, CoreMpMethods, HostMpMethods, GuestMpMethods, TownMpMethods, PartyMethods, SceneMethods, LevelBuildMethods, TownMethods, SpawnMethods {}
-Object.assign(EmbervaultEngine.prototype, hudMethods, coreMpMethods, hostMpMethods, guestMpMethods, townMpMethods, partyMethods, sceneMethods, levelBuildMethods, townMethods, spawnMethods);
+type InputMethods = typeof inputMethods;
+export interface EmbervaultEngine extends HudMethods, CoreMpMethods, HostMpMethods, GuestMpMethods, TownMpMethods, PartyMethods, SceneMethods, LevelBuildMethods, TownMethods, SpawnMethods, InputMethods {}
+Object.assign(EmbervaultEngine.prototype, hudMethods, coreMpMethods, hostMpMethods, guestMpMethods, townMpMethods, partyMethods, sceneMethods, levelBuildMethods, townMethods, spawnMethods, inputMethods);
