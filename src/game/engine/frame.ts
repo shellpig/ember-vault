@@ -213,6 +213,8 @@ export const frameMethods = {
 
     // Hold-to-attack: aim at the cursor every frame (overrides walk facing) and fire when ready
     this.updateHeldAttack();
+    // Auto-attack toggle: swing / shoot at the nearest enemy in range when nothing is held
+    this.updateAutoAttack();
 
     // 3. Animate Hero Composite Rig
     this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);

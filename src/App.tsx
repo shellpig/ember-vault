@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   Archive,
+  Crosshair,
   Coins,
   DoorOpen,
   Feather,
@@ -24,6 +25,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
+import { TouchControls, useTouchPrimary } from './components/TouchControls';
 import { EmbervaultEngine } from './game/engine';
 import { HERO_CLASSES, HeroClassId, UpgradeAccent } from './game/classes';
 import { computeRelicSummary, formatRelicStat, getRarityCss } from './game/relics';
@@ -190,6 +192,7 @@ const INITIAL_HUD: HudState = {
   townReturnCost: 10,
   angelBuff: null,
   controlMode: 'auto',
+  autoAttack: false,
   soundOn: false,
   dashReady: true,
   pommelCooldown: 0,
@@ -283,6 +286,10 @@ export default function App() {
   const [banner, setBanner] = useState<BannerEvent | null>(null);
   const [floatingLabels, setFloatingLabels] = useState<FloatingLabelData[]>([]);
   const [dockCollapsed, setDockCollapsed] = useState(false);
+  const touchPrimary = useTouchPrimary();
+  const onTouchMove = useCallback((x: number, y: number) => engineRef.current?.setTouchMove(x, y), []);
+  const onTouchDash = useCallback(() => engineRef.current?.touchDash(), []);
+  const onTouchSkill = useCallback(() => engineRef.current?.triggerPommelStrike(), []);
   const [relicModalOpen, setRelicModalOpen] = useState(false);
   const [codexModalOpen, setCodexModalOpen] = useState(false);
   const [webglError, setWebglError] = useState<string | null>(null);
@@ -1648,6 +1655,18 @@ export default function App() {
         </div>
       </div>
 
+      {/* Touch controls (phones / tablets only): movement stick + skill / mobility buttons */}
+      {screen === 'playing' && !hud.isDead && touchPrimary && (
+        <TouchControls
+          onMove={onTouchMove}
+          onDash={onTouchDash}
+          onSkill={onTouchSkill}
+          skillName={hud.skillName}
+          mobilityName={hud.mobilityName}
+          skillReady={hud.pommelCooldown <= 0.02}
+        />
+      )}
+
       {/* Unified Collapsible Bottom Control Dock & Contextual Altar Upgrade Panel */}
       {!hud.isDead && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center pointer-events-auto max-w-[94vw]">
@@ -2053,6 +2072,22 @@ export default function App() {
               </button>
             </div>
 
+            {/* Auto-attack toggle (all platforms; T) */}
+            <button
+              type="button"
+              onClick={() => engineRef.current?.setAutoAttack(!hud.autoAttack)}
+              title="自動攻擊（T）：手動模式下，攻擊範圍內有怪就自動普攻，不會自動放技能"
+              aria-pressed={hud.autoAttack}
+              className={`flex items-center gap-1 px-2 py-1.5 border text-xs font-hud transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                hud.autoAttack
+                  ? 'border-[#e6be63] bg-[#241c0f] text-[#fff0bf] shadow-[0_0_10px_rgba(230,190,99,0.25)]'
+                  : 'border-[#3a3428] bg-[#151822] text-[#a3a8b8] hover:text-[#ece6d8]'
+              }`}
+            >
+              <Crosshair className="w-3.5 h-3.5" />
+              <span>自動攻擊 {hud.autoAttack ? 'ON' : 'OFF'}</span>
+            </button>
+
             {/* Camera Zoom */}
             <div className="flex items-center gap-1 shrink-0">
               <button
@@ -2236,6 +2271,8 @@ export default function App() {
               <span>Right-Click {hud.skillName}</span>
               <span aria-hidden="true">·</span>
               <span>Shift / Space {hud.mobilityName}</span>
+              <span aria-hidden="true">·</span>
+              <span>T 自動攻擊</span>
               <span aria-hidden="true">·</span>
               <span>E Heal</span>
               <span aria-hidden="true">·</span>

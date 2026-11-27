@@ -307,6 +307,7 @@ export class EmbervaultEngine {
     this.devDepthRun = devDepth !== null;
     this.buildLevel(devDepth ?? 1);
     this.bindEvents();
+    this.loadAutoAttackSetting();
     this.lastTime = performance.now();
     this.emitHud();
     this.tick();
@@ -397,6 +398,10 @@ export class EmbervaultEngine {
 
   /** When true (menus / account screens), keyboard and pointer input no longer takes over the hero. */
   inputLocked = false;
+  /** Auto-attack toggle (manual mode): swing / shoot at enemies in range, never casting skills (see updateAutoAttack). */
+  autoAttackEnabled = false;
+  /** WASD keys currently held by the touch joystick (see setTouchMove). */
+  touchKeys = new Set<string>();
   /** P6: a trade is being set up or running; gold / bag / stash actions are refused (see setTradeLock). */
   tradeLocked = false;
 
@@ -432,6 +437,13 @@ export class EmbervaultEngine {
           this.hero.input.keys.add('KeyF');
         }
       }
+      return;
+    }
+
+    // Hotkey T: toggle auto-attack
+    if (code === 'KeyT' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat) {
+      e.preventDefault();
+      this.setAutoAttack(!this.autoAttackEnabled);
       return;
     }
 

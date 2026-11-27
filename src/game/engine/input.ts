@@ -1,5 +1,26 @@
 import type { EmbervaultEngine } from '../engine';
 import * as THREE from 'three';
+import { ACT_ATTACK } from '../../../shared/game';
+import { FROST_MAGE, HUNTER } from '../classes';
+import { hasLineOfSight } from '../dungeon';
+import type { EnemyEntity } from './entities';
+
+/** Auto-attack toggle (all platforms): remembered per browser. */
+const AUTO_ATTACK_STORAGE_KEY = 'embervault.autoAttack.v1';
+/** Warrior slash reach used by auto-attack (heroCombat performAttack: 2.25, cleave 2.55). */
+const AUTO_ATTACK_MELEE_REACH = 2.25;
+/** Touch joystick dead zone (0..1 of the stick radius). */
+const TOUCH_DEAD_ZONE = 0.28;
+const TOUCH_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD'] as const;
+
+/** Phones / tablets: no hover and a coarse pointer (touch-screen laptops with a mouse count as desktop). */
+export function isTouchPrimaryDevice(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  } catch {
+    return false;
+  }
+}
 
 export const inputMethods = {
   bindEvents(this: EmbervaultEngine): void {
@@ -133,5 +154,85 @@ export const inputMethods = {
     const hitPoint = new THREE.Vector3();
     if (!ray.ray.intersectPlane(plane, hitPoint)) return null;
     return { x: hitPoint.x, z: hitPoint.z };
+  },
+
+  /** Reads the remembered auto-attack setting (default: on for touch devices, off for desktop). */
+  loadAutoAttackSetting(this: EmbervaultEngine): void {
+    let saved: string | null = null;
+    try {
+      saved = window.localStorage.getItem(AUTO_ATTACK_STORAGE_KEY);
+    } catch {
+      saved = null;
+    }
+    this.autoAttackEnabled = saved === null ? isTouchPrimaryDevice() : saved === '1';
+  },
+
+  setAutoAttack(this: EmbervaultEngine, enabled: boolean): void {
+    this.autoAttackEnabled = enabled;
+    try {
+      window.localStorage.setItem(AUTO_ATTACK_STORAGE_KEY, enabled ? '1' : '0');
+    } catch {
+      // storage unavailable: keep it for this session only
+    }
+    this.emitHud();
+  },
+
+  /**
+   * Auto-attack (manual mode only): when an enemy is inside the class's attack range (ranged classes also need line of
+   * sight), turn to the nearest one and swing / shoot. Never casts the skill, dashes or drinks. A held left mouse
+   * button (manual aim) takes precedence.
+   */
+  updateAutoAttack(this: EmbervaultEngine): void {
+    if (!this.autoAttackEnabled || this.hero !== this.localHero) return;
+    const h = this.hero;
+    if (h.isDead || this.inTown || h.controlMode !== 'manual' || this.transitionState !== 'none') return;
+    if (this.inputLocked || h.input.leftMouseHeld || h.attackCooldown > 0) return;
+    const ranged = h.isRangedClass();
+    const range = h.isHunter() ? HUNTER.projectileRange : h.isMage() ? FROST_MAGE.projectileRange : AUTO_ATTACK_MELEE_REACH;
+    let best: EnemyEntity | null = null;
+    let bestDist = Infinity;
+    for (const e of this.viewEnemies()) {
+      if (e.dead) continue;
+      const d = Math.hypot(e.x - h.x, e.z - h.z);
+      if (d > range + this.getEnemyHitRadius(e) || d >= bestDist) continue;
+      if (ranged && !hasLineOfSight(this.dungeon, h.x, h.z, e.x, e.z, this.doorUnlocked, 0.2)) continue;
+      best = e;
+      bestDist = d;
+    }
+    if (!best) return;
+    h.facing = Math.atan2(best.x - h.x, best.z - h.z);
+    h.rig.body.rotation.y = h.facing;
+    if (this.mpGuestDungeon()) this.mpQueueAction(ACT_ATTACK);
+    this.performAttack();
+  },
+
+  /**
+   * Touch joystick: `x` right, `y` up, both -1..1 (screen space). Mapped onto the WASD keys (8 directions) so movement,
+   * multiplayer input and prediction behave exactly like the keyboard.
+   */
+  setTouchMove(this: EmbervaultEngine, x: number, y: number): void {
+    const keys = this.localHero.input.keys;
+    for (const k of TOUCH_KEYS) if (this.touchKeys.has(k)) keys.delete(k);
+    this.touchKeys.clear();
+    const mag = Math.hypot(x, y);
+    if (mag < TOUCH_DEAD_ZONE || this.inputLocked || this.localHero.isDead) return;
+    const oct = Math.round(Math.atan2(y, x) / (Math.PI / 4)); // 0 = right, 2 = up, 4/-4 = left, -2 = down
+    const want: string[] = [];
+    if (oct === 0 || oct === 1 || oct === -1) want.push('KeyD');
+    if (oct === 4 || oct === -4 || oct === 3 || oct === -3) want.push('KeyA');
+    if (oct === 2 || oct === 1 || oct === 3) want.push('KeyW');
+    if (oct === -2 || oct === -1 || oct === -3) want.push('KeyS');
+    for (const k of want) {
+      keys.add(k);
+      this.touchKeys.add(k);
+    }
+    if (!this.inTown) this.activateManualMode();
+  },
+
+  /** Touch button: class mobility skill (same as Shift / Space). */
+  touchDash(this: EmbervaultEngine): void {
+    if (this.localHero.isDead || this.inputLocked || this.hero !== this.localHero) return;
+    if (!this.inTown) this.activateManualMode();
+    this.performDash();
   },
 };

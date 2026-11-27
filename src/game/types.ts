@@ -310,6 +310,8 @@ export interface HudState {
   nearShop: boolean;
   hasShopOnFloor: boolean;
   controlMode: 'auto' | 'manual';
+  /** Auto-attack toggle (dock button / T). */
+  autoAttack: boolean;
   soundOn: boolean;
   dashReady: boolean;
   pommelCooldown: number;

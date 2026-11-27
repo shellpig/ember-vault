@@ -126,6 +126,7 @@ export const hudMethods = {
       townReturnCost: this.getTownReturnCost(),
       angelBuff: lh.angelBuff ? { ...lh.angelBuff } : null,
       controlMode: lh.controlMode,
+      autoAttack: this.autoAttackEnabled,
       soundOn: this.audio.isEnabled(),
       dashReady: lh.dashCooldown <= 0,
       pommelCooldown: lh.pommelCooldown,
