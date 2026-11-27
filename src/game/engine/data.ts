@@ -13,18 +13,23 @@ export type FloorBossKind =
 
 export type BossSkillKind = 'slam' | 'charge_slam' | 'nova_ring' | 'ranged_volley' | 'targeted_blast';
 
+/** A boss action is either one of its skills (ground telegraph) or a basic attack (docs/boss-spec.md sections 3-5). */
+export type BossActionType = 'skill' | 'basic';
+
+/** Melee bosses take less damage; caster / shooter bosses attack faster (docs/boss-spec.md section 2). */
+export type BossType = 'melee' | 'caster';
+
 export interface BossConfig {
   name: string;
   title: string;
+  bossType: BossType;
+  /** Only the relative HP of the nine bosses (individual factor, see `getBossIndividualHpFactor`), not an absolute HP. */
   baseHp: number;
   speed: number;
   damage: number;
   telegraphColor: number;
   telegraphRadius: number;
   triggerRange: number;
-  windupDuration: number;
-  strikeDuration: number;
-  recoverDuration: number;
   skills: BossSkillKind[];
   projectileKind?: ProjectileKind;
 }
@@ -39,11 +44,11 @@ export const TOWN_ALTAR_GRID = { gx: 11, gz: 19 };
 
 export const TOWN_STASH_GRID = { gx: 17, gz: 18 };
 
-export const DUNGEON_BOSS_ROTATION: FloorBossKind[] = [
-  'boss_juggernaut',
-  'boss_lich',
-  'boss_colossus',
-];
+/** Depth 5 is always the first (beginner) boss. */
+export const FIRST_BOSS: FloorBossKind = 'boss_juggernaut';
+
+/** Depth 10: one of these, drawn once per floor from the dungeon seed (see `getBossForDepth`). */
+export const DUNGEON_DEPTH10_BOSS_POOL: FloorBossKind[] = ['boss_lich', 'boss_colossus'];
 
 export const CAVERN_BOSS_ROTATION: FloorBossKind[] = ['boss_crystal_wyrm', 'boss_fungal_king'];
 
@@ -92,7 +97,21 @@ export const SPECIAL_ELITE_NAMES: string[] = [
   '忘記存檔的勇者',
 ];
 
-export function getBossForDepth(depth: number, theme: TerrainTheme): FloorBossKind {
+/** Small integer hash (xorshift-multiply) used to derive deterministic per-floor choices from the dungeon seed. */
+function hashSeed(seed: number, salt: number): number {
+  let h = Math.imul((seed ^ Math.imul(salt, 0x9e3779b1)) >>> 0, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/**
+ * The floor boss of a boss floor. `genSeed` is the dungeon's generation seed (`DungeonData.genSeed`): in a room the host
+ * announces it in `level.seed` and every client regenerates the same dungeon from it, so the depth-10 random pick is
+ * identical everywhere without any extra protocol field (docs/boss-spec.md section 8).
+ */
+export function getBossForDepth(depth: number, theme: TerrainTheme, genSeed = 0): FloorBossKind {
   const bossIdx = Math.max(0, Math.floor(depth / 5) - 1);
   if (theme === 'cavern') {
     return CAVERN_BOSS_ROTATION[bossIdx % CAVERN_BOSS_ROTATION.length];
@@ -103,13 +122,15 @@ export function getBossForDepth(depth: number, theme: TerrainTheme): FloorBossKi
   if (theme === 'alien') {
     return ALIEN_BOSS_ROTATION[bossIdx % ALIEN_BOSS_ROTATION.length];
   }
-  return DUNGEON_BOSS_ROTATION[bossIdx % DUNGEON_BOSS_ROTATION.length];
+  if (depth <= 5) return FIRST_BOSS;
+  return DUNGEON_DEPTH10_BOSS_POOL[hashSeed(genSeed, depth) % DUNGEON_DEPTH10_BOSS_POOL.length];
 }
 
 export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
   // Depth 5 (First Boss): kept unchanged with classic heavy slam
   boss_juggernaut: {
     name: 'IRONCLAD WARDEN',
+    bossType: 'melee',
     title: 'Catacomb Dread Knight',
     baseHp: 175,
     speed: 2.1,
@@ -117,14 +138,12 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0xff4438,
     telegraphRadius: 2.75,
     triggerRange: 2.85,
-    windupDuration: 0.92,
-    strikeDuration: 0.26,
-    recoverDuration: 1.05,
     skills: ['slam'],
   },
   // Depth 10: Arcane Hex Ring Nova (distinct from first boss)
   boss_lich: {
     name: 'OSSUARY ARCHLICH',
+    bossType: 'caster',
     title: 'Sovereign of Bone & Hex',
     baseHp: 160,
     speed: 2.3,
@@ -132,15 +151,13 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0xc85cff,
     telegraphRadius: 3.0,
     triggerRange: 3.35,
-    windupDuration: 0.96,
-    strikeDuration: 0.28,
-    recoverDuration: 1.0,
     skills: ['nova_ring'],
     projectileKind: 'mage_orb',
   },
   // Alternate Dungeon Boss: Molten Rush Charge
   boss_colossus: {
     name: 'MOLTEN COLOSSUS',
+    bossType: 'melee',
     title: 'Abyssal Furnace Golem',
     baseHp: 195,
     speed: 1.92,
@@ -148,14 +165,12 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0xff7b24,
     telegraphRadius: 2.65,
     triggerRange: 2.95,
-    windupDuration: 0.9,
-    strikeDuration: 0.34,
-    recoverDuration: 1.15,
     skills: ['charge_slam'],
   },
   // Depth 11-20 Cavern Boss #1 (2 Skills: Slam + Crystal Dash Rush)
   boss_crystal_wyrm: {
     name: 'CRYSTAL BEHEMOTH',
+    bossType: 'melee',
     title: 'Prism-Crowned Cavern Titan',
     baseHp: 195,
     speed: 2.15,
@@ -163,15 +178,13 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x3be8ff,
     telegraphRadius: 2.85,
     triggerRange: 3.0,
-    windupDuration: 0.9,
-    strikeDuration: 0.32,
-    recoverDuration: 1.05,
     skills: ['slam', 'charge_slam'],
     projectileKind: 'crystal_shard',
   },
   // Depth 11-20 Cavern Boss #2 (2 Skills: Spore Slam + 6-Orb Spore Ring)
   boss_fungal_king: {
     name: 'SPORE SOVEREIGN',
+    bossType: 'caster',
     title: 'Monarch of the Glowcap Grotto',
     baseHp: 185,
     speed: 2.05,
@@ -179,15 +192,13 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x4ef58a,
     telegraphRadius: 3.05,
     triggerRange: 3.2,
-    windupDuration: 0.94,
-    strikeDuration: 0.28,
-    recoverDuration: 1.05,
     skills: ['slam', 'nova_ring'],
     projectileKind: 'spore_orb',
   },
   // Depth 21-30 Monster Interior Boss #1 (3 Skills incl. Ranged: Bone Volley + Arterial Lunge + Pulse Ring)
   boss_leviathan_heart: {
     name: 'HEART OF THE BEAST',
+    bossType: 'melee',
     title: 'Crimson Core of the Leviathan',
     baseHp: 210,
     speed: 2.08,
@@ -195,15 +206,13 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0xff8826,
     telegraphRadius: 2.95,
     triggerRange: 3.05,
-    windupDuration: 0.88,
-    strikeDuration: 0.32,
-    recoverDuration: 1.05,
     skills: ['ranged_volley', 'charge_slam', 'nova_ring'],
     projectileKind: 'bone_dart',
   },
   // Depth 21-30 Monster Interior Boss #2 (3 Skills incl. Ranged: Bio-Plasma Fan + Targeted Lock Blast + Synapse Ring)
   boss_abyssal_brain: {
     name: 'NEURAL OVERMIND',
+    bossType: 'caster',
     title: 'Encephalon of Abyssal Viscera',
     baseHp: 192,
     speed: 2.32,
@@ -211,15 +220,13 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x36f5d4,
     telegraphRadius: 3.1,
     triggerRange: 3.3,
-    windupDuration: 0.92,
-    strikeDuration: 0.28,
-    recoverDuration: 1.0,
     skills: ['ranged_volley', 'targeted_blast', 'nova_ring'],
     projectileKind: 'bio_orb',
   },
   // Depth 31-40 Alien Spaceship Boss #1 (3 Skills incl. Ranged: Ion Barrage + Orbital Target Lock + Quantum Nova)
   boss_mothership_ai: {
     name: 'OMEGA CORE AI',
+    bossType: 'caster',
     title: 'Sovereign Starship Mainframe',
     baseHp: 215,
     speed: 2.38,
@@ -227,15 +234,13 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0xff4757,
     telegraphRadius: 3.1,
     triggerRange: 3.4,
-    windupDuration: 0.9,
-    strikeDuration: 0.28,
-    recoverDuration: 0.98,
     skills: ['ranged_volley', 'targeted_blast', 'nova_ring'],
     projectileKind: 'ion_orb',
   },
   // Depth 31-40 Alien Spaceship Boss #2 (3 Skills incl. Ranged: Plasma Spread + Warp Lunge + EMP Ring)
   boss_xeno_commander: {
     name: 'XENO OVERLORD',
+    bossType: 'melee',
     title: 'Grand Admiral of the Armada',
     baseHp: 230,
     speed: 2.22,
@@ -243,13 +248,122 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x39ff7a,
     telegraphRadius: 3.0,
     triggerRange: 3.15,
-    windupDuration: 0.86,
-    strikeDuration: 0.32,
-    recoverDuration: 1.0,
     skills: ['ranged_volley', 'charge_slam', 'nova_ring'],
     projectileKind: 'plasma_bolt',
   },
 };
+
+// ---------------------------------------------------------------------------------------------------------------
+// Boss rework tuning (docs/boss-spec.md). Every number of the boss fights lives here.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Section 1: HP = 30 (hardest elite-able mob) x 5 (named elite 4 x 1.25) x 1.5 x 0.9, then the mob depth growth. */
+export const BOSS_HP = {
+  mobBaseHp: 30,
+  namedEliteMult: 4 * 1.25,
+  bossMult: 1.5,
+  tuneMult: 0.9,
+  /** Same growth as normal monsters: 1 + (depth - 1) x this. */
+  depthGrowth: 0.22,
+  /** The nine bosses keep their old relative `baseHp` difference, clamped to +-this fraction. */
+  individualClamp: 0.1,
+} as const;
+
+/** Section 2. */
+export const BOSS_MELEE_DAMAGE_TAKEN_MULT = 0.75;
+export const BOSS_CASTER_BASIC_SPEED_MULT = 1.25;
+
+/** Section 3: how the five skills behave. `damage` is a fraction of `cfg.damage x getDepthDamageScale()`. */
+export interface BossSkillSpec {
+  windup: number;
+  strike: number;
+  damage: number;
+  /** Max distance (to the target hero) at which the skill may be started. `null` = `cfg.triggerRange` (+ `rangeBonus`). */
+  range: number | null;
+  rangeBonus?: number;
+  needsLos?: boolean;
+  /** Radius of the ground circle; `null` = `cfg.telegraphRadius`. */
+  radius: number | null;
+}
+
+export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
+  slam: { windup: 0.8, strike: 0.1, damage: 1.5, range: null, radius: null },
+  nova_ring: { windup: 0.6, strike: 0.1, damage: 0.9, range: null, rangeBonus: 0.55, radius: null },
+  charge_slam: { windup: 0.7, strike: 0.3, damage: 1.25, range: 5.4, needsLos: true, radius: 2.25 },
+  ranged_volley: { windup: 0.5, strike: 0.1, damage: 0.9, range: 7.8, needsLos: true, radius: 1.45 },
+  targeted_blast: { windup: 0.7, strike: 0.1, damage: 1.5, range: 6.4, radius: 2.25 },
+};
+
+/** nova_ring: the radial orb waves after the centre hit. */
+export const BOSS_NOVA = {
+  waves: 2,
+  waveInterval: 0.2,
+  orbsPerWave: 8,
+  orbsPerWaveDeep: 10,
+  deepFromDepth: 21,
+  orbDamage: 0.58,
+  orbSpeed: 5.4,
+} as const;
+
+/** charge_slam geometry (the dash itself lasts `BOSS_SKILLS.charge_slam.strike`). */
+export const BOSS_CHARGE = { maxLunge: 4.6, minLunge: 1.5, impactProgress: 0.88 } as const;
+
+/** ranged_volley: 3 fan shots, aim follows the hero for the first part of the windup then locks. */
+export const BOSS_VOLLEY = { spread: [-0.28, 0, 0.28], projectileSpeed: 6.6, boneDartSpeed: 7.8, aimTrackFraction: 0.6 } as const;
+
+/** Every action (skill or basic) ends with: strike -> recovery (stiffness) -> cooldown -> next action. */
+export const BOSS_RECOVER = 0.5;
+export const BOSS_COOLDOWN = 0.5;
+/** A boss starts looking for an action when the target hero is closer than this. */
+export const BOSS_ENGAGE_RANGE = 11.5;
+
+/** Section 4: basic attacks. */
+export const BOSS_BASIC = {
+  melee: { reach: 1.8, windup: 0.3, strike: 0.1, damage: 0.6 },
+  caster: { range: 8, windup: 0.3, strike: 0.1, damage: 0.5, projectileSpeed: 8, defaultProjectile: 'mage_orb' as ProjectileKind },
+} as const;
+
+/** Section 5: 50/50 between skill and basic, never this many of the same type in a row. */
+export const BOSS_ACTION = { skillChance: 0.5, maxSameInRow: 2 } as const;
+
+/** Section 6. */
+export const BOSS_ENRAGE = {
+  hpFraction: 0.5,
+  speedMult: 1.5,
+  damageMult: 1.25,
+  color: 0xff2a1a,
+  shakeMagnitude: 0.6,
+  shakeDuration: 0.5,
+} as const;
+
+/** Section 7. */
+/** Gold coins of every hero's hoard (value x goldMult). The yellow-or-better relic guarantee lives in `rollRelicDrops` (relics.ts). */
+export const BOSS_LOOT = { goldMult: 1.5, coinCount: 12 } as const;
+
+/** Section 9: AI dodge tuning. */
+export const BOSS_AI = {
+  /** Keep this far outside a telegraph circle. */
+  circleMargin: 0.65,
+  /** Dash when the windup has this little time left and we are still inside (a dash also grants i-frames). */
+  dashLeadTime: 0.22,
+  /** An enraged boss is kited from further away than this (ranged heroes). */
+  enragedKiteDist: 5.2,
+} as const;
+
+/** Individual HP factor of a boss: its old `baseHp` relative to the nine-boss average, clamped to +-`individualClamp`. */
+const BOSS_BASE_HP_AVG =
+  Object.values(BOSS_CONFIGS).reduce((sum, c) => sum + c.baseHp, 0) / Object.keys(BOSS_CONFIGS).length;
+
+export function getBossIndividualHpFactor(kind: FloorBossKind): number {
+  const rel = (BOSS_CONFIGS[kind].baseHp - BOSS_BASE_HP_AVG) / BOSS_BASE_HP_AVG;
+  return 1 + Math.max(-BOSS_HP.individualClamp, Math.min(BOSS_HP.individualClamp, rel));
+}
+
+/** Boss max HP for one hero (the party size factor `getEnemyHpScale()` is multiplied on top by the caller). */
+export function getBossBaseMaxHp(kind: FloorBossKind, depth: number): number {
+  const base = BOSS_HP.mobBaseHp * BOSS_HP.namedEliteMult * BOSS_HP.bossMult * BOSS_HP.tuneMult;
+  return base * (1 + (depth - 1) * BOSS_HP.depthGrowth) * getBossIndividualHpFactor(kind);
+}
 
 export function isFloorBoss(kind: EnemyKind): kind is FloorBossKind {
   return (

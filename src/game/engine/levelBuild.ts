@@ -955,7 +955,7 @@ export const levelBuildMethods = {
     } else if (snap) {
       this.pushBanner(`返回第 ${depth} 層`, '怪物已復活 · 傳送門周圍安全');
     } else if (depth % 5 === 0) {
-      const bossKind = getBossForDepth(depth, biome.terrainTheme);
+      const bossKind = getBossForDepth(depth, biome.terrainTheme, this.dungeon.genSeed);
       const cfg = BOSS_CONFIGS[bossKind];
       const shopNote = this.dungeon.shopPos ? ' · Elixir Shop Open' : '';
       this.pushBanner(`DEPTH ${depth} — BOSS FLOOR`, `${cfg.name} Guards the Relic Key${shopNote}`);

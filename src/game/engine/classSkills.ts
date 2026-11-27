@@ -425,9 +425,9 @@ export const classSkillsMethods = {
             const rawBase =
               HUNTER.petDamageMin +
               Math.floor(Math.random() * (HUNTER.petDamageMax - HUNTER.petDamageMin + 1));
-            const dmg = Math.max(
-              1,
-              Math.round(rawBase * owner.getAtkMult() * (buffed ? HUNTER.petBuffAtkMult : 1))
+            const dmg = this.scaleEnemyDamageTaken(
+              target,
+              Math.max(1, Math.round(rawBase * owner.getAtkMult() * (buffed ? HUNTER.petBuffAtkMult : 1)))
             );
             target.hp -= dmg;
             target.hitFlash = 0.14;
@@ -793,7 +793,7 @@ export const classSkillsMethods = {
       if (this.hero.hasUnique('executioner_finisher') && enemy.hp / Math.max(1, enemy.maxHp) < 0.3) {
         mult *= enemy.isBoss ? 1.25 : 1.5;
       }
-      const dmg = Math.max(1, Math.round(base * mult));
+      const dmg = this.scaleEnemyDamageTaken(enemy, Math.max(1, Math.round(base * mult)));
       this.hero.totalDamageDealt += dmg;
       if (isCrit) this.hero.critCount += 1;
       this.hero.ai.lastCombatDamageTime = this.elapsed;

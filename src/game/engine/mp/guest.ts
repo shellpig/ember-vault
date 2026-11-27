@@ -1,8 +1,8 @@
 import { EmbervaultEngine } from '../../engine';
 import type { DoorSnap, EnemyStatic, GameEvent, InputPayload, LevelPayload, PrivatePayload, SnapshotPayload, WorldSnap } from '../../../../shared/game';
-import { EF_BOSS_SHIFT, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
+import { EF_BOSS_SHIFT, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
 import { HeroClassId, PetSpecies } from '../../classes';
-import { BOSS_CONFIGS, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
+import { BOSS_CONFIGS, BOSS_ENRAGE, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
 import { BreakableEntity, EnemyEntity, HeroProjectileEntity, LootEntity, MpGuestState, MpSample, ProjectileEntity } from '../entities';
 import { Hero } from '../../hero';
 import { BossTelegraphRig, applyEliteVisuals, createBossTelegraph, createEnemyModel, createHunterArrowMesh, createHunterPetModel, createIceSpikeMesh, createLootMesh, createProjectileMesh, createRelicLootMesh } from '../../models';
@@ -217,6 +217,7 @@ export const guestMpMethods = {
         if (flags & EF_HIT || en[4] < prevHp) p.e.hitFlash = 0.12;
         if (p.e.isBoss) {
           p.e.bossState = EmbervaultEngine.MP_BOSS_STATES[(flags >> EF_BOSS_SHIFT) & 3] ?? 'chase';
+          p.e.bossEnraged = (flags & EF_ENRAGED) !== 0;
           p.e.bossStateDuration = 1;
           p.e.bossStateTimer = (en[6] ?? 0) / 100;
           p.e.telegraphX = (en[7] ?? 0) / 100;
@@ -845,6 +846,9 @@ export const guestMpMethods = {
         } else if (frozen) {
           m.emissive.setHex(0x7fdcff);
           m.emissiveIntensity = 0.45;
+        } else if (e.isBoss && e.bossEnraged) {
+          m.emissive.setHex(BOSS_ENRAGE.color);
+          m.emissiveIntensity = 0.3 + Math.sin(this.elapsed * 6 + e.id) * 0.12;
         } else if (e.isElite) {
           m.emissive.setHex(0xffd24d);
           m.emissiveIntensity = 0.16;
@@ -854,9 +858,12 @@ export const guestMpMethods = {
         }
       }
       if (e.rig.auraRing) e.rig.auraRing.rotation.z += dt * 1.1;
+      if (e.isBoss) this.updateBossRageVisual(e, dt);
       if (e.telegraph) {
-        if (e.bossState === 'windup') {
-          const prog = e.bossStateTimer ?? 0;
+        // A windup without a telegraph radius is a basic attack: nothing on the ground
+        if (e.bossState === 'windup' && (e.telegraphRadius ?? 0) > 0) {
+          // bossStateTimer is the REMAINING fraction of the windup here: the circle fills up as it runs out
+          const prog = 1 - (e.bossStateTimer ?? 0);
           e.telegraph.group.position.set(e.telegraphX ?? e.x, 0, e.telegraphZ ?? e.z);
           e.telegraph.group.scale.setScalar(e.telegraphRadius ?? 3);
           e.telegraph.fillDisk.scale.setScalar(0.12 + prog * 0.88);

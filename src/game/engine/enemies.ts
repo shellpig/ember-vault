@@ -1,12 +1,351 @@
 import type { EmbervaultEngine } from '../engine';
 import { TILE_SIZE, hasLineOfSight, worldToGrid } from '../dungeon';
-import { BOSS_CONFIGS, BossSkillKind, getRangedProjectileKind, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
+import {
+  BOSS_ACTION,
+  BOSS_BASIC,
+  BOSS_CASTER_BASIC_SPEED_MULT,
+  BOSS_CHARGE,
+  BOSS_CONFIGS,
+  BOSS_COOLDOWN,
+  BOSS_ENGAGE_RANGE,
+  BOSS_ENRAGE,
+  BOSS_NOVA,
+  BOSS_RECOVER,
+  BOSS_SKILLS,
+  BOSS_VOLLEY,
+  BossActionType,
+  BossConfig,
+  BossSkillKind,
+  FloorBossKind,
+  getRangedProjectileKind,
+  isArcherLikeRanged,
+  isFloorBoss,
+  isGuardianEnemy,
+  isSwarmEnemy,
+} from './data';
 import { EnemyEntity, PetEntity } from './entities';
-import { createProjectileMesh } from '../models';
+import type { Hero } from '../hero';
+import { createBossRageAura, createProjectileMesh } from '../models';
 import { ProjectileKind } from '../types';
 import * as THREE from 'three';
 
 export const enemiesMethods = {
+  /** Damage of one boss hit: `fraction` of the boss's base damage at this depth, x enrage multiplier (docs/boss-spec.md). */
+  bossDamage(this: EmbervaultEngine, e: EnemyEntity, fraction: number): number {
+    const cfg = BOSS_CONFIGS[e.kind as FloorBossKind];
+    return cfg.damage * fraction * this.getDepthDamageScale() * (e.bossEnraged ? BOSS_ENRAGE.damageMult : 1);
+  },
+
+  /** Section 4: caster basic attacks (windup + recovery + cooldown) run 25% faster. */
+  bossBasicSpeedDiv(this: EmbervaultEngine, e: EnemyEntity): number {
+    const cfg = BOSS_CONFIGS[e.kind as FloorBossKind];
+    return e.bossAction === 'basic' && cfg.bossType === 'caster' ? BOSS_CASTER_BASIC_SPEED_MULT : 1;
+  },
+
+  /** Section 6: the first time the boss drops to 50% HP it enrages for the rest of the fight (host / single player only). */
+  checkBossEnrage(this: EmbervaultEngine, e: EnemyEntity): void {
+    if (!e.isBoss || e.dead || e.bossEnraged || !isFloorBoss(e.kind)) return;
+    if (e.hp > e.maxHp * BOSS_ENRAGE.hpFraction) return;
+    const cfg = BOSS_CONFIGS[e.kind];
+    e.bossEnraged = true;
+    e.speed = cfg.speed * BOSS_ENRAGE.speedMult;
+    this.audio.playBossSlam();
+    this.pushBanner(`${e.bossName ?? 'BOSS'} 狂暴化！`, '移動加快 · 傷害提升', true);
+    // Every hero in the dungeon feels one shake (teammates get it as a private event)
+    this.forEachLiveHero(() => this.addScreenShake(BOSS_ENRAGE.shakeMagnitude, BOSS_ENRAGE.shakeDuration));
+    for (let i = 0; i < 40; i++) {
+      const a = (i / 40) * Math.PI * 2;
+      const spd = 3 + Math.random() * 4;
+      this.spawnParticle(
+        e.x + Math.cos(a) * 0.6,
+        0.4 + Math.random() * 1.2,
+        e.z + Math.sin(a) * 0.6,
+        Math.cos(a) * spd,
+        1.5 + Math.random() * 3,
+        Math.sin(a) * spd,
+        i % 3 === 0 ? 0xffd24a : BOSS_ENRAGE.color,
+        1.5,
+        0.7,
+        4
+      );
+    }
+    this.emitHud();
+  },
+
+  /** Red aura + pulsing red tint of an enraged boss. Runs on the host and, from the snapshot flag, on teammates. */
+  updateBossRageVisual(this: EmbervaultEngine, e: EnemyEntity, dt: number): void {
+    if (!e.isBoss) return;
+    if (!e.bossEnraged) {
+      if (e.rig.rageAura) e.rig.rageAura.visible = false;
+      return;
+    }
+    if (!e.rig.rageAura) {
+      const aura = createBossRageAura(BOSS_ENRAGE.color);
+      aura.scale.setScalar(e.kind === 'boss_leviathan_heart' || e.kind === 'boss_colossus' ? 1.25 : 1);
+      e.rig.root.add(aura);
+      e.rig.rageAura = aura;
+    }
+    const aura = e.rig.rageAura;
+    aura.visible = true;
+    const pulse = 0.5 + 0.5 * Math.sin(this.elapsed * 7 + e.id);
+    aura.rotation.y += dt * 1.6;
+    const ring = aura.userData.ring as THREE.Mesh | undefined;
+    const column = aura.userData.column as THREE.Mesh | undefined;
+    if (ring) {
+      ring.scale.setScalar(1 + pulse * 0.14);
+      (ring.material as THREE.MeshBasicMaterial).opacity = 0.45 + pulse * 0.35;
+    }
+    if (column) (column.material as THREE.MeshBasicMaterial).opacity = 0.12 + pulse * 0.14;
+    if (Math.random() < dt * 22) {
+      const a = Math.random() * Math.PI * 2;
+      this.spawnParticle(
+        e.x + Math.cos(a) * 0.9,
+        0.2,
+        e.z + Math.sin(a) * 0.9,
+        (Math.random() - 0.5) * 0.6,
+        1.6 + Math.random() * 1.4,
+        (Math.random() - 0.5) * 0.6,
+        Math.random() < 0.4 ? 0xffd24a : BOSS_ENRAGE.color,
+        0.9,
+        0.5,
+        -0.5
+      );
+    }
+  },
+
+  /** Section 5: roll the type of the next action (50/50) with the "never 3 of a kind in a row" rule. */
+  bossRollNextType(this: EmbervaultEngine, e: EnemyEntity): BossActionType {
+    let want: BossActionType = Math.random() < BOSS_ACTION.skillChance ? 'skill' : 'basic';
+    if (e.bossLastType === want && (e.bossStreak ?? 0) >= BOSS_ACTION.maxSameInRow) {
+      want = want === 'skill' ? 'basic' : 'skill';
+    }
+    return want;
+  },
+
+  /**
+   * Chase state, cooldown over: start the pre-rolled action type if it is possible right now, otherwise keep chasing
+   * (docs/boss-spec.md section 5). A skill that cannot be cast falls back to a basic attack.
+   */
+  bossTryStartAction(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig, dx: number, dz: number, dist: number): void {
+    const hasLOS = hasLineOfSight(this.dungeon, e.x, e.z, this.hero.x, this.hero.z, this.doorUnlocked, 0.35);
+    const wantType = e.bossNextType ?? 'skill';
+
+    const canBasic = (): boolean =>
+      cfg.bossType === 'melee'
+        ? dist <= BOSS_BASIC.melee.reach
+        : dist <= BOSS_BASIC.caster.range && hasLOS;
+
+    const skillRange = (s: BossSkillKind): number => {
+      const spec = BOSS_SKILLS[s];
+      return (spec.range ?? cfg.triggerRange) + (spec.rangeBonus ?? 0);
+    };
+    const canCastSkill = (s: BossSkillKind): boolean => {
+      if (dist > skillRange(s)) return false;
+      if (BOSS_SKILLS[s].needsLos && !hasLOS) return false;
+      return true;
+    };
+
+    let skill: BossSkillKind | null = null;
+    let type: BossActionType | null = null;
+    if (wantType === 'skill') {
+      const skills = cfg.skills;
+      const idx = (e.bossSkillIndex ?? 0) % skills.length;
+      for (let offset = 0; offset < skills.length; offset++) {
+        const cand = skills[(idx + offset) % skills.length];
+        if (canCastSkill(cand)) {
+          skill = cand;
+          e.bossSkillIndex = (idx + offset) % skills.length;
+          break;
+        }
+      }
+      if (skill) type = 'skill';
+      else if (canBasic()) type = 'basic';
+    } else if (canBasic()) {
+      type = 'basic';
+    }
+    if (!type) return; // keep chasing
+
+    e.bossAction = type;
+    if (e.bossLastType === type) e.bossStreak = (e.bossStreak ?? 0) + 1;
+    else {
+      e.bossLastType = type;
+      e.bossStreak = 1;
+    }
+    e.bossNextType = this.bossRollNextType(e);
+    e.bossState = 'windup';
+    e.bossHitApplied = false;
+    e.facing = Math.atan2(dx, dz);
+
+    if (type === 'basic') {
+      const basic = cfg.bossType === 'melee' ? BOSS_BASIC.melee : BOSS_BASIC.caster;
+      const windupDur = basic.windup / this.bossBasicSpeedDiv(e);
+      e.bossStateDuration = windupDur;
+      e.bossStateTimer = windupDur;
+      // No ground circle for a basic attack: radius 0 also tells teammates not to draw one
+      e.telegraphX = e.x;
+      e.telegraphZ = e.z;
+      e.telegraphRadius = 0;
+      if (e.telegraph) e.telegraph.group.visible = false;
+      this.emitHud();
+      return;
+    }
+
+    const chosen = skill!;
+    const spec = BOSS_SKILLS[chosen];
+    e.bossSkill = chosen;
+    e.bossStateDuration = spec.windup;
+    e.bossStateTimer = spec.windup;
+
+    let tx = e.x;
+    let tz = e.z;
+    const tRad = spec.radius ?? cfg.telegraphRadius;
+
+    if (chosen === 'targeted_blast') {
+      // Lock the blast circle directly under the hero's current spot
+      tx = this.hero.x;
+      tz = this.hero.z;
+    } else if (chosen === 'charge_slam') {
+      // Find farthest unobstructed landing spot along line toward hero
+      const dirX = dx / (dist || 1);
+      const dirZ = dz / (dist || 1);
+      const maxLunge = Math.min(BOSS_CHARGE.maxLunge, Math.max(BOSS_CHARGE.minLunge, dist + 0.35));
+      let bestX = e.x;
+      let bestZ = e.z;
+      const steps = 10;
+      for (let s = 1; s <= steps; s++) {
+        const frac = (s / steps) * maxLunge;
+        const cx = e.x + dirX * frac;
+        const cz = e.z + dirZ * frac;
+        if (this.canMoveTo(cx, cz, 0.52)) {
+          bestX = cx;
+          bestZ = cz;
+        } else {
+          break;
+        }
+      }
+      tx = bestX;
+      tz = bestZ;
+      e.bossChargeStartX = e.x;
+      e.bossChargeStartZ = e.z;
+    } else if (chosen === 'slam') {
+      // Classic melee slam, centred a little in front of the boss
+      const leadDist = Math.min(1.1, dist * 0.5);
+      tx = e.x + (dx / (dist || 1)) * leadDist;
+      tz = e.z + (dz / (dist || 1)) * leadDist;
+    }
+    // ranged_volley: compact ring beneath the boss; nova_ring: centred on the boss
+
+    e.telegraphX = tx;
+    e.telegraphZ = tz;
+    e.telegraphRadius = tRad;
+    if (e.telegraph) {
+      e.telegraph.group.position.set(tx, 0, tz);
+      e.telegraph.group.scale.setScalar(tRad);
+      e.telegraph.fillDisk.scale.setScalar(0.12);
+      e.telegraph.group.visible = true;
+    }
+    if (chosen === 'ranged_volley') {
+      this.audio.playMageCast();
+    } else {
+      this.audio.playBossTelegraph();
+    }
+    this.emitHud();
+  },
+
+  /** One radial orb wave of nova_ring (the first one fires on the strike, the next ones `waveInterval` apart). */
+  bossFireNovaWave(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig): void {
+    const orbCount = this.depth >= BOSS_NOVA.deepFromDepth ? BOSS_NOVA.orbsPerWaveDeep : BOSS_NOVA.orbsPerWave;
+    const orbKind: ProjectileKind =
+      cfg.projectileKind && cfg.projectileKind !== 'bone_dart'
+        ? cfg.projectileKind
+        : this.depth >= BOSS_NOVA.deepFromDepth
+        ? 'bio_orb'
+        : 'mage_orb';
+    const ox = e.bossNovaX ?? e.x;
+    const oz = e.bossNovaZ ?? e.z;
+    // Every wave flies along the same lines, so the gaps between the orbs stay safe for the whole volley
+    const baseAng = e.bossNovaAngle ?? 0;
+    const orbDmg = this.bossDamage(e, BOSS_NOVA.orbDamage);
+    for (let i = 0; i < orbCount; i++) {
+      const a = baseAng + (i / orbCount) * Math.PI * 2;
+      const sdx = Math.sin(a);
+      const sdz = Math.cos(a);
+      this.spawnProjectile(orbKind, ox + sdx * 0.75, oz + sdz * 0.75, sdx, sdz, 1, this.getEnemyLabel(e), BOSS_NOVA.orbSpeed, orbDmg);
+    }
+  },
+
+  /** Basic attack, melee boss: swing at the nearest hero (or pet) inside the reach, no ground telegraph. */
+  bossMeleeBasicHit(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig): void {
+    const reach = BOSS_BASIC.melee.reach;
+    const dmg = this.bossDamage(e, BOSS_BASIC.melee.damage);
+    let bestHero: Hero | null = null;
+    let bestD = Infinity;
+    for (const h of this.heroes) {
+      if (h.isDead || h.inTown) continue;
+      const d = Math.hypot(h.x - e.x, h.z - e.z);
+      if (d <= reach && d < bestD) {
+        bestD = d;
+        bestHero = h;
+      }
+    }
+    let bestPet: PetEntity | null = null;
+    let bestPetD = Infinity;
+    for (const pet of this.pets.values()) {
+      if (pet.hp <= 0) continue;
+      const owner = this.heroById(pet.ownerId);
+      if (!owner || owner.isDead || owner.inTown) continue;
+      const d = Math.hypot(pet.x - e.x, pet.z - e.z);
+      if (d <= reach && d < bestPetD) {
+        bestPetD = d;
+        bestPet = pet;
+      }
+    }
+    this.audio.playHit(true);
+    for (let i = 0; i < 10; i++) {
+      const a = e.facing + (Math.random() - 0.5) * 1.6;
+      this.spawnParticle(
+        e.x + Math.sin(a) * 1.0,
+        0.9,
+        e.z + Math.cos(a) * 1.0,
+        Math.sin(a) * (2 + Math.random() * 2),
+        0.8 + Math.random(),
+        Math.cos(a) * (2 + Math.random() * 2),
+        cfg.telegraphColor,
+        1.0,
+        0.3,
+        2
+      );
+    }
+    // Nearest wins; a hero and a pet in range: whichever is closer
+    if (bestHero && bestD <= bestPetD) {
+      const prev = this.hero;
+      this.setActor(bestHero);
+      this.damageHero(dmg, e.x, e.z, this.getEnemyLabel(e));
+      this.setActor(prev);
+    } else if (bestPet) {
+      this.damagePet(bestPet, dmg, e.x, e.z);
+    }
+  },
+
+  /** Basic attack, caster / shooter boss: one projectile toward the target hero, needs a line of sight at the start. */
+  bossCasterBasicShot(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig): void {
+    const kind: ProjectileKind = cfg.projectileKind ?? BOSS_BASIC.caster.defaultProjectile;
+    const sdx = Math.sin(e.facing);
+    const sdz = Math.cos(e.facing);
+    this.audio.playMageCast();
+    this.spawnProjectile(
+      kind,
+      e.x + sdx * 0.85,
+      e.z + sdz * 0.85,
+      sdx,
+      sdz,
+      1,
+      this.getEnemyLabel(e),
+      BOSS_BASIC.caster.projectileSpeed,
+      this.bossDamage(e, BOSS_BASIC.caster.damage)
+    );
+  },
+
   updateBoss(this: EmbervaultEngine, e: EnemyEntity, dt: number, dx: number, dz: number, dist: number): void {
     if (!isFloorBoss(e.kind)) return;
     const cfg = BOSS_CONFIGS[e.kind];
@@ -20,6 +359,16 @@ export const enemiesMethods = {
       if (e.kind === 'boss_leviathan_heart') {
         const beat = 1 + Math.sin(this.elapsed * 6.5) * 0.16;
         e.rig.coreMesh.scale.setScalar(beat);
+      }
+    }
+
+    // nova_ring: later orb waves keep coming while the boss is already recovering
+    if ((e.bossNovaWaves ?? 0) > 0) {
+      e.bossNovaTimer = (e.bossNovaTimer ?? 0) - dt;
+      if (e.bossNovaTimer <= 0) {
+        e.bossNovaWaves = e.bossNovaWaves! - 1;
+        e.bossNovaTimer = BOSS_NOVA.waveInterval;
+        this.bossFireNovaWave(e, cfg);
       }
     }
 
@@ -37,153 +386,24 @@ export const enemiesMethods = {
         e.facing = Math.atan2(dirX, dirZ);
       }
 
-      if (e.attackCooldown <= 0 && dist < 11.5) {
-        const skills = cfg.skills;
-        const idx = (e.bossSkillIndex ?? 0) % skills.length;
-        let skill: BossSkillKind = skills[idx];
-
-        const hasLOS = hasLineOfSight(
-          this.dungeon,
-          e.x,
-          e.z,
-          this.hero.x,
-          this.hero.z,
-          this.doorUnlocked,
-          0.35
-        );
-
-        const skillRange = (s: BossSkillKind): number => {
-          switch (s) {
-            case 'ranged_volley':
-              return 7.8;
-            case 'targeted_blast':
-              return 6.4;
-            case 'charge_slam':
-              return 5.4;
-            case 'nova_ring':
-              return cfg.triggerRange + 0.55;
-            default:
-              return cfg.triggerRange;
-          }
-        };
-
-        const canCastSkill = (s: BossSkillKind): boolean => {
-          if (dist > skillRange(s)) return false;
-          if ((s === 'ranged_volley' || s === 'charge_slam') && !hasLOS) return false;
-          return true;
-        };
-
-        let ready = canCastSkill(skill);
-        if (!ready && skills.length > 1) {
-          // If queued skill is out of range or blocked by a pillar, check another ready skill in kit
-          for (let offset = 1; offset < skills.length; offset++) {
-            const alt = skills[(idx + offset) % skills.length];
-            if (canCastSkill(alt)) {
-              skill = alt;
-              e.bossSkillIndex = (idx + offset) % skills.length;
-              ready = true;
-              break;
-            }
-          }
-        }
-
-        if (ready) {
-          e.bossSkill = skill;
-          e.bossState = 'windup';
-          const windupDur =
-            skill === 'ranged_volley'
-              ? 0.78
-              : skill === 'charge_slam'
-              ? 0.84
-              : skill === 'targeted_blast'
-              ? 0.96
-              : cfg.windupDuration;
-          e.bossStateDuration = windupDur;
-          e.bossStateTimer = windupDur;
-          e.bossHitApplied = false;
-          e.facing = Math.atan2(dx, dz);
-
-          let tx = e.x;
-          let tz = e.z;
-          let tRad = cfg.telegraphRadius;
-
-          if (skill === 'targeted_blast') {
-            // Lock psychic/arcane blast circle directly under the hero's current spot
-            tx = this.hero.x;
-            tz = this.hero.z;
-            tRad = 2.25;
-          } else if (skill === 'charge_slam') {
-            // Find farthest unobstructed landing spot along line toward hero (up to 4.6u)
-            const dirX = dx / (dist || 1);
-            const dirZ = dz / (dist || 1);
-            const maxLunge = Math.min(4.6, Math.max(1.5, dist + 0.35));
-            let bestX = e.x;
-            let bestZ = e.z;
-            const steps = 10;
-            for (let s = 1; s <= steps; s++) {
-              const frac = (s / steps) * maxLunge;
-              const cx = e.x + dirX * frac;
-              const cz = e.z + dirZ * frac;
-              if (this.canMoveTo(cx, cz, 0.52)) {
-                bestX = cx;
-                bestZ = cz;
-              } else {
-                break;
-              }
-            }
-            tx = bestX;
-            tz = bestZ;
-            tRad = 2.25;
-            e.bossChargeStartX = e.x;
-            e.bossChargeStartZ = e.z;
-          } else if (skill === 'ranged_volley') {
-            // Compact charge ring beneath the Boss to telegraph incoming ranged fan
-            tx = e.x;
-            tz = e.z;
-            tRad = 1.45;
-          } else if (skill === 'nova_ring') {
-            tx = e.x;
-            tz = e.z;
-            tRad = cfg.telegraphRadius;
-          } else {
-            // Classic melee slam (Depth 5 first boss & cavern melee slams)
-            const leadDist = Math.min(1.1, dist * 0.5);
-            tx = e.x + (dx / (dist || 1)) * leadDist;
-            tz = e.z + (dz / (dist || 1)) * leadDist;
-            tRad = cfg.telegraphRadius;
-          }
-
-          e.telegraphX = tx;
-          e.telegraphZ = tz;
-          e.telegraphRadius = tRad;
-
-          if (e.telegraph) {
-            e.telegraph.group.position.set(tx, 0, tz);
-            e.telegraph.group.scale.setScalar(tRad);
-            e.telegraph.fillDisk.scale.setScalar(0.12);
-            e.telegraph.group.visible = true;
-          }
-          if (skill === 'ranged_volley') {
-            this.audio.playMageCast();
-          } else {
-            this.audio.playBossTelegraph();
-          }
-          this.emitHud();
-        }
+      if (e.attackCooldown <= 0 && dist < BOSS_ENGAGE_RANGE) {
+        this.bossTryStartAction(e, cfg, dx, dz, dist);
       }
     } else if (state === 'windup') {
       e.bossStateTimer = (e.bossStateTimer ?? 0) - dt;
-      const dur = e.bossStateDuration || cfg.windupDuration;
+      const dur = e.bossStateDuration || BOSS_SKILLS[e.bossSkill ?? 'slam'].windup;
       const progress = THREE.MathUtils.clamp(1 - (e.bossStateTimer ?? 0) / dur, 0, 1);
+      const isBasic = e.bossAction === 'basic';
       const skill = e.bossSkill ?? 'slam';
 
-      // For ranged volley, smoothly track hero during the first 60% of windup, then lock aim so player can sidestep
-      if (skill === 'ranged_volley' && progress < 0.6) {
+      // Volley: smoothly track the hero for the first part of the windup, then lock aim so the player can sidestep.
+      // Basic attacks face the hero the whole windup (short and untelegraphed).
+      if (isBasic || (skill === 'ranged_volley' && progress < BOSS_VOLLEY.aimTrackFraction)) {
         e.facing = Math.atan2(dx, dz);
       }
 
-      // Smoothly fill ground danger circle so player reads exact dodge timing
-      if (e.telegraph) {
+      // Smoothly fill ground danger circle so player reads exact dodge timing (skills only)
+      if (!isBasic && e.telegraph) {
         e.telegraph.fillDisk.scale.setScalar(0.12 + progress * 0.88);
         e.telegraph.fillMat.opacity = 0.2 + progress * 0.34;
         e.telegraph.ringMat.opacity = 0.72 + Math.sin(this.elapsed * 26) * 0.24;
@@ -191,18 +411,16 @@ export const enemiesMethods = {
 
       if ((e.bossStateTimer ?? 0) <= 0) {
         e.bossState = 'strike';
-        const strikeDur =
-          skill === 'charge_slam'
-            ? 0.34
-            : skill === 'ranged_volley'
-            ? 0.22
-            : cfg.strikeDuration;
+        const strikeDur = isBasic
+          ? (cfg.bossType === 'melee' ? BOSS_BASIC.melee.strike : BOSS_BASIC.caster.strike)
+          : BOSS_SKILLS[skill].strike;
         e.bossStateDuration = strikeDur;
         e.bossStateTimer = strikeDur;
         e.bossHitApplied = false;
       }
     } else if (state === 'strike') {
       e.bossStateTimer = (e.bossStateTimer ?? 0) - dt;
+      const isBasic = e.bossAction === 'basic';
       const skill = e.bossSkill ?? 'slam';
       const tx = e.telegraphX ?? e.x;
       const tz = e.telegraphZ ?? e.z;
@@ -247,9 +465,15 @@ export const enemiesMethods = {
         }
       };
 
-      if (skill === 'charge_slam') {
+      if (isBasic) {
+        if (!e.bossHitApplied) {
+          e.bossHitApplied = true;
+          if (cfg.bossType === 'melee') this.bossMeleeBasicHit(e, cfg);
+          else this.bossCasterBasicShot(e, cfg);
+        }
+      } else if (skill === 'charge_slam') {
         // Dash rapidly from start to locked landing point, leaving a glowing trail, then slam on arrival
-        const dur = e.bossStateDuration || 0.34;
+        const dur = e.bossStateDuration || BOSS_SKILLS.charge_slam.strike;
         const p = THREE.MathUtils.clamp(1 - (e.bossStateTimer ?? 0) / dur, 0, 1);
         const sx = e.bossChargeStartX ?? e.x;
         const sz = e.bossChargeStartZ ?? e.z;
@@ -274,9 +498,10 @@ export const enemiesMethods = {
           );
         }
 
-        if (p >= 0.88 && !e.bossHitApplied) {
+        if (p >= BOSS_CHARGE.impactProgress && !e.bossHitApplied) {
           e.bossHitApplied = true;
           if (e.telegraph) e.telegraph.group.visible = false;
+          const dmg = this.bossDamage(e, BOSS_SKILLS.charge_slam.damage);
           this.audio.playBossSlam();
           this.addScreenShake(0.4, 0.24);
           emitShockwave(e.x, e.z, rad, cfg.telegraphColor);
@@ -284,17 +509,12 @@ export const enemiesMethods = {
           this.forEachLiveHero(() => {
             const heroDistToImpact = Math.hypot(this.hero.x - e.x, this.hero.z - e.z);
             if (heroDistToImpact <= rad) {
-              this.damageHero(
-                cfg.damage * 0.95 * this.getDepthDamageScale(),
-                e.x,
-                e.z,
-                this.getEnemyLabel(e)
-              );
+              this.damageHero(dmg, e.x, e.z, this.getEnemyLabel(e));
             } else if (heroDistToImpact <= rad + 3.2) {
               this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
             }
           });
-          this.damagePetsInRadius(e.x, e.z, rad, cfg.damage * 0.95 * this.getDepthDamageScale());
+          this.damagePetsInRadius(e.x, e.z, rad, dmg);
         }
       } else if (!e.bossHitApplied) {
         e.bossHitApplied = true;
@@ -304,13 +524,12 @@ export const enemiesMethods = {
           // Fair 3-shot ranged fan toward locked aim direction
           const projKind: ProjectileKind = cfg.projectileKind ?? 'bio_orb';
           const baseAngle = e.facing;
-          const spreadOffsets = [-0.28, 0, 0.28]; // ~16 deg apart
-          const projSpeed = projKind === 'bone_dart' ? 7.8 : 6.6;
-          const projDmg = cfg.damage * 0.62 * this.getDepthDamageScale();
+          const projSpeed = projKind === 'bone_dart' ? BOSS_VOLLEY.boneDartSpeed : BOSS_VOLLEY.projectileSpeed;
+          const projDmg = this.bossDamage(e, BOSS_SKILLS.ranged_volley.damage);
 
           this.audio.playMageCast();
           this.addScreenShake(0.2, 0.14);
-          for (const offset of spreadOffsets) {
+          for (const offset of BOSS_VOLLEY.spread) {
             const a = baseAngle + offset;
             const sdx = Math.sin(a);
             const sdz = Math.cos(a);
@@ -342,53 +561,31 @@ export const enemiesMethods = {
             );
           }
         } else if (skill === 'nova_ring') {
-          // Close shockwave + dodgeable radial orb ring (6 orbs Depth 10-20, 8 orbs Depth 21-30)
+          // Close shockwave, then radial orb waves (the first right now, the rest `waveInterval` apart)
+          const dmg = this.bossDamage(e, BOSS_SKILLS.nova_ring.damage);
           this.audio.playBossSlam();
           this.addScreenShake(0.38, 0.22);
           emitShockwave(tx, tz, rad, cfg.telegraphColor);
 
           this.forEachLiveHero(() => {
             const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
-            if (heroDistToImpact <= rad * 0.92) {
-              this.damageHero(
-                cfg.damage * 0.9 * this.getDepthDamageScale(),
-                tx,
-                tz,
-                this.getEnemyLabel(e)
-              );
+            if (heroDistToImpact <= rad) {
+              this.damageHero(dmg, tx, tz, this.getEnemyLabel(e));
             } else if (heroDistToImpact <= rad + 3.0) {
               this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
             }
           });
-          this.damagePetsInRadius(tx, tz, rad * 0.92, cfg.damage * 0.9 * this.getDepthDamageScale());
+          this.damagePetsInRadius(tx, tz, rad, dmg);
 
-          const orbCount = this.depth >= 21 ? 8 : 6;
-          const orbKind: ProjectileKind =
-            cfg.projectileKind && cfg.projectileKind !== 'bone_dart'
-              ? cfg.projectileKind
-              : this.depth >= 21
-              ? 'bio_orb'
-              : 'mage_orb';
-          const orbDmg = cfg.damage * 0.58 * this.getDepthDamageScale();
-          const baseAng = e.facing;
-          for (let i = 0; i < orbCount; i++) {
-            const a = baseAng + (i / orbCount) * Math.PI * 2;
-            const sdx = Math.sin(a);
-            const sdz = Math.cos(a);
-            this.spawnProjectile(
-              orbKind,
-              tx + sdx * 0.75,
-              tz + sdz * 0.75,
-              sdx,
-              sdz,
-              1,
-              this.getEnemyLabel(e),
-              5.4,
-              orbDmg
-            );
-          }
+          e.bossNovaX = tx;
+          e.bossNovaZ = tz;
+          e.bossNovaAngle = e.facing;
+          e.bossNovaWaves = BOSS_NOVA.waves - 1;
+          e.bossNovaTimer = BOSS_NOVA.waveInterval;
+          this.bossFireNovaWave(e, cfg);
         } else {
-          // 'slam' (classic Depth 5 boss & cavern slams) or 'targeted_blast' (remote psychic blast)
+          // 'slam' or 'targeted_blast' (remote psychic blast)
+          const dmg = this.bossDamage(e, BOSS_SKILLS[skill].damage);
           this.audio.playBossSlam();
           this.addScreenShake(0.42, 0.24);
           emitShockwave(tx, tz, rad, cfg.telegraphColor);
@@ -396,32 +593,29 @@ export const enemiesMethods = {
           this.forEachLiveHero(() => {
             const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
             if (heroDistToImpact <= rad) {
-              this.damageHero(
-                cfg.damage * this.getDepthDamageScale(),
-                tx,
-                tz,
-                this.getEnemyLabel(e)
-              );
+              this.damageHero(dmg, tx, tz, this.getEnemyLabel(e));
             } else if (heroDistToImpact <= rad + 3.4) {
               this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
             }
           });
-          this.damagePetsInRadius(tx, tz, rad, cfg.damage * this.getDepthDamageScale());
+          this.damagePetsInRadius(tx, tz, rad, dmg);
         }
       }
 
       if ((e.bossStateTimer ?? 0) <= 0) {
+        // Stiffness: the boss stands still for BOSS_RECOVER (the cooldown follows in the chase state)
+        const recoverDur = BOSS_RECOVER / this.bossBasicSpeedDiv(e);
         e.bossState = 'recover';
-        e.bossStateDuration = cfg.recoverDuration;
-        e.bossStateTimer = cfg.recoverDuration;
-        e.bossSkillIndex = ((e.bossSkillIndex ?? 0) + 1) % cfg.skills.length;
+        e.bossStateDuration = recoverDur;
+        e.bossStateTimer = recoverDur;
+        if (!isBasic) e.bossSkillIndex = ((e.bossSkillIndex ?? 0) + 1) % cfg.skills.length;
         this.emitHud();
       }
     } else if (state === 'recover') {
       e.bossStateTimer = (e.bossStateTimer ?? 0) - dt;
       if ((e.bossStateTimer ?? 0) <= 0) {
         e.bossState = 'chase';
-        e.attackCooldown = 0.65;
+        e.attackCooldown = BOSS_COOLDOWN / this.bossBasicSpeedDiv(e);
         this.emitHud();
       }
     }
@@ -466,7 +660,7 @@ export const enemiesMethods = {
     } else if (e.bossState === 'strike') {
       // Violent downward slam or forward lunge!
       e.rig.body.position.y = hoverY - 0.14;
-      e.rig.body.rotation.x = e.bossSkill === 'charge_slam' ? 0.42 : 0.34;
+      e.rig.body.rotation.x = e.bossAction !== 'basic' && e.bossSkill === 'charge_slam' ? 0.42 : 0.34;
       if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = 1.05;
       if (e.rig.leftArm) {
         e.rig.leftArm.rotation.x = e.kind === 'boss_juggernaut' ? 0.3 : 0.95;
@@ -509,6 +703,9 @@ export const enemiesMethods = {
       } else if (e.bossState === 'windup') {
         m.emissive.setHex(cfg.telegraphColor);
         m.emissiveIntensity = 0.25 + Math.sin(this.elapsed * 22) * 0.18;
+      } else if (e.bossEnraged) {
+        m.emissive.setHex(BOSS_ENRAGE.color);
+        m.emissiveIntensity = 0.3 + Math.sin(this.elapsed * 6 + e.id) * 0.12;
       } else {
         m.emissive.setHex(0x000000);
         m.emissiveIntensity = 0;
@@ -878,6 +1075,10 @@ export const enemiesMethods = {
     for (const e of this.enemies) {
       if (e.dead) continue;
 
+      if (e.isBoss) {
+        this.checkBossEnrage(e);
+        this.updateBossRageVisual(e, dt);
+      }
       e.hitFlash = Math.max(0, e.hitFlash - dt);
       e.stunTimer = Math.max(0, e.stunTimer - dt);
       e.frozenTimer = Math.max(0, (e.frozenTimer ?? 0) - dt);
@@ -1020,7 +1221,7 @@ export const enemiesMethods = {
         if (targetPet) {
           this.damagePet(targetPet, dmg, e.x, e.z);
         } else {
-          this.damageHero(dmg, e.x, e.z, this.getEnemyLabel(e), e);
+          this.damageHero(dmg, e.x, e.z, this.getEnemyLabel(e));
         }
       }
 

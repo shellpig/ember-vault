@@ -1,6 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
 import { findGridPath, gridToWorld } from '../dungeon';
-import { BOSS_CONFIGS, SPECIAL_ELITE_NAMES, getBossForDepth, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isMageLikeRanged, isRangedEnemy, isSwarmEnemy } from './data';
+import { BOSS_ACTION, BOSS_CONFIGS, SPECIAL_ELITE_NAMES, getBossBaseMaxHp, getBossForDepth, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isMageLikeRanged, isRangedEnemy, isSwarmEnemy } from './data';
 import { applyEliteVisuals, createBossTelegraph, createEnemyModel } from '../models';
 import { DungeonData, EnemyKind } from '../types';
 
@@ -120,7 +120,7 @@ export const spawnMethods = {
       if (room.role === 'key') {
         if (isBossFloor) {
           // Spawn a towering terrain-matched Floor Boss in or right in front of the Key Room!
-          const bossKind = getBossForDepth(this.depth, theme);
+          const bossKind = getBossForDepth(this.depth, theme, this.dungeon.genSeed);
           const pathToKey = findGridPath(
             this.dungeon,
             this.dungeon.spawn.gx,
@@ -319,8 +319,7 @@ export const spawnMethods = {
 
     if (isFloorBoss(kind)) {
       const cfg = BOSS_CONFIGS[kind];
-      const bossTierScale = 1 + Math.max(0, this.depth - 5) * 0.14;
-      const maxHp = Math.round(cfg.baseHp * bossTierScale * this.getEnemyHpScale());
+      const maxHp = Math.round(getBossBaseMaxHp(kind, this.depth) * this.getEnemyHpScale());
       const telegraph = createBossTelegraph(cfg.telegraphColor);
       this.dynamicGroup.add(telegraph.group);
 
@@ -359,6 +358,10 @@ export const spawnMethods = {
         bossHitApplied: false,
         bossSkill: cfg.skills[0],
         bossSkillIndex: 0,
+        bossAction: 'skill',
+        bossNextType: Math.random() < BOSS_ACTION.skillChance ? 'skill' : 'basic',
+        bossStreak: 0,
+        bossEnraged: false,
       });
       return;
     }
