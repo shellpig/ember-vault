@@ -590,7 +590,7 @@ void main() {
 }
 `;
 
-/** Black Hole Accretion Disk Shader (inspired by video's 00:48-00:54 Void Black Hole!). */
+/** Black Hole Multicolor Cosmic Accretion Disk Shader (distinct from violet nova_ring!). */
 const ACCRETION_DISK_FRAG = /* glsl */ `
 uniform float uTime;
 uniform float uProgress;
@@ -598,36 +598,43 @@ uniform float uFade;
 uniform vec3 uColor;
 varying vec2 vUv;
 
-float hash(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
 void main() {
   vec2 p = vUv * 2.0 - 1.0;
   float r = length(p);
-  if (r > 1.0 || r < 0.24) discard;
+  if (r > 1.0 || r < 0.28) discard;
   float a = atan(p.y, p.x);
 
-  // Swirling spiral accretion bands pulling inward
-  float swirl1 = sin(a * 3.0 + r * 16.0 - uTime * (7.0 + uProgress * 9.0)) * 0.5 + 0.5;
-  float swirl2 = sin(a * 7.0 - r * 24.0 + uTime * 11.0) * 0.5 + 0.5;
+  float spin = a + r * 14.0 - uTime * (6.5 + uProgress * 9.5);
+  float swirl1 = sin(spin * 3.0) * 0.5 + 0.5;
+  float swirl2 = sin(a * 7.0 - r * 22.0 + uTime * 11.0) * 0.5 + 0.5;
   float bands = 0.45 + 0.35 * swirl1 + 0.25 * pow(swirl2, 2.0);
 
-  // Event horizon blazing white-gold inner rim + purple/theme outer disk
-  float innerRim = smoothstep(0.42, 0.26, r) * smoothstep(0.24, 0.28, r);
+  // Multicolor cosmic spectrum (cyan / gold / magenta / emerald swirling into event horizon)
+  vec3 cCyan = vec3(0.22, 0.92, 1.0);
+  vec3 cGold = vec3(1.0, 0.78, 0.28);
+  vec3 cRose = vec3(1.0, 0.32, 0.68);
+  vec3 cMint = vec3(0.32, 1.0, 0.68);
+  float hueT = fract(spin * 0.15915 + uTime * 0.22);
+  vec3 rainbow = hueT < 0.25
+    ? mix(cCyan, cGold, hueT * 4.0)
+    : hueT < 0.5
+    ? mix(cGold, cRose, (hueT - 0.25) * 4.0)
+    : hueT < 0.75
+    ? mix(cRose, cMint, (hueT - 0.5) * 4.0)
+    : mix(cMint, cCyan, (hueT - 0.75) * 4.0);
+
+  // Blazing white-gold event horizon rim right around the pitch-black sphere
+  float innerRim = smoothstep(0.46, 0.30, r) * smoothstep(0.28, 0.32, r);
   float outerFade = 1.0 - smoothstep(0.62, 1.0, r);
-  float outerEdge = smoothstep(0.86, 0.94, r) * (1.0 - smoothstep(0.96, 1.0, r));
+  float outerEdge = smoothstep(0.88, 0.95, r) * (1.0 - smoothstep(0.96, 1.0, r));
 
-  vec3 goldWhite = vec3(1.0, 0.95, 0.82);
-  vec3 deepVoid = mix(uColor, vec3(0.58, 0.14, 0.95), 0.55);
-  vec3 col = deepVoid * bands * outerFade * 1.45 + goldWhite * (innerRim * 2.2 + swirl1 * innerRim * 0.8) + uColor * outerEdge * 1.1;
-
-  float alpha = clamp((bands * outerFade * 0.9 + innerRim * 1.2 + outerEdge * 0.6) * uFade, 0.0, 1.0);
+  vec3 col = rainbow * bands * outerFade * 1.6 + vec3(1.0, 0.97, 0.88) * (innerRim * 2.4 + swirl1 * innerRim * 0.9) + rainbow * outerEdge * 1.15;
+  float alpha = clamp((bands * outerFade * 0.92 + innerRim * 1.25 + outerEdge * 0.65) * uFade, 0.0, 1.0);
   gl_FragColor = vec4(col, alpha);
 }
 `;
 
-/** Black Hole Ground Gravity Well & Galaxy Collapse Vortex (windup + aftermath). */
+/** Black Hole Ground Gravity Well & Multicolor Cosmic Vortex (windup + aftermath). */
 const GRAVITY_WELL_FRAG = /* glsl */ `
 uniform float uTime;
 uniform float uProgress;
@@ -642,26 +649,28 @@ void main() {
   if (r > 1.0) discard;
   float a = atan(p.y, p.x);
 
-  // Crisp outer danger boundary during windup
   float outerRing = smoothstep(0.92, 0.96, r) * (1.0 - smoothstep(0.985, 1.0, r)) * (1.0 - uBurst * 0.65);
 
-  // Spiraling galaxy vortex arms
-  float arms = sin(a * 4.0 + r * mix(10.0, 16.0, uBurst) - uTime * (5.5 + uProgress * 7.0)) * 0.5 + 0.5;
-  float fine = sin(a * 9.0 + r * 22.0 - uTime * 9.0) * 0.5 + 0.5;
-  float spiral = pow(arms, 1.8) * 0.75 + pow(fine, 3.0) * 0.35;
+  float spin = a + r * mix(9.0, 15.0, uBurst) - uTime * (5.5 + uProgress * 7.5);
+  float arms = sin(spin * 4.0) * 0.5 + 0.5;
+  float fine = sin(a * 9.0 + r * 20.0 - uTime * 9.0) * 0.5 + 0.5;
+  float spiral = pow(arms, 1.7) * 0.78 + pow(fine, 3.0) * 0.35;
 
-  // Radial gravity grid rings pulling inward
-  float gridRings = smoothstep(0.12, 0.02, abs(fract(r * 4.0 + uTime * 1.8) - 0.5)) * (1.0 - uBurst);
-  float radialFade = (1.0 - smoothstep(0.65, 1.0, r));
+  float gridRings = smoothstep(0.12, 0.02, abs(fract(r * 4.0 + uTime * 2.0) - 0.5)) * (1.0 - uBurst);
+  float radialFade = 1.0 - smoothstep(0.65, 1.0, r);
 
-  vec3 voidCol = mix(uColor, vec3(0.62, 0.2, 1.0), 0.5);
-  vec3 goldCore = vec3(1.0, 0.92, 0.74);
-  float centerGold = exp(-r * r * mix(7.0, 2.8, uBurst));
+  // Multicolor cosmic tint swirling around the dark void center
+  vec3 c1 = vec3(0.2, 0.88, 1.0);
+  vec3 c2 = vec3(1.0, 0.42, 0.65);
+  vec3 c3 = vec3(1.0, 0.82, 0.32);
+  float k = sin(spin * 1.5) * 0.5 + 0.5;
+  vec3 nebula = mix(mix(c1, c2, k), c3, pow(fine, 2.0) * 0.65);
 
-  vec3 col = voidCol * (outerRing * 1.65 + spiral * radialFade * 1.45 + gridRings * radialFade * 0.55)
-           + goldCore * (centerGold * (0.5 + uProgress * 0.7 + uBurst * 1.2) + outerRing * smoothstep(0.6, 1.0, uProgress) * 0.8);
+  float centerFlash = exp(-r * r * mix(6.0, 2.4, uBurst)) * uBurst;
+  vec3 col = nebula * (outerRing * 1.65 + spiral * radialFade * 1.55 + gridRings * radialFade * 0.55)
+           + vec3(1.0, 0.96, 0.88) * (centerFlash * 1.6 + outerRing * smoothstep(0.55, 1.0, uProgress) * 0.9);
 
-  float alpha = clamp((outerRing * 0.98 + spiral * radialFade * 0.82 + gridRings * radialFade * 0.35 + centerGold * 0.75) * uFade, 0.0, 1.0);
+  float alpha = clamp((outerRing * 0.98 + spiral * radialFade * 0.85 + gridRings * radialFade * 0.35 + centerFlash * 0.8) * uFade, 0.0, 1.0);
   gl_FragColor = vec4(col, alpha);
 }
 `;
@@ -704,10 +713,10 @@ export interface BossWindupRig {
   // charge_slam path strip
   chargePathMesh?: THREE.Mesh;
   chargePathMat?: THREE.ShaderMaterial;
-  // ranged_volley railgun gate + 3 fan lines
+  // ranged_volley 3-lane dual railgun accelerator gates + 3 fan lines
   volleyGroup?: THREE.Group;
   volleyLines?: Array<{ mesh: THREE.Mesh; mat: THREE.ShaderMaterial }>;
-  volleyGate?: THREE.Mesh;
+  volleyGates?: THREE.Mesh[];
 }
 
 const _unitPlaneGeo = new THREE.PlaneGeometry(2, 2);
@@ -1102,22 +1111,26 @@ export const bossVfxMethods = {
           volleyGroup.add(mesh);
           volleyLines.push({ mesh, mat });
         }
-        // Floating hexagonal railgun gate in front of boss
-        const gateMat = new THREE.MeshBasicMaterial({
-          color: cfg.telegraphColor,
-          transparent: true,
-          opacity: 0.9,
-          blending: THREE.AdditiveBlending,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        });
-        const gate = new THREE.Mesh(_unitHexGateGeo, gateMat);
-        gate.position.y = 1.05;
-        volleyGroup.add(gate);
+        // 3 lanes x 2 tandem hexagonal railgun accelerator gates (6 floating gates total!)
+        const volleyGates: THREE.Mesh[] = [];
+        for (let i = 0; i < BOSS_VOLLEY.spread.length * 2; i++) {
+          const gateMat = new THREE.MeshBasicMaterial({
+            color: i % 2 === 0 ? cfg.telegraphColor : 0xffffff,
+            transparent: true,
+            opacity: 0.92,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          });
+          const gate = new THREE.Mesh(_unitHexGateGeo, gateMat);
+          gate.position.y = 1.05;
+          volleyGroup.add(gate);
+          volleyGates.push(gate);
+        }
 
         rig.volleyGroup = volleyGroup;
         rig.volleyLines = volleyLines;
-        rig.volleyGate = gate;
+        rig.volleyGates = volleyGates;
       }
 
       this.dynamicGroup.add(group);
@@ -1244,60 +1257,91 @@ export const bossVfxMethods = {
       rig.accretionMat &&
       rig.infallBeam
     ) {
-      // Singularity grows quickly then pinches slightly right before detonation!
-      const grow = Math.min(1, progress * 1.35);
-      const pinch = progress > 0.85 ? 1 - ((progress - 0.85) / 0.15) * 0.3 : 1;
-      rig.singularity.scale.setScalar((0.22 + grow * 0.52) * pinch);
-      rig.accretionDisk.scale.setScalar((0.6 + grow * (rad * 0.72)) * pinch);
-      rig.accretionDisk.rotation.z = this.elapsed * (1.8 + progress * 4.5);
+      // Giant pitch-black singularity grows prominently (1.6x larger!) then pinches right before detonation
+      const grow = Math.min(1, progress * 1.45);
+      const pinch = progress > 0.86 ? 1 - ((progress - 0.86) / 0.14) * 0.32 : 1;
+      rig.singularity.position.y = 1.45;
+      rig.singularity.scale.setScalar((0.35 + grow * 0.72) * pinch);
+      rig.accretionDisk.position.y = 1.45;
+      rig.accretionDisk.scale.setScalar((0.95 + grow * (rad * 0.98)) * pinch);
+      rig.accretionDisk.rotation.z = this.elapsed * (2.2 + progress * 5.2);
       rig.accretionMat.uniforms.uTime.value = this.elapsed;
       rig.accretionMat.uniforms.uProgress.value = progress;
-      rig.accretionMat.uniforms.uFade.value = Math.min(1, progress * 3.0);
+      rig.accretionMat.uniforms.uFade.value = Math.min(1, progress * 3.2);
 
-      const infallW = 0.03 + progress * 0.08;
-      rig.infallBeam.scale.set(infallW, 5.6, infallW);
-      (rig.infallBeam.material as THREE.MeshBasicMaterial).opacity = 0.35 + progress * 0.55;
+      const infallW = 0.04 + progress * 0.11;
+      rig.infallBeam.scale.set(infallW, 6.0, infallW);
+      (rig.infallBeam.material as THREE.MeshBasicMaterial).opacity = 0.4 + progress * 0.55;
 
-      // Spiraling void particles sucked into the black hole core
-      if (!this.isSoftwareGl && Math.random() < 0.75) {
-        const a = Math.random() * Math.PI * 2;
-        const d = rad * (0.75 + Math.random() * 0.55);
-        this.spawnParticle(
-          tx + Math.cos(a) * d,
-          0.4 + Math.random() * 1.4,
-          tz + Math.sin(a) * d,
-          -Math.cos(a) * 5.2 - Math.sin(a) * 2.2,
-          (1.35 - 0.7) * 1.8,
-          -Math.sin(a) * 5.2 + Math.cos(a) * 2.2,
-          Math.random() < 0.4 ? 0xf6d8ff : 0x9b4dff,
-          0.72,
-          0.32,
-          0
-        );
+      // Dense multicolor cosmic particles spiraling into the pitch-black singularity!
+      if (!this.isSoftwareGl) {
+        const cosmicColors = [0x38e8ff, 0xffd24a, 0xff4d94, 0x4ef59a, 0xffffff, 0xff7b24];
+        const count = progress > 0.45 ? 3 : 2;
+        for (let k = 0; k < count; k++) {
+          const a = Math.random() * Math.PI * 2;
+          const d = rad * (0.75 + Math.random() * 0.85);
+          const startY = 0.35 + Math.random() * 2.0;
+          const col = cosmicColors[Math.floor(Math.random() * cosmicColors.length)];
+          this.spawnParticle(
+            tx + Math.cos(a) * d,
+            startY,
+            tz + Math.sin(a) * d,
+            -Math.cos(a) * 5.8 - Math.sin(a) * 3.4,
+            (1.45 - startY) * 2.4,
+            -Math.sin(a) * 5.8 + Math.cos(a) * 3.4,
+            col,
+            0.78 + Math.random() * 0.35,
+            0.34,
+            0
+          );
+        }
       }
-    } else if (skill === 'ranged_volley' && rig.volleyLines && rig.volleyGate) {
+    } else if (skill === 'ranged_volley' && rig.volleyLines && rig.volleyGates) {
       const aimAngle = e.facing;
       const locked = progress >= BOSS_VOLLEY.aimTrackFraction;
       for (let i = 0; i < BOSS_VOLLEY.spread.length; i++) {
         const ang = aimAngle + BOSS_VOLLEY.spread[i];
         const dx = Math.sin(ang);
         const dz = Math.cos(ang);
-        const hit = this.raycastBossBeam(tx, tz, dx, dz, 9.5);
+        const hit = this.raycastBossBeam(tx, tz, dx, dz, 10.5);
         const bl = rig.volleyLines[i];
         bl.mesh.rotation.y = ang;
-        bl.mesh.scale.set(locked ? 0.52 : 0.68, hit.dist, 1);
+        bl.mesh.scale.set(locked ? 0.62 : 0.76, hit.dist, 1);
         bl.mesh.position.set(dx * (hit.dist * 0.5), 0.065, dz * (hit.dist * 0.5));
         bl.mat.uniforms.uTime.value = this.elapsed;
         bl.mat.uniforms.uProgress.value = locked ? Math.min(1, 0.55 + progress * 0.45) : progress * 0.55;
+
+        // 2 tandem floating hexagonal railgun accelerator gates per lane (distances 1.15 & 2.25)
+        for (let g = 0; g < 2; g++) {
+          const gate = rig.volleyGates[i * 2 + g];
+          const gDist = g === 0 ? 1.15 : 2.25;
+          const appear = THREE.MathUtils.clamp((progress - g * 0.14) / 0.28, 0, 1);
+          gate.visible = appear > 0.01;
+          gate.position.set(dx * gDist, 1.05, dz * gDist);
+          gate.rotation.y = ang;
+          gate.rotation.z = this.elapsed * (locked ? 7.5 : 2.8) * (g === 0 ? 1 : -1);
+          const gs = appear * (g === 0 ? 0.72 + progress * 0.35 : 0.55 + progress * 0.28);
+          gate.scale.setScalar(gs);
+          (gate.material as THREE.MeshBasicMaterial).color.setHex(locked ? 0xffffff : cfg.telegraphColor);
+        }
       }
-      const gx = Math.sin(aimAngle) * 1.15;
-      const gz = Math.cos(aimAngle) * 1.15;
-      rig.volleyGate.position.set(gx, 1.05, gz);
-      rig.volleyGate.rotation.y = aimAngle;
-      rig.volleyGate.rotation.z = this.elapsed * (locked ? 6.5 : 2.5);
-      const gs = 0.55 + progress * 0.65;
-      rig.volleyGate.scale.setScalar(gs);
-      (rig.volleyGate.material as THREE.MeshBasicMaterial).color.setHex(locked ? 0xffffff : cfg.telegraphColor);
+      if (!this.isSoftwareGl && Math.random() < 0.7) {
+        const lane = BOSS_VOLLEY.spread[Math.floor(Math.random() * BOSS_VOLLEY.spread.length)];
+        const ang = aimAngle + lane;
+        const dist = 1.1 + Math.random() * 1.4;
+        this.spawnParticle(
+          tx + Math.sin(ang) * dist + (Math.random() - 0.5) * 0.4,
+          1.05 + (Math.random() - 0.5) * 0.4,
+          tz + Math.cos(ang) * dist + (Math.random() - 0.5) * 0.4,
+          Math.sin(ang) * 3.0,
+          0,
+          Math.cos(ang) * 3.0,
+          locked ? 0xffffff : cfg.telegraphColor,
+          0.65,
+          0.22,
+          0
+        );
+      }
     }
 
     return true;
@@ -2338,22 +2382,23 @@ export const bossVfxMethods = {
       puffs.push({ mesh, dirX: Math.cos(a), dirZ: Math.sin(a), startR, spd: 2.8 + Math.random() * 1.4 });
     }
 
-    // 6. Starlight / void spark burst
-    const sparkCount = this.isSoftwareGl ? 12 : 32;
+    // 6. Multicolor cosmic starlight burst
+    const cosmicPalette = [0x38e8ff, 0xffd24a, 0xff4d94, 0x4ef59a, 0xffffff, 0xff7b24];
+    const sparkCount = this.isSoftwareGl ? 16 : 44;
     for (let i = 0; i < sparkCount; i++) {
       const a = (i / sparkCount) * Math.PI * 2 + Math.random() * 0.2;
-      const spd = 3.2 + Math.random() * 5.0;
+      const spd = 3.5 + Math.random() * 5.6;
       this.spawnParticle(
-        cx + Math.cos(a) * 0.4,
-        0.9,
-        cz + Math.sin(a) * 0.4,
+        cx + Math.cos(a) * 0.5,
+        1.1,
+        cz + Math.sin(a) * 0.5,
         Math.cos(a) * spd,
-        1.4 + Math.random() * 3.0,
+        1.6 + Math.random() * 3.4,
         Math.sin(a) * spd,
-        i % 3 === 0 ? 0xfff0c4 : voidViolet.getHex(),
-        1.25,
-        0.58,
-        3.5
+        cosmicPalette[i % cosmicPalette.length],
+        1.3,
+        0.65,
+        3.2
       );
     }
 
@@ -2411,10 +2456,10 @@ export const bossVfxMethods = {
   },
 
   /**
-   * `ranged_volley` Railgun Gate Discharge VFX:
-   * - White-hot muzzle flash + temporary dynamic PointLight
-   * - Directional shock ring expanding forward through the hex railgun gate
-   * - 3 brief glowing floor recoil trails along the fired volley fan
+   * Reworked `ranged_volley` Triple Railgun Horizon Barrage VFX (inspired by video 00:00-00:06):
+   * - High-intensity burst PointLight + white-hot muzzle flare
+   * - 3 supersonic plasma flash lances blasting through 6 tandem Mach shock-cone rings
+   * - 3 glowing railgun scorched floor trenches fading over 0.95s + heavy spark jet
    */
   spawnBossVolleyVfx(
     this: EmbervaultEngine,
@@ -2428,11 +2473,11 @@ export const bossVfxMethods = {
     const group = new THREE.Group();
     group.position.set(ox, 0, oz);
 
-    const mx = Math.sin(baseAngle) * 1.1;
-    const mz = Math.cos(baseAngle) * 1.1;
-    this.triggerBossBurstLight(ox + mx, 1.3, oz + mz, colorHex, 110, 0.32);
+    const mx = Math.sin(baseAngle) * 1.4;
+    const mz = Math.cos(baseAngle) * 1.4;
+    this.triggerBossBurstLight(ox + mx, 1.5, oz + mz, colorHex, 150, 0.42);
 
-    // Muzzle flash flare
+    // 1. Intense muzzle flash flare
     const flashMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT,
       fragmentShader: CORE_FLASH_FRAG,
@@ -2446,39 +2491,89 @@ export const bossVfxMethods = {
       side: THREE.DoubleSide,
     });
     const flashMesh = new THREE.Mesh(_unitPlaneGeo, flashMat);
-    flashMesh.position.set(mx, 1.0, mz);
+    flashMesh.position.set(mx, 1.05, mz);
     flashMesh.rotation.x = -Math.PI / 2;
-    flashMesh.scale.setScalar(1.8);
+    flashMesh.scale.setScalar(2.6);
     group.add(flashMesh);
 
-    // Directional shock torus firing forward
-    const muzzleRingMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.95,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    const muzzleRing = new THREE.Mesh(_unitTorusGeo, muzzleRingMat);
-    muzzleRing.position.set(mx, 1.0, mz);
-    muzzleRing.rotation.y = baseAngle;
-    muzzleRing.scale.setScalar(0.5);
-    group.add(muzzleRing);
-
-    // 3 fading floor recoil trails
+    // 2. Per-lane railgun flash lance + 2 Mach shock-cone rings + scorched floor trench
+    const lances: Array<{ core: THREE.Mesh; coreMat: THREE.MeshBasicMaterial; sheath: THREE.Mesh; sheathMat: THREE.ShaderMaterial }> = [];
+    const machRings: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; dirX: number; dirZ: number; baseDist: number; delay: number }> = [];
     const trails: THREE.ShaderMaterial[] = [];
+
     for (const off of BOSS_VOLLEY.spread) {
       const ang = baseAngle + off;
       const dx = Math.sin(ang);
       const dz = Math.cos(ang);
-      const hit = this.raycastBossBeam(ox, oz, dx, dz, 8.5);
+      const hit = this.raycastBossBeam(ox, oz, dx, dz, 10.5);
+      const lanceLen = Math.min(hit.dist, 7.5);
+      const midX = dx * (lanceLen * 0.5 + 0.5);
+      const midZ = dz * (lanceLen * 0.5 + 0.5);
+
+      // Blazing white-hot railgun muzzle lance
+      const coreMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 1,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const core = new THREE.Mesh(_unitCoreCylGeo, coreMat);
+      core.rotation.order = 'YXZ';
+      core.rotation.y = ang;
+      core.rotation.x = Math.PI / 2;
+      core.position.set(midX, 1.05, midZ);
+      core.scale.set(0.16, lanceLen, 0.16);
+      group.add(core);
+
+      const sheathMat = new THREE.ShaderMaterial({
+        vertexShader: QUAD_VERT,
+        fragmentShader: LASER_SHEATH_FRAG,
+        uniforms: {
+          uTime: { value: this.elapsed },
+          uIntensity: { value: 1.0 },
+          uColor: { value: color.clone() },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      const sheath = new THREE.Mesh(_unitCylGeo, sheathMat);
+      sheath.rotation.order = 'YXZ';
+      sheath.rotation.y = ang;
+      sheath.rotation.x = Math.PI / 2;
+      sheath.position.set(midX, 1.05, midZ);
+      sheath.scale.set(0.36, lanceLen, 0.36);
+      group.add(sheath);
+      lances.push({ core, coreMat, sheath, sheathMat });
+
+      // 2 Mach shock-cone rings blasting forward at each gate
+      for (let g = 0; g < 2; g++) {
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: g === 0 ? 0xffffff : colorHex,
+          transparent: true,
+          opacity: 0.95,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const ring = new THREE.Mesh(_unitTorusGeo, ringMat);
+        const baseDist = g === 0 ? 1.15 : 2.35;
+        ring.position.set(dx * baseDist, 1.05, dz * baseDist);
+        ring.rotation.y = ang;
+        ring.scale.setScalar(0.45);
+        group.add(ring);
+        machRings.push({ mesh: ring, mat: ringMat, dirX: dx, dirZ: dz, baseDist, delay: g * 0.035 });
+      }
+
+      // Scorched plasma floor trench
       const mat = new THREE.ShaderMaterial({
         vertexShader: QUAD_VERT,
         fragmentShader: LASER_FLOOR_FRAG,
         uniforms: {
           uTime: { value: this.elapsed },
-          uIntensity: { value: 0.75 },
-          uScorch: { value: 0.5 },
+          uIntensity: { value: 0.95 },
+          uScorch: { value: 0.25 },
           uColor: { value: color.clone() },
         },
         transparent: true,
@@ -2493,37 +2588,86 @@ export const bossVfxMethods = {
       strip.rotation.order = 'YXZ';
       strip.rotation.y = ang;
       strip.rotation.x = Math.PI / 2;
-      strip.scale.set(0.62, hit.dist, 1);
+      strip.scale.set(0.95, hit.dist, 1);
       strip.position.set(dx * (hit.dist * 0.5), 0.06, dz * (hit.dist * 0.5));
       group.add(strip);
       trails.push(mat);
     }
 
+    // Heavy supersonic spark jet
+    if (!this.isSoftwareGl) {
+      for (let i = 0; i < 28; i++) {
+        const a = baseAngle + (Math.random() - 0.5) * 0.95;
+        const spd = 5.0 + Math.random() * 6.5;
+        this.spawnParticle(
+          ox + Math.sin(a) * 1.1,
+          1.05 + (Math.random() - 0.5) * 0.35,
+          oz + Math.cos(a) * 1.1,
+          Math.sin(a) * spd,
+          0.6 + Math.random() * 1.8,
+          Math.cos(a) * spd,
+          i % 2 === 0 ? 0xffffff : colorHex,
+          1.15,
+          0.42,
+          3.2
+        );
+      }
+    }
+
     this.dynamicGroup.add(group);
-    const maxLife = 0.5;
+    const maxLife = 0.95;
     this.bossVfxItems.push({
       group,
       life: 0,
       maxLife,
       update: (dt, t, elapsed) => {
         const age = (group.userData.age = (group.userData.age ?? 0) + dt);
-        const ft = Math.min(1, age / 0.18);
+        const ft = Math.min(1, age / 0.2);
         flashMesh.visible = ft < 1;
         if (ft < 1) {
-          flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.5);
-          flashMesh.scale.setScalar(1.5 + ft * 1.2);
+          flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.4);
+          flashMesh.scale.setScalar(2.0 + ft * 1.8);
         }
-        const rt = Math.min(1, age / 0.28);
-        muzzleRing.visible = rt < 1;
-        if (rt < 1) {
-          const ease = 1 - Math.pow(1 - rt, 2.0);
-          muzzleRing.scale.setScalar(0.5 + ease * 1.4);
-          muzzleRing.position.set(mx + Math.sin(baseAngle) * ease * 1.4, 1.0, mz + Math.cos(baseAngle) * ease * 1.4);
-          muzzleRingMat.opacity = (1 - rt) * 0.92;
+
+        const lt = Math.min(1, age / 0.28);
+        for (const ln of lances) {
+          ln.core.visible = lt < 1;
+          ln.sheath.visible = lt < 1;
+          if (lt < 1) {
+            const w = age < 0.05 ? THREE.MathUtils.lerp(0.6, 1.45, age / 0.05) : Math.max(0.02, 1.45 * (1 - lt));
+            ln.core.scale.x = 0.16 * w;
+            ln.core.scale.z = 0.16 * w;
+            ln.coreMat.opacity = Math.pow(1 - lt, 1.15);
+            ln.sheath.scale.x = 0.38 * w;
+            ln.sheath.scale.z = 0.38 * w;
+            ln.sheathMat.uniforms.uTime.value = elapsed;
+            ln.sheathMat.uniforms.uIntensity.value = 1 - lt;
+          }
         }
+
+        for (const mr of machRings) {
+          const ma = age - mr.delay;
+          const mDur = 0.34;
+          if (ma <= 0 || ma >= mDur) {
+            mr.mesh.visible = false;
+            continue;
+          }
+          mr.mesh.visible = true;
+          const mt = ma / mDur;
+          const ease = 1 - Math.pow(1 - mt, 2.2);
+          mr.mesh.scale.setScalar(0.5 + ease * 1.65);
+          mr.mesh.position.set(
+            mr.dirX * (mr.baseDist + ease * 2.2),
+            1.05,
+            mr.dirZ * (mr.baseDist + ease * 2.2)
+          );
+          mr.mat.opacity = (1 - mt) * 0.95;
+        }
+
         for (const tm of trails) {
           tm.uniforms.uTime.value = elapsed;
-          tm.uniforms.uIntensity.value = (1 - t) * 0.65;
+          tm.uniforms.uIntensity.value = Math.pow(1 - t, 1.25) * 0.85;
+          tm.uniforms.uScorch.value = age < 0.25 ? 0.15 : 0.85;
         }
       },
       dispose: () => {

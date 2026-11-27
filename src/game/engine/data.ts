@@ -171,7 +171,7 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     triggerRange: 2.85,
     skills: ['slam'],
   },
-  // Depth 10: Arcane Hex Ring Nova (distinct from first boss)
+  // Depth 10 (Fixed): Arcane Violet 6-Laser Nova + Multicolor Void Black Hole
   boss_lich: {
     name: 'OSSUARY ARCHLICH',
     bossType: 'caster',
@@ -182,7 +182,7 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0xc85cff,
     telegraphRadius: 3.0,
     triggerRange: 3.35,
-    skills: ['nova_ring'],
+    skills: ['nova_ring', 'targeted_blast'],
     projectileKind: 'mage_orb',
   },
   // Depth 40 Dual-Boss Partner: Molten Colossus
@@ -355,7 +355,7 @@ export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
   nova_ring: { windup: 0.6, strike: 0.1, damage: 0.9, range: 8.5, radius: null },
   charge_slam: { windup: 0.7, strike: 0.3, damage: 1.25, range: 5.4, needsLos: true, radius: 2.25 },
   ranged_volley: { windup: 0.5, strike: 0.1, damage: 0.9, range: 7.8, needsLos: true, radius: 1.45 },
-  targeted_blast: { windup: 0.7, strike: 0.1, damage: 1.5, range: 6.4, radius: 2.25 },
+  targeted_blast: { windup: 0.85, strike: 0.1, damage: 1.5, range: 10.5, radius: 2.25 },
   prism_cone: { windup: 0.75, strike: 0.1, damage: 1.35, range: 6.2, radius: 5.8 },
   orbital_barrage: { windup: 0.65, strike: 0.1, damage: 0.95, range: 9.5, radius: 1.85 },
 };

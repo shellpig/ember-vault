@@ -790,27 +790,57 @@ export class DungeonAudio {
   }
 
   public playBossVolley(): void {
-    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
-    // Crisp 3-pulse railgun discharge
-    [0, 0.045, 0.09].forEach((off, idx) => {
+
+    // Heavy electromagnetic cannon kick
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(190, now);
+    sub.frequency.exponentialRampToValueAtTime(42, now + 0.3);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.5, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+    sub.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 0.36);
+
+    // Crisp 3-pulse railgun discharge snaps
+    [0, 0.04, 0.08].forEach((off, idx) => {
       const osc = this.ctx!.createOscillator();
       osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(1120 - idx * 80, now + off);
-      osc.frequency.exponentialRampToValueAtTime(240, now + off + 0.14);
+      osc.frequency.setValueAtTime(1420 - idx * 90, now + off);
+      osc.frequency.exponentialRampToValueAtTime(220, now + off + 0.22);
       const lp = this.ctx!.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.setValueAtTime(2400, now + off);
-      lp.frequency.exponentialRampToValueAtTime(520, now + off + 0.14);
+      lp.frequency.setValueAtTime(3200, now + off);
+      lp.frequency.exponentialRampToValueAtTime(520, now + off + 0.22);
+      lp.Q.value = 2.2;
       const g = this.ctx!.createGain();
-      g.gain.setValueAtTime(0.28, now + off);
-      g.gain.exponentialRampToValueAtTime(0.001, now + off + 0.16);
+      g.gain.setValueAtTime(0.36, now + off);
+      g.gain.exponentialRampToValueAtTime(0.001, now + off + 0.24);
       osc.connect(lp);
       lp.connect(g);
       g.connect(this.masterGain!);
       osc.start(now + off);
-      osc.stop(now + off + 0.18);
+      osc.stop(now + off + 0.26);
     });
+
+    // Supersonic crackle burst
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const hp = this.ctx.createBiquadFilter();
+    hp.type = 'bandpass';
+    hp.frequency.setValueAtTime(2200, now);
+    hp.frequency.exponentialRampToValueAtTime(750, now + 0.28);
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.32, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    src.connect(hp);
+    hp.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(now, 0.02, 0.32);
   }
 
   public playBossVictory(): void {

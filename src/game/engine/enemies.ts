@@ -617,7 +617,7 @@ export const enemiesMethods = {
           const projDmg = this.bossDamage(e, BOSS_SKILLS.ranged_volley.damage);
 
           this.audio.playBossVolley();
-          this.forEachLiveHero(() => this.addScreenShake(0.32, 0.18));
+          this.forEachLiveHero(() => this.addScreenShake(0.44, 0.22));
           this.spawnBossVolleyVfx(e.x, e.z, baseAngle, cfg.telegraphColor);
           for (const offset of BOSS_VOLLEY.spread) {
             const a = baseAngle + offset;
@@ -625,14 +625,15 @@ export const enemiesMethods = {
             const sdz = Math.cos(a);
             this.spawnProjectile(
               projKind,
-              e.x + sdx * 0.85,
-              e.z + sdz * 0.85,
+              e.x + sdx * 0.95,
+              e.z + sdz * 0.95,
               sdx,
               sdz,
               1,
               this.getEnemyLabel(e),
               projSpeed,
-              projDmg
+              projDmg,
+              2.0
             );
           }
           for (let i = 0; i < 14; i++) {
@@ -918,9 +919,11 @@ export const enemiesMethods = {
     damageMult = 1,
     sourceLabel?: string,
     customSpeed?: number,
-    customDamage?: number
+    customDamage?: number,
+    scaleMult = 1
   ): void {
     const mesh = createProjectileMesh(kind);
+    if (scaleMult !== 1) mesh.scale.setScalar(scaleMult);
     const isFastShot =
       kind === 'arrow' ||
       kind === 'crystal_shard' ||
