@@ -316,6 +316,7 @@ export class EmbervaultEngine {
     const devDepth = EmbervaultEngine.readDevDepth();
     this.devDepthRun = devDepth !== null;
     this.buildLevel(devDepth ?? 1);
+    this.prewarmBossVfx();
     this.bindEvents();
     this.loadAutoAttackSetting();
     this.lastTime = performance.now();

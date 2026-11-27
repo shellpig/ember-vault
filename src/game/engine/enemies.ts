@@ -251,6 +251,8 @@ export const enemiesMethods = {
     }
     if (chosen === 'ranged_volley') {
       this.audio.playMageCast();
+    } else if (chosen === 'nova_ring') {
+      this.audio.playBossLaserCharge();
     } else {
       this.audio.playBossTelegraph();
     }
@@ -540,7 +542,7 @@ export const enemiesMethods = {
           const projSpeed = projKind === 'bone_dart' ? BOSS_VOLLEY.boneDartSpeed : BOSS_VOLLEY.projectileSpeed;
           const projDmg = this.bossDamage(e, BOSS_SKILLS.ranged_volley.damage);
 
-          this.audio.playMageCast();
+          this.audio.playBossVolley();
           this.forEachLiveHero(() => this.addScreenShake(0.32, 0.18));
           this.spawnBossVolleyVfx(e.x, e.z, baseAngle, cfg.telegraphColor);
           for (const offset of BOSS_VOLLEY.spread) {

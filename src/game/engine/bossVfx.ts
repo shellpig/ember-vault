@@ -502,6 +502,78 @@ function disposeOwnedMaterials(group: THREE.Object3D): void {
 // ---------------------------------------------------------------------------------------------------------------
 
 export const bossVfxMethods = {
+  /**
+   * Pre-compile all 11 procedural Boss VFX GLSL shaders at engine startup so the very first boss skill cast
+   * never triggers synchronous WebGL/ANGLE shader compilation stutter mid-combat.
+   */
+  prewarmBossVfx(this: EmbervaultEngine): void {
+    if (!this.renderer || !this.scene || !this.camera) return;
+    const dummyColor = new THREE.Color(0xffffff);
+    const frags = [
+      SLAM_TELEGRAPH_FRAG,
+      SHOCKWAVE_FRAG,
+      VORONOI_SCORCH_FRAG,
+      HEXAGRAM_FRAG,
+      LASER_CHARGE_FRAG,
+      CHARGE_PATH_FRAG,
+      LASER_SHEATH_FRAG,
+      LASER_FLOOR_FRAG,
+      CORE_FLASH_FRAG,
+      ACCRETION_DISK_FRAG,
+      GRAVITY_WELL_FRAG,
+    ];
+    const warmGroup = new THREE.Group();
+    warmGroup.position.set(0, -100, 0);
+    const createdMats: THREE.Material[] = [];
+
+    for (const fragmentShader of frags) {
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: QUAD_VERT,
+        fragmentShader,
+        uniforms: {
+          uTime: { value: 0 },
+          uProgress: { value: 0.5 },
+          uLife: { value: 0.5 },
+          uFade: { value: 1 },
+          uBurst: { value: 0 },
+          uIntensity: { value: 1 },
+          uScorch: { value: 0 },
+          uColor: { value: dummyColor },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      createdMats.push(mat);
+      const mesh = new THREE.Mesh(_unitPlaneGeo, mat);
+      mesh.frustumCulled = false;
+      warmGroup.add(mesh);
+    }
+
+    // Also prewarm the spike MeshStandardMaterial variant
+    const spikeMat = new THREE.MeshStandardMaterial({
+      color: 0x221818,
+      emissive: 0xff4438,
+      emissiveIntensity: 1.0,
+      transparent: true,
+      opacity: 1,
+    });
+    createdMats.push(spikeMat);
+    const spikeMesh = new THREE.Mesh(_unitSpikeGeo, spikeMat);
+    spikeMesh.frustumCulled = false;
+    warmGroup.add(spikeMesh);
+
+    this.scene.add(warmGroup);
+    try {
+      this.renderer.compile(this.scene, this.camera);
+    } catch {
+      // Ignore software/headless GL compile quirks
+    }
+    this.scene.remove(warmGroup);
+    for (const m of createdMats) m.dispose();
+  },
+
   /** Raycast along (dirX, dirZ) from (ox, oz) until hitting a dungeon wall or maxRange. */
   raycastBossBeam(
     this: EmbervaultEngine,
@@ -558,12 +630,7 @@ export const bossVfxMethods = {
     intensity: number,
     duration: number
   ): void {
-    if (this.bgSim || this.isSoftwareGl || !this.scene) return;
-    if (!this.bossBurstLight) {
-      this.bossBurstLight = new THREE.PointLight(colorHex, 0, 18, 1.65);
-      this.bossBurstLight.position.set(0, -10, 0);
-      this.scene.add(this.bossBurstLight);
-    }
+    if (this.bgSim || this.isSoftwareGl || !this.bossBurstLight) return;
     this.bossBurstLight.color.setHex(colorHex);
     this.bossBurstLight.position.set(x, y, z);
     this.bossBurstLight.intensity = intensity;

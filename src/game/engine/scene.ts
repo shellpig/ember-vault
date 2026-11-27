@@ -155,6 +155,14 @@ export const sceneMethods = {
       this.propLightPool.push(pl);
     }
 
+    // Pre-allocate the boss VFX burst PointLight at startup so NUM_POINT_LIGHTS never changes mid-fight
+    // (adding a PointLight on the first boss cast would force Three.js to recompile every scene shader!).
+    if (!this.isSoftwareGl) {
+      this.bossBurstLight = new THREE.PointLight(0xffffff, 0, 18, 1.65);
+      this.bossBurstLight.position.set(0, -100, 0);
+      this.scene.add(this.bossBurstLight);
+    }
+
     this.scene.add(this.levelGroup);
     this.scene.add(this.dynamicGroup);
     this.scene.add(this.debrisGroup);
