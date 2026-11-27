@@ -264,6 +264,14 @@ export class EmbervaultEngine {
   bossBurstLightMax = 0;
   bossBurstLightTimer = 0;
   bossBurstLightDur = 0;
+  /** Persistent clip-space radial anime Impact Flash overlay (0.12-0.18s peak burst). */
+  bossImpactFlashMesh: THREE.Mesh | null = null;
+  bossImpactFlashTimer = 0;
+  bossImpactFlashDur = 0;
+  /** Single-player brief dramatic slow-motion on colossal boss impacts (e.g. slam). */
+  slowMoTimer = 0;
+  slowMoDur = 0;
+  slowMoScale = 1;
 
   // Game state shared by everyone in the run (per-hero state lives in `hero`, see hero.ts)
   depth = 1;
@@ -734,8 +742,22 @@ export class EmbervaultEngine {
     if (this.disposed || !this.renderer) return;
 
     const now = performance.now();
-    const dt = Math.min(0.05, Math.max(0.001, (now - this.lastTime) / 1000));
+    const realDt = Math.min(0.05, Math.max(0.001, (now - this.lastTime) / 1000));
     this.lastTime = now;
+
+    // Brief single-player slow-motion time dilation for massive Boss impact beats
+    let dt = realDt;
+    if (this.slowMoTimer > 0 && !this.mp) {
+      this.slowMoTimer = Math.max(0, this.slowMoTimer - realDt);
+      const frac = this.slowMoDur > 0 ? 1 - this.slowMoTimer / this.slowMoDur : 1;
+      // Hold slowest speed for the first 60%, then smoothly accelerate back to 1.0x
+      const ramp = frac < 0.6 ? 0 : (frac - 0.6) / 0.4;
+      const scale = THREE.MathUtils.lerp(this.slowMoScale, 1.0, ramp * ramp);
+      dt = realDt * scale;
+    }
+
+    // Impact Flash runs on realDt so the 0.14s anime flash stays razor-sharp during slow-mo
+    this.updateBossImpactFlash(realDt);
 
     this.update(dt);
     this.renderer.render(this.scene, this.camera);
@@ -804,6 +826,12 @@ export class EmbervaultEngine {
     if (this.bossBurstLight) {
       this.scene.remove(this.bossBurstLight);
       this.bossBurstLight = null;
+    }
+    if (this.bossImpactFlashMesh) {
+      this.scene.remove(this.bossImpactFlashMesh);
+      this.bossImpactFlashMesh.geometry.dispose();
+      (this.bossImpactFlashMesh.material as THREE.Material).dispose();
+      this.bossImpactFlashMesh = null;
     }
     for (const h of this.heroes) if (h.isBot) this.disposeBot(h);
     for (const bar of this.rescueBars.values()) {

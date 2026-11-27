@@ -615,6 +615,35 @@ export class DungeonAudio {
     src.start(now, 0.04, 0.8);
   }
 
+  public playBossBlackHoleCharge(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+    // Accelerating gravitational suction hum that cuts sharp right on the compression beat (0.88s)
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(68, now);
+    osc.frequency.exponentialRampToValueAtTime(160, now + 0.55);
+    osc.frequency.exponentialRampToValueAtTime(520, now + 0.84);
+
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(140, now);
+    bp.frequency.exponentialRampToValueAtTime(1600, now + 0.84);
+    bp.Q.value = 3.2;
+
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.02, now);
+    g.gain.linearRampToValueAtTime(0.22, now + 0.65);
+    g.gain.linearRampToValueAtTime(0.32, now + 0.82);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.88);
+
+    osc.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.9);
+  }
+
   public playBossBlackHole(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;

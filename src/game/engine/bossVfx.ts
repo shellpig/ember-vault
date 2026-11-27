@@ -15,6 +15,62 @@ void main() {
 }
 `;
 
+/** Full-screen clip-space vertex shader for the 0.14s radial anime Impact Flash overlay. */
+const IMPACT_FLASH_VERT = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+/**
+ * 0.14s Radial Impact Flash Overlay (inspired by video 00:12, 00:19, 00:52, 01:14, 02:33):
+ * - Crisp anime radial speed-lines shooting from the exact screen-projected impact point
+ * - Expanding RGB chromatic-aberration shockwave ring
+ * - Brief white-hot focal flash at the impact center (never washes out the scene)
+ */
+const IMPACT_FLASH_FRAG = /* glsl */ `
+uniform float uLife;
+uniform float uAspect;
+uniform float uStrength;
+uniform vec2 uOrigin;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+void main() {
+  vec2 d = vUv - uOrigin;
+  d.x *= uAspect;
+  float r = length(d);
+  float a = atan(d.y, d.x);
+
+  // 1. Crisp radial anime speed-lines shooting outward from impact origin
+  float rayPattern = pow(abs(sin(a * 26.0 + sin(a * 9.0) * 1.4)), 6.0)
+                   + pow(abs(sin(a * 41.0 - 0.7)), 10.0) * 0.75;
+  float rayEnv = smoothstep(0.08, 0.55, r) * pow(1.0 - uLife, 1.85);
+  float rays = rayPattern * rayEnv * 0.78;
+
+  // 2. Expanding RGB chromatic-split shockwave ring
+  float ringPos = mix(0.05, 0.95, pow(uLife, 0.55));
+  float ringW = mix(0.085, 0.032, uLife);
+  float split = 0.022 * (1.0 - uLife * 0.5);
+  float cR = smoothstep(ringW, 0.0, abs(r - (ringPos + split)));
+  float cG = smoothstep(ringW, 0.0, abs(r - ringPos));
+  float cB = smoothstep(ringW, 0.0, abs(r - (ringPos - split)));
+  vec3 chromRing = vec3(cR, cG, cB) * pow(1.0 - uLife, 1.15) * 0.72;
+
+  // 3. Punchy initial focal burst at impact center (first 0.05s)
+  float coreFlash = exp(-r * r * 14.0) * pow(max(0.0, 1.0 - uLife * 2.4), 1.6) * 0.85;
+
+  vec3 col = (uColor * (rays * 0.75 + coreFlash * 0.5)
+           + vec3(1.0, 0.98, 0.95) * (rays * 0.65 + coreFlash * 1.1)
+           + chromRing * mix(vec3(1.0), uColor * 1.35, 0.38)) * uStrength;
+
+  float alpha = clamp((rays + (cR + cG + cB) * 0.28 + coreFlash) * uStrength, 0.0, 0.92);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
 /** Slam / Charge landing ground telegraph: crisp outer danger boundary, rotating rune ring, pulsing molten fill. */
 const SLAM_TELEGRAPH_FRAG = /* glsl */ `
 uniform float uTime;
@@ -699,17 +755,25 @@ export interface BossWindupRig {
   skill: BossSkillKind;
   group: THREE.Group;
   groundMat: THREE.ShaderMaterial;
+  // slam converging compression ring
+  slamRing?: THREE.Mesh;
   // nova_ring laser charge elements
   chargeOrb?: THREE.Mesh;
   chargeRing?: THREE.Mesh;
+  chargeCube?: THREE.Mesh;
   beamGroup?: THREE.Group;
   beamLines?: Array<{ mesh: THREE.Mesh; mat: THREE.ShaderMaterial }>;
   beamAnglesKey?: string;
   // targeted_blast black hole elements
   singularity?: THREE.Mesh;
+  singularityWhite?: THREE.Mesh;
   accretionDisk?: THREE.Mesh;
   accretionMat?: THREE.ShaderMaterial;
   infallBeam?: THREE.Mesh;
+  orbitRingA?: THREE.Mesh;
+  orbitRingB?: THREE.Mesh;
+  orbitCubes?: Array<{ mesh: THREE.Mesh; baseAng: number; baseR: number; baseY: number; speedMult: number; spinPhase: number }>;
+  orbitAngleAcc?: number;
   // charge_slam path strip
   chargePathMesh?: THREE.Mesh;
   chargePathMat?: THREE.ShaderMaterial;
@@ -729,8 +793,10 @@ const _unitHexGateGeo = new THREE.RingGeometry(0.62, 0.85, 6);
 const _unitSpikeGeo = new THREE.ConeGeometry(0.27, 1.35, 5);
 const _unitPrismGeo = new THREE.OctahedronGeometry(0.34, 0);
 const _unitRibGeo = new THREE.BoxGeometry(0.32, 1.55, 0.58);
+const _unitCubeGeo = new THREE.BoxGeometry(1, 1, 1);
 const _unitChargeConeGeo = new THREE.ConeGeometry(1.15, 2.2, 14, 1, true);
 const _unitPuffGeo = new THREE.IcosahedronGeometry(0.42, 1);
+const _flashProj = new THREE.Vector3();
 
 function disposeOwnedMaterials(group: THREE.Object3D): void {
   group.traverse((obj) => {
@@ -817,6 +883,31 @@ export const bossVfxMethods = {
     spikeMesh.frustumCulled = false;
     warmGroup.add(spikeMesh);
 
+    // Create & pre-compile the persistent clip-space radial Impact Flash overlay
+    if (!this.bossImpactFlashMesh) {
+      const flashMat = new THREE.ShaderMaterial({
+        vertexShader: IMPACT_FLASH_VERT,
+        fragmentShader: IMPACT_FLASH_FRAG,
+        uniforms: {
+          uLife: { value: 1 },
+          uAspect: { value: 1.77 },
+          uStrength: { value: 1 },
+          uOrigin: { value: new THREE.Vector2(0.5, 0.5) },
+          uColor: { value: new THREE.Color(0xffffff) },
+        },
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const flashMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), flashMat);
+      flashMesh.frustumCulled = false;
+      flashMesh.renderOrder = 999;
+      flashMesh.visible = false;
+      this.scene.add(flashMesh);
+      this.bossImpactFlashMesh = flashMesh;
+    }
+
     this.scene.add(warmGroup);
     try {
       this.renderer.compile(this.scene, this.camera);
@@ -825,6 +916,59 @@ export const bossVfxMethods = {
     }
     this.scene.remove(warmGroup);
     for (const m of createdMats) m.dispose();
+  },
+
+  /** Fire a 0.14-0.19s screen-space radial anime Impact Flash centered on world position (wx, wz). */
+  triggerBossImpactFlash(
+    this: EmbervaultEngine,
+    wx: number,
+    wz: number,
+    colorHex: number,
+    strength = 1.0,
+    duration = 0.16
+  ): void {
+    if (this.bgSim || this.inTown || this.isSoftwareGl || !this.bossImpactFlashMesh || !this.camera) return;
+    _flashProj.set(wx, 0.9, wz).project(this.camera);
+    const ux = THREE.MathUtils.clamp(_flashProj.x * 0.5 + 0.5, 0.08, 0.92);
+    const uy = THREE.MathUtils.clamp(_flashProj.y * 0.5 + 0.5, 0.08, 0.92);
+    const mat = this.bossImpactFlashMesh.material as THREE.ShaderMaterial;
+    mat.uniforms.uLife.value = 0;
+    mat.uniforms.uAspect.value = this.camera.aspect || 1.77;
+    mat.uniforms.uStrength.value = strength;
+    (mat.uniforms.uOrigin.value as THREE.Vector2).set(ux, uy);
+    (mat.uniforms.uColor.value as THREE.Color).setHex(colorHex);
+    this.bossImpactFlashMesh.visible = true;
+    this.bossImpactFlashTimer = duration;
+    this.bossImpactFlashDur = duration;
+  },
+
+  /** Update the clip-space Impact Flash on real (unscaled) dt so it stays razor-sharp even during slow-mo. */
+  updateBossImpactFlash(this: EmbervaultEngine, realDt: number): void {
+    if (!this.bossImpactFlashMesh) return;
+    if (this.inTown || this.bossImpactFlashTimer <= 0) {
+      this.bossImpactFlashMesh.visible = false;
+      this.bossImpactFlashTimer = 0;
+      return;
+    }
+    this.bossImpactFlashTimer = Math.max(0, this.bossImpactFlashTimer - realDt);
+    const t = this.bossImpactFlashDur > 0 ? 1 - this.bossImpactFlashTimer / this.bossImpactFlashDur : 1;
+    const mat = this.bossImpactFlashMesh.material as THREE.ShaderMaterial;
+    mat.uniforms.uLife.value = Math.min(1, t);
+    if (this.bossImpactFlashTimer <= 0) {
+      this.bossImpactFlashMesh.visible = false;
+    }
+  },
+
+  /** Trigger a brief dramatic slow-motion impact beat (single-player only, never desyncs multiplayer). */
+  triggerBossSlowMo(this: EmbervaultEngine, realDuration: number, scale = 0.22): void {
+    if (this.bgSim || this.inTown || this.mp) return;
+    this.slowMoTimer = Math.max(this.slowMoTimer, realDuration);
+    this.slowMoDur = Math.max(this.slowMoDur, realDuration);
+    this.slowMoScale = Math.min(this.slowMoScale, scale);
+    if (this.slowMoTimer === realDuration) {
+      this.slowMoDur = realDuration;
+      this.slowMoScale = scale;
+    }
   },
 
   /** Raycast along (dirX, dirZ) from (ox, oz) until hitting a dungeon wall or maxRange. */
@@ -984,7 +1128,21 @@ export const bossVfxMethods = {
 
       rig = { skill, group, groundMat };
 
-      if (skill === 'nova_ring') {
+      if (skill === 'slam') {
+        // Converging compression ring that snaps violently inward right before the hammer hits
+        const slamRingMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.75,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const slamRing = new THREE.Mesh(_unitTorusGeo, slamRingMat);
+        slamRing.rotation.x = Math.PI / 2;
+        slamRing.position.y = 0.35;
+        group.add(slamRing);
+        rig.slamRing = slamRing;
+      } else if (skill === 'nova_ring') {
         const orbMat = new THREE.MeshBasicMaterial({
           color: 0xffffff,
           transparent: true,
@@ -997,7 +1155,7 @@ export const bossVfxMethods = {
         group.add(orb);
 
         const ringMat = new THREE.MeshBasicMaterial({
-          color: cfg.telegraphColor,
+          color: effColorHex,
           transparent: true,
           opacity: 0.88,
           blending: THREE.AdditiveBlending,
@@ -1008,11 +1166,25 @@ export const bossVfxMethods = {
         ring.rotation.x = Math.PI / 2;
         group.add(ring);
 
+        // Voxel spinning energy cube core (keeps blocky tabletop charm!)
+        const cubeMat = new THREE.MeshBasicMaterial({
+          color: effColorHex,
+          transparent: true,
+          opacity: 0.65,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          wireframe: true,
+        });
+        const cube = new THREE.Mesh(_unitCubeGeo, cubeMat);
+        cube.position.y = 1.05;
+        group.add(cube);
+
         const beamGroup = new THREE.Group();
         group.add(beamGroup);
 
         rig.chargeOrb = orb;
         rig.chargeRing = ring;
+        rig.chargeCube = cube;
         rig.beamGroup = beamGroup;
         rig.beamLines = [];
       } else if (skill === 'targeted_blast') {
@@ -1021,10 +1193,23 @@ export const bossVfxMethods = {
           color: 0x020105,
         });
         const singularity = new THREE.Mesh(_unitSphereGeo, singMat);
-        singularity.position.y = 1.35;
+        singularity.position.y = 1.45;
         group.add(singularity);
 
-        // Tilted glowing accretion disk around the singularity
+        // Blinding pure-white inversion core that flashes during the final 0.1s compression beat
+        const swMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const singularityWhite = new THREE.Mesh(_unitSphereGeo, swMat);
+        singularityWhite.position.y = 1.45;
+        singularityWhite.visible = false;
+        group.add(singularityWhite);
+
+        // Tilted glowing multicolor accretion disk around the singularity
         const accMat = new THREE.ShaderMaterial({
           vertexShader: QUAD_VERT,
           fragmentShader: ACCRETION_DISK_FRAG,
@@ -1040,13 +1225,65 @@ export const bossVfxMethods = {
           side: THREE.DoubleSide,
         });
         const accretionDisk = new THREE.Mesh(_unitPlaneGeo, accMat);
-        accretionDisk.position.y = 1.35;
+        accretionDisk.position.y = 1.45;
         accretionDisk.rotation.set(-Math.PI / 2 + 0.34, 0, 0.2);
         group.add(accretionDisk);
 
+        // Two counter-tilted glowing orbital rings that accelerate wildly during windup
+        const rMatA = new THREE.MeshBasicMaterial({
+          color: 0x38e8ff,
+          transparent: true,
+          opacity: 0.78,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const orbitRingA = new THREE.Mesh(_unitTorusGeo, rMatA);
+        orbitRingA.position.y = 1.45;
+        orbitRingA.rotation.set(Math.PI / 2 + 0.55, 0.2, 0);
+        group.add(orbitRingA);
+
+        const rMatB = new THREE.MeshBasicMaterial({
+          color: 0xffd24a,
+          transparent: true,
+          opacity: 0.72,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const orbitRingB = new THREE.Mesh(_unitTorusGeo, rMatB);
+        orbitRingB.position.y = 1.45;
+        orbitRingB.rotation.set(Math.PI / 2 - 0.5, -0.35, 0);
+        group.add(orbitRingB);
+
+        // 18 orbiting 3D multicolor voxel stardust cubes spiraling inward as rotation accelerates!
+        const cosmicColors = [0x38e8ff, 0xffd24a, 0xff4d94, 0x4ef59a, 0xffffff, 0xff8c38];
+        const orbitCubes: NonNullable<BossWindupRig['orbitCubes']> = [];
+        const cubeCount = this.isSoftwareGl ? 8 : 18;
+        for (let i = 0; i < cubeCount; i++) {
+          const cHex = cosmicColors[i % cosmicColors.length];
+          const cm = new THREE.MeshBasicMaterial({
+            color: cHex,
+            transparent: true,
+            opacity: 0.95,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          });
+          const cMesh = new THREE.Mesh(_unitCubeGeo, cm);
+          const sz = 0.12 + (i % 3) * 0.055;
+          cMesh.scale.setScalar(sz);
+          group.add(cMesh);
+          orbitCubes.push({
+            mesh: cMesh,
+            baseAng: (i / cubeCount) * Math.PI * 2,
+            baseR: 1.5 + (i % 4) * 0.45,
+            baseY: (Math.sin(i * 1.9) * 0.9),
+            speedMult: 0.8 + (i % 3) * 0.35,
+            spinPhase: i * 1.1,
+          });
+        }
+
         // Thin vertical gravitational infall filament feeding the singularity from above
         const infallMat = new THREE.MeshBasicMaterial({
-          color: 0xf4dcff,
+          color: 0xffffff,
           transparent: true,
           opacity: 0.72,
           blending: THREE.AdditiveBlending,
@@ -1058,9 +1295,14 @@ export const bossVfxMethods = {
         group.add(infallBeam);
 
         rig.singularity = singularity;
+        rig.singularityWhite = singularityWhite;
         rig.accretionDisk = accretionDisk;
         rig.accretionMat = accMat;
         rig.infallBeam = infallBeam;
+        rig.orbitRingA = orbitRingA;
+        rig.orbitRingB = orbitRingB;
+        rig.orbitCubes = orbitCubes;
+        rig.orbitAngleAcc = 0;
       } else if (skill === 'charge_slam') {
         const pathMat = new THREE.ShaderMaterial({
           vertexShader: QUAD_VERT,
@@ -1149,19 +1391,29 @@ export const bossVfxMethods = {
     }
 
     if (skill === 'slam') {
-      if (!this.isSoftwareGl && Math.random() < 0.5 + progress * 0.45) {
+      // Converging compression ring: expands slowly then violently snaps inward during final 22% (anticipation compression!)
+      if (rig.slamRing) {
+        const compress = progress > 0.78 ? (progress - 0.78) / 0.22 : 0;
+        const ringR = compress > 0 ? THREE.MathUtils.lerp(rad * 0.92, 0.14, compress * compress) : rad * (0.4 + progress * 0.65);
+        rig.slamRing.scale.setScalar(ringR);
+        rig.slamRing.position.y = compress > 0 ? THREE.MathUtils.lerp(0.6, 0.12, compress) : 0.25 + progress * 0.45;
+        const rm = rig.slamRing.material as THREE.MeshBasicMaterial;
+        rm.color.setHex(compress > 0.3 ? 0xffffff : cfg.telegraphColor);
+        rm.opacity = 0.45 + progress * 0.52;
+      }
+      if (!this.isSoftwareGl && Math.random() < 0.55 + progress * 0.45) {
         const a = Math.random() * Math.PI * 2;
         const dist = rad * (0.55 + Math.random() * 0.45);
         this.spawnParticle(
           tx + Math.cos(a) * dist,
           0.18,
           tz + Math.sin(a) * dist,
-          -Math.cos(a) * 2.5,
+          -Math.cos(a) * (2.6 + progress * 3.0),
           1.5 + Math.random() * 1.5,
-          -Math.sin(a) * 2.5,
-          progress > 0.6 ? 0xffe8a0 : cfg.telegraphColor,
-          0.75 + progress * 0.45,
-          0.32,
+          -Math.sin(a) * (2.6 + progress * 3.0),
+          progress > 0.72 ? 0xffffff : cfg.telegraphColor,
+          0.8 + progress * 0.45,
+          0.3,
           -0.6
         );
       }
@@ -1184,12 +1436,28 @@ export const bossVfxMethods = {
         rig.chargePathMesh.visible = false;
       }
     } else if (skill === 'nova_ring' && rig.beamGroup && rig.beamLines && rig.chargeOrb && rig.chargeRing) {
-      const orbScale = 0.16 + progress * 0.44 + Math.sin(this.elapsed * 34) * 0.03;
+      // Anticipation compression rhythm: gather (0..0.76) -> violent inward crush to blazing white pinpoint (0.76..1.0)!
+      const compress = progress > 0.76 ? (progress - 0.76) / 0.24 : 0;
+      const orbScale =
+        compress > 0
+          ? THREE.MathUtils.lerp(0.62, 0.18, Math.pow(compress, 1.5)) + Math.sin(this.elapsed * 55) * 0.03
+          : 0.16 + (progress / 0.76) * 0.46 + Math.sin(this.elapsed * 30) * 0.025;
       rig.chargeOrb.scale.setScalar(orbScale);
-      const ringScale = THREE.MathUtils.lerp(1.55, 0.45, progress);
+      const ringScale =
+        compress > 0
+          ? THREE.MathUtils.lerp(0.75, 0.12, compress * compress)
+          : THREE.MathUtils.lerp(1.9, 0.75, progress / 0.76);
       rig.chargeRing.scale.setScalar(ringScale);
-      rig.chargeRing.rotation.z = this.elapsed * (3.5 + progress * 7);
-      rig.chargeRing.rotation.x = Math.PI / 2 + Math.sin(this.elapsed * 5) * 0.35;
+      rig.chargeRing.rotation.z = this.elapsed * (3.5 + progress * 11);
+      rig.chargeRing.rotation.x = Math.PI / 2 + Math.sin(this.elapsed * 6) * 0.4;
+      (rig.chargeRing.material as THREE.MeshBasicMaterial).color.setHex(compress > 0.35 ? 0xffffff : effColorHex);
+
+      if (rig.chargeCube) {
+        const cubeScale = compress > 0 ? THREE.MathUtils.lerp(0.95, 0.16, compress * compress) : 0.3 + progress * 0.8;
+        rig.chargeCube.scale.setScalar(cubeScale);
+        rig.chargeCube.rotation.set(this.elapsed * (3 + progress * 9), this.elapsed * (4 + progress * 10), 0);
+        (rig.chargeCube.material as THREE.MeshBasicMaterial).color.setHex(compress > 0.4 ? 0xffffff : effColorHex);
+      }
 
       const beams = this.computeNovaBeams(tx, tz, baseAngle);
       const key = `${Math.round(tx * 10)}:${Math.round(tz * 10)}:${Math.round(baseAngle * 100)}:${beams.length}`;
@@ -1229,26 +1497,32 @@ export const bossVfxMethods = {
           rig.beamLines.push({ mesh, mat });
         }
       }
+      // During final compression beat, visually tighten lanes toward razor-sharp white hairlines
+      const widthPinch = compress > 0 ? THREE.MathUtils.lerp(1.0, 0.42, compress) : 1.0;
       for (const bl of rig.beamLines) {
         bl.mat.uniforms.uTime.value = this.elapsed;
         bl.mat.uniforms.uProgress.value = progress;
+        bl.mesh.scale.x = BOSS_NOVA.beamHalfWidth * 2.0 * widthPinch;
       }
 
-      if (!this.isSoftwareGl && Math.random() < 0.65) {
-        const a = Math.random() * Math.PI * 2;
-        const d = 1.6 + Math.random() * 1.6;
-        this.spawnParticle(
-          tx + Math.cos(a) * d,
-          0.95 + (Math.random() - 0.5) * 0.6,
-          tz + Math.sin(a) * d,
-          -Math.cos(a) * 4.5,
-          (Math.random() - 0.5) * 1.2,
-          -Math.sin(a) * 4.5,
-          Math.random() < 0.55 ? 0xffffff : cfg.telegraphColor,
-          0.65,
-          0.26,
-          0
-        );
+      if (!this.isSoftwareGl) {
+        const suckCount = compress > 0 ? 3 : 1;
+        for (let k = 0; k < suckCount; k++) {
+          const a = Math.random() * Math.PI * 2;
+          const d = 1.6 + Math.random() * 2.2;
+          this.spawnParticle(
+            tx + Math.cos(a) * d,
+            0.95 + (Math.random() - 0.5) * 0.8,
+            tz + Math.sin(a) * d,
+            -Math.cos(a) * (5.5 + progress * 5.0),
+            (Math.random() - 0.5) * 1.0,
+            -Math.sin(a) * (5.5 + progress * 5.0),
+            compress > 0 || Math.random() < 0.55 ? 0xffffff : effColorHex,
+            0.72,
+            0.24,
+            0
+          );
+        }
       }
     } else if (
       skill === 'targeted_blast' &&
@@ -1257,41 +1531,81 @@ export const bossVfxMethods = {
       rig.accretionMat &&
       rig.infallBeam
     ) {
-      // Giant pitch-black singularity grows prominently (1.6x larger!) then pinches right before detonation
-      const grow = Math.min(1, progress * 1.45);
-      const pinch = progress > 0.86 ? 1 - ((progress - 0.86) / 0.14) * 0.32 : 1;
-      rig.singularity.position.y = 1.45;
-      rig.singularity.scale.setScalar((0.35 + grow * 0.72) * pinch);
-      rig.accretionDisk.position.y = 1.45;
-      rig.accretionDisk.scale.setScalar((0.95 + grow * (rad * 0.98)) * pinch);
-      rig.accretionDisk.rotation.z = this.elapsed * (2.2 + progress * 5.2);
-      rig.accretionMat.uniforms.uTime.value = this.elapsed;
-      rig.accretionMat.uniforms.uProgress.value = progress;
-      rig.accretionMat.uniforms.uFade.value = Math.min(1, progress * 3.2);
+      // 3-Stage Black Hole Choreography:
+      // 0..0.55: Form & pull | 0.55..0.86: Exponential Rotational Acceleration! | 0.86..1.0: Violent Implosion & White Pinpoint Beat!
+      const grow = Math.min(1, progress * 1.65);
+      const accel = progress > 0.5 ? Math.pow((progress - 0.5) / 0.5, 2.2) : 0;
+      const implode = progress > 0.85 ? (progress - 0.85) / 0.15 : 0;
+      const pinch = implode > 0 ? Math.max(0.06, 1 - Math.pow(implode, 1.3) * 0.94) : 1;
 
-      const infallW = 0.04 + progress * 0.11;
-      rig.infallBeam.scale.set(infallW, 6.0, infallW);
+      // Integrate accelerating angular phase for crisp exponential spin-up
+      rig.orbitAngleAcc = (rig.orbitAngleAcc ?? 0) + (0.045 + accel * 0.34);
+
+      rig.singularity.position.y = 1.45;
+      rig.singularity.scale.setScalar((0.36 + grow * 0.78) * pinch);
+
+      if (rig.singularityWhite) {
+        // Blinding white inverted core flashes right at the peak compression beat (0.89..1.0)
+        const whiteBeat = progress > 0.88 ? (progress - 0.88) / 0.12 : 0;
+        rig.singularityWhite.visible = whiteBeat > 0.01;
+        if (whiteBeat > 0.01) {
+          rig.singularityWhite.scale.setScalar(0.18 + Math.sin(whiteBeat * Math.PI) * 0.35);
+          (rig.singularityWhite.material as THREE.MeshBasicMaterial).opacity = Math.min(1, whiteBeat * 1.4);
+        }
+      }
+
+      rig.accretionDisk.position.y = 1.45;
+      rig.accretionDisk.scale.setScalar((0.95 + grow * (rad * 1.05)) * pinch);
+      rig.accretionDisk.rotation.z = rig.orbitAngleAcc * 1.4;
+      rig.accretionMat.uniforms.uTime.value = this.elapsed * (1 + accel * 1.6);
+      rig.accretionMat.uniforms.uProgress.value = progress;
+      rig.accretionMat.uniforms.uFade.value = Math.min(1, progress * 3.2) * (implode > 0.7 ? 1 - (implode - 0.7) / 0.3 : 1);
+
+      if (rig.orbitRingA && rig.orbitRingB) {
+        const rScale = (0.75 + grow * (rad * 0.7)) * pinch;
+        rig.orbitRingA.scale.setScalar(rScale);
+        rig.orbitRingB.scale.setScalar(rScale * 0.86);
+        rig.orbitRingA.rotation.z = rig.orbitAngleAcc * 1.8;
+        rig.orbitRingB.rotation.z = -rig.orbitAngleAcc * 2.3;
+      }
+
+      // 18 Multicolor 3D Voxel Stardust Cubes spiraling faster & tighter into the black hole!
+      if (rig.orbitCubes) {
+        const pullFactor = Math.max(0.05, (1 - progress * 0.72) * pinch);
+        for (const oc of rig.orbitCubes) {
+          const ang = oc.baseAng + rig.orbitAngleAcc * oc.speedMult * 1.45;
+          const r = oc.baseR * pullFactor;
+          const y = 1.45 + oc.baseY * pullFactor;
+          oc.mesh.position.set(Math.cos(ang) * r, y, Math.sin(ang) * r);
+          oc.mesh.rotation.set(ang * 1.6 + oc.spinPhase, ang * 2.1, oc.spinPhase);
+          oc.mesh.visible = implode < 0.92;
+        }
+      }
+
+      const infallW = (0.04 + progress * 0.13) * (implode > 0 ? Math.max(0.15, 1 - implode) : 1);
+      rig.infallBeam.scale.set(infallW, 6.2, infallW);
       (rig.infallBeam.material as THREE.MeshBasicMaterial).opacity = 0.4 + progress * 0.55;
 
-      // Dense multicolor cosmic particles spiraling into the pitch-black singularity!
-      if (!this.isSoftwareGl) {
-        const cosmicColors = [0x38e8ff, 0xffd24a, 0xff4d94, 0x4ef59a, 0xffffff, 0xff7b24];
-        const count = progress > 0.45 ? 3 : 2;
+      // Dense multicolor cosmic voxel particles spiraling rapidly inward!
+      if (!this.isSoftwareGl && implode < 0.65) {
+        const cosmicColors = [0x38e8ff, 0xffd24a, 0xff4d94, 0x4ef59a, 0xffffff, 0xff8c38];
+        const count = progress > 0.5 ? 4 : 2;
+        const speedBoost = 1 + accel * 1.4;
         for (let k = 0; k < count; k++) {
           const a = Math.random() * Math.PI * 2;
-          const d = rad * (0.75 + Math.random() * 0.85);
-          const startY = 0.35 + Math.random() * 2.0;
+          const d = rad * (0.75 + Math.random() * 0.9);
+          const startY = 0.3 + Math.random() * 2.2;
           const col = cosmicColors[Math.floor(Math.random() * cosmicColors.length)];
           this.spawnParticle(
             tx + Math.cos(a) * d,
             startY,
             tz + Math.sin(a) * d,
-            -Math.cos(a) * 5.8 - Math.sin(a) * 3.4,
-            (1.45 - startY) * 2.4,
-            -Math.sin(a) * 5.8 + Math.cos(a) * 3.4,
+            (-Math.cos(a) * 6.2 - Math.sin(a) * 4.2) * speedBoost,
+            (1.45 - startY) * 2.6,
+            (-Math.sin(a) * 6.2 + Math.cos(a) * 4.2) * speedBoost,
             col,
-            0.78 + Math.random() * 0.35,
-            0.34,
+            0.85 + Math.random() * 0.4,
+            0.3,
             0
           );
         }
@@ -1384,8 +1698,23 @@ export const bossVfxMethods = {
     const group = new THREE.Group();
     group.position.set(cx, 0, cz);
 
-    // 1. High-power burst PointLight
-    this.triggerBossBurstLight(cx, 1.85, cz, mainHex, 165, 0.52);
+    // 1. High-power burst PointLight + Radial Anime Impact Flash + Single-Player Slow-Mo Impact Beat!
+    this.triggerBossBurstLight(cx, 1.9, cz, mainHex, 190, 0.58);
+    this.triggerBossImpactFlash(cx, cz, mainHex, 1.05, 0.16);
+    this.triggerBossSlowMo(0.26, 0.22);
+
+    // 1b. Brief vertical rebound blast column right at hammer strike center
+    const reboundMat = new THREE.MeshBasicMaterial({
+      color: coreColor.getHex(),
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const reboundCol = new THREE.Mesh(_unitCoreCylGeo, reboundMat);
+    reboundCol.position.y = 1.6;
+    reboundCol.scale.set(rad * 0.26, 3.2, rad * 0.26);
+    group.add(reboundCol);
 
     // 2. White-hot core flash
     const flashMat = new THREE.ShaderMaterial({
@@ -1492,8 +1821,69 @@ export const bossVfxMethods = {
       spikes.push({ mesh, delay: (i % 3) * 0.022, maxH });
     }
 
-    // 7. Outer rolling themed mist / smoke billows
-    const puffCount = this.isSoftwareGl ? 0 : 14;
+    // 7. Tumbling 3D Voxel Debris Cubes (keeps crisp blocky tabletop charm while feeling MASSIVE!)
+    const debrisCount = this.isSoftwareGl ? 6 : 16;
+    const debris: Array<{
+      mesh: THREE.Mesh;
+      vx: number;
+      vy: number;
+      vz: number;
+      rx: number;
+      rz: number;
+      size: number;
+    }> = [];
+    for (let i = 0; i < debrisCount; i++) {
+      const a = (i / debrisCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
+      const spd = 2.6 + Math.random() * 4.8;
+      const size = 0.16 + Math.random() * 0.2;
+      const mat = new THREE.MeshStandardMaterial({
+        color: i % 2 === 0 ? spikeBaseHex : spikeAltHex,
+        emissive: mainHex,
+        emissiveIntensity: i % 3 === 0 ? 1.5 : 0.65,
+        roughness: isCrystal ? 0.15 : 0.45,
+        metalness: isCrimsonSteel ? 0.72 : 0.2,
+        transparent: true,
+        opacity: 1,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      const startR = rad * (0.25 + Math.random() * 0.45);
+      mesh.position.set(Math.cos(a) * startR, 0.22, Math.sin(a) * startR);
+      mesh.scale.setScalar(size);
+      group.add(mesh);
+      debris.push({
+        mesh,
+        vx: Math.cos(a) * spd,
+        vy: 3.6 + Math.random() * 3.8,
+        vz: Math.sin(a) * spd,
+        rx: (Math.random() - 0.5) * 14,
+        rz: (Math.random() - 0.5) * 14,
+        size,
+      });
+    }
+
+    // 7b. Velocity-stretched voxel energy streaks blasting radially outward
+    const streakCount = this.isSoftwareGl ? 8 : 20;
+    const streaks: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; dirX: number; dirZ: number; spd: number; elev: number }> = [];
+    for (let i = 0; i < streakCount; i++) {
+      const a = (i / streakCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.2;
+      const mat = new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? sparkAccentHex : mainHex,
+        transparent: true,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      mesh.rotation.order = 'YXZ';
+      mesh.rotation.y = Math.atan2(Math.cos(a), Math.sin(a));
+      mesh.scale.set(0.06, 0.06, 0.75 + Math.random() * 0.65);
+      mesh.position.set(Math.cos(a) * rad * 0.3, 0.35 + Math.random() * 0.4, Math.sin(a) * rad * 0.3);
+      group.add(mesh);
+      streaks.push({ mesh, mat, dirX: Math.cos(a), dirZ: Math.sin(a), spd: 7.5 + Math.random() * 6.0, elev: 0.6 + Math.random() * 1.4 });
+    }
+
+    // 7c. Outer rolling faceted mist / smoke blocks
+    const puffCount = this.isSoftwareGl ? 0 : 12;
     const puffs: Array<{ mesh: THREE.Mesh; dirX: number; dirZ: number; startR: number; spd: number }> = [];
     for (let i = 0; i < puffCount; i++) {
       const a = (i / puffCount) * Math.PI * 2 + Math.random() * 0.25;
@@ -1531,7 +1921,7 @@ export const bossVfxMethods = {
     }
 
     this.dynamicGroup.add(group);
-    const maxLife = 2.0;
+    const maxLife = 2.2;
     this.bossVfxItems.push({
       group,
       life: 0,
@@ -1539,31 +1929,77 @@ export const bossVfxMethods = {
       update: (dt) => {
         const age = (group.userData.age = (group.userData.age ?? 0) + dt);
 
-        const ft = Math.min(1, age / 0.22);
+        // Vertical rebound shock column (0.2s punch)
+        const rbt = Math.min(1, age / 0.22);
+        reboundCol.visible = rbt < 1;
+        if (rbt < 1) {
+          const ease = 1 - Math.pow(1 - rbt, 2.0);
+          reboundCol.scale.set(rad * (0.28 + ease * 0.45), 3.4 * (1 - rbt * 0.4), rad * (0.28 + ease * 0.45));
+          reboundCol.position.y = 1.6 + ease * 1.0;
+          reboundMat.opacity = Math.pow(1 - rbt, 1.5) * 0.85;
+        }
+
+        const ft = Math.min(1, age / 0.24);
         flashMesh.visible = ft < 1;
         if (ft < 1) {
           flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.5);
-          flashMesh.scale.setScalar(rad * (1.05 + ft * 1.0));
+          flashMesh.scale.setScalar(rad * (1.1 + ft * 1.1));
         }
 
-        const wt = Math.min(1, age / 0.46);
+        const wt = Math.min(1, age / 0.48);
         waveMesh.visible = wt < 1;
         if (wt < 1) {
           waveMat.uniforms.uLife.value = wt;
           const ease = 1 - Math.pow(1 - wt, 2.3);
-          waveMesh.scale.setScalar(rad * (0.48 + ease * 1.32));
+          waveMesh.scale.setScalar(rad * (0.48 + ease * 1.42));
         }
 
-        const tt = Math.min(1, age / 0.38);
+        const tt = Math.min(1, age / 0.42);
         shockTorus.visible = tt < 1;
         if (tt < 1) {
           const ease = 1 - Math.pow(1 - tt, 2.2);
-          shockTorus.scale.setScalar(rad * (0.28 + ease * 1.18));
-          shockTorus.position.y = 0.22 + ease * 0.65;
-          shockTorusMat.opacity = (1 - tt) * 0.92;
+          shockTorus.scale.setScalar(rad * (0.28 + ease * 1.28));
+          shockTorus.position.y = 0.22 + ease * 0.75;
+          shockTorusMat.opacity = (1 - tt) * 0.94;
         }
 
         scorchMat.uniforms.uLife.value = Math.min(1, age / maxLife);
+
+        // Ballistic tumbling voxel stone/iron chunks (bounce once off floor!)
+        const dLife = 1.15;
+        const dtFrac = Math.min(1, age / dLife);
+        for (const db of debris) {
+          db.mesh.visible = dtFrac < 1;
+          if (dtFrac < 1) {
+            db.vy -= 14.5 * dt;
+            db.mesh.position.x += db.vx * dt;
+            db.mesh.position.y += db.vy * dt;
+            db.mesh.position.z += db.vz * dt;
+            if (db.mesh.position.y < db.size * 0.5) {
+              db.mesh.position.y = db.size * 0.5;
+              db.vy = Math.abs(db.vy) * 0.36;
+              db.vx *= 0.68;
+              db.vz *= 0.68;
+            }
+            db.mesh.rotation.x += db.rx * dt;
+            db.mesh.rotation.z += db.rz * dt;
+            const mat = db.mesh.material as THREE.MeshStandardMaterial;
+            mat.opacity = dtFrac > 0.65 ? 1 - (dtFrac - 0.65) / 0.35 : 1;
+          }
+        }
+
+        // Velocity-stretched voxel energy streaks
+        const stFrac = Math.min(1, age / 0.34);
+        for (const st of streaks) {
+          st.mesh.visible = stFrac < 1;
+          if (stFrac < 1) {
+            st.mesh.position.x += st.dirX * st.spd * dt;
+            st.mesh.position.y += st.elev * dt;
+            st.mesh.position.z += st.dirZ * st.spd * dt;
+            st.mesh.scale.z = Math.max(0.08, (1 - stFrac) * 1.1);
+            st.mat.opacity = Math.pow(1 - stFrac, 1.3);
+          }
+        }
 
         for (const sp of spikes) {
           const sa = age - sp.delay;
@@ -1989,7 +2425,8 @@ export const bossVfxMethods = {
     group.position.set(ox, 0, oz);
 
     const burstColor = new THREE.Color(colorHex).lerp(new THREE.Color(0xffffff), 0.55).getHex();
-    this.triggerBossBurstLight(ox, 1.6, oz, burstColor, 150, 0.72);
+    this.triggerBossBurstLight(ox, 1.6, oz, burstColor, 175, 0.78);
+    this.triggerBossImpactFlash(ox, oz, colorHex, 0.95, 0.16);
 
     const flashMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT,
@@ -2060,18 +2497,18 @@ export const bossVfxMethods = {
     const coreRadius = BOSS_NOVA.beamHalfWidth * 0.44;
     const sheathRadius = BOSS_NOVA.beamHalfWidth * 0.98;
     const beamEntries: Array<{
+      b: BossBeamSpec;
       core: THREE.Mesh;
       coreMat: THREE.MeshBasicMaterial;
       sheath: THREE.Mesh;
       sheathMat: THREE.ShaderMaterial;
+      floorStrip: THREE.Mesh;
       floorMat: THREE.ShaderMaterial;
+      propRings: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; delay: number }>;
       wallFlare?: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial };
     }> = [];
 
     for (const b of beams) {
-      const midX = b.dirX * (b.length * 0.5);
-      const midZ = b.dirZ * (b.length * 0.5);
-
       const coreMat = new THREE.MeshBasicMaterial({
         color: 0xffffff,
         transparent: true,
@@ -2083,8 +2520,8 @@ export const bossVfxMethods = {
       core.rotation.order = 'YXZ';
       core.rotation.y = b.angle;
       core.rotation.x = Math.PI / 2;
-      core.position.set(midX, beamY, midZ);
-      core.scale.set(coreRadius, b.length, coreRadius);
+      core.position.set(0, beamY, 0);
+      core.scale.set(coreRadius, 0.01, coreRadius);
       group.add(core);
 
       const sheathMat = new THREE.ShaderMaterial({
@@ -2104,8 +2541,8 @@ export const bossVfxMethods = {
       sheath.rotation.order = 'YXZ';
       sheath.rotation.y = b.angle;
       sheath.rotation.x = Math.PI / 2;
-      sheath.position.set(midX, beamY, midZ);
-      sheath.scale.set(sheathRadius, b.length, sheathRadius);
+      sheath.position.set(0, beamY, 0);
+      sheath.scale.set(sheathRadius, 0.01, sheathRadius);
       group.add(sheath);
 
       const floorMat = new THREE.ShaderMaterial({
@@ -2129,9 +2566,29 @@ export const bossVfxMethods = {
       floorStrip.rotation.order = 'YXZ';
       floorStrip.rotation.y = b.angle;
       floorStrip.rotation.x = Math.PI / 2;
-      floorStrip.scale.set(BOSS_NOVA.beamHalfWidth * 3.0, b.length, 1);
-      floorStrip.position.set(midX, 0.06, midZ);
+      floorStrip.scale.set(BOSS_NOVA.beamHalfWidth * 3.0, 0.01, 1);
+      floorStrip.position.set(0, 0.06, 0);
       group.add(floorStrip);
+
+      // 3 supersonic propulsion shock rings blasting down each beam!
+      const propRings: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; delay: number }> = [];
+      const ringCount = this.isSoftwareGl ? 1 : 3;
+      for (let rIdx = 0; rIdx < ringCount; rIdx++) {
+        const pm = new THREE.MeshBasicMaterial({
+          color: rIdx === 0 ? 0xffffff : colorHex,
+          transparent: true,
+          opacity: 0.95,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const pmMesh = new THREE.Mesh(_unitTorusGeo, pm);
+        pmMesh.rotation.y = b.angle;
+        pmMesh.position.set(0, beamY, 0);
+        pmMesh.scale.setScalar(0.45);
+        pmMesh.visible = false;
+        group.add(pmMesh);
+        propRings.push({ mesh: pmMesh, mat: pm, delay: rIdx * 0.095 });
+      }
 
       let wallFlare: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial } | undefined;
       if (b.hitWall) {
@@ -2152,36 +2609,17 @@ export const bossVfxMethods = {
         const wfMesh = new THREE.Mesh(_unitPlaneGeo, wfMat);
         wfMesh.position.set(wx, beamY, wz);
         wfMesh.rotation.x = -Math.PI / 2;
-        wfMesh.scale.setScalar(1.3);
+        wfMesh.scale.setScalar(1.6);
+        wfMesh.visible = false;
         group.add(wfMesh);
         wallFlare = { mesh: wfMesh, mat: wfMat };
-
-        if (!this.isSoftwareGl) {
-          for (let s = 0; s < 5; s++) {
-            const spread = (Math.random() - 0.5) * 1.9;
-            const bounceAng = b.angle + Math.PI + spread;
-            const spd = 2.4 + Math.random() * 3.6;
-            this.spawnParticle(
-              ox + wx,
-              beamY,
-              oz + wz,
-              Math.sin(bounceAng) * spd,
-              1.6 + Math.random() * 2.2,
-              Math.cos(bounceAng) * spd,
-              s % 2 === 0 ? 0xffffff : colorHex,
-              0.88,
-              0.42,
-              6.0
-            );
-          }
-        }
       }
 
-      beamEntries.push({ core, coreMat, sheath, sheathMat, floorMat, wallFlare });
+      beamEntries.push({ b, core, coreMat, sheath, sheathMat, floorStrip, floorMat, propRings, wallFlare });
     }
 
     this.dynamicGroup.add(group);
-    // +0.34s longer sustain: 0..0.07s punch -> 0.07..0.55s blazing sustain -> 0.55..0.78s taper-off
+    // 0..0.06s explosive shoot-out extension -> 0.06..0.56s blazing sustain -> 0.56..0.78s taper-off
     const beamDur = 0.78;
     const maxLife = 1.65;
 
@@ -2192,11 +2630,11 @@ export const bossVfxMethods = {
       update: (dt, _t, elapsed) => {
         const age = (group.userData.age = (group.userData.age ?? 0) + dt);
 
-        const ft = Math.min(1, age / 0.24);
+        const ft = Math.min(1, age / 0.26);
         flashMesh.visible = ft < 1;
         if (ft < 1) {
-          flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.5);
-          flashMesh.scale.setScalar(rad * (1.0 + ft * 0.8));
+          flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.45);
+          flashMesh.scale.setScalar(rad * (1.1 + ft * 0.95));
         }
 
         const rt = Math.min(1, age / 0.56);
@@ -2204,60 +2642,107 @@ export const bossVfxMethods = {
         ringB.visible = rt < 1;
         if (rt < 1) {
           const ease = 1 - Math.pow(1 - rt, 2.3);
-          const sc = 0.55 + ease * rad * 1.45;
+          const sc = 0.55 + ease * rad * 1.55;
           ringA.scale.setScalar(sc);
           ringB.scale.setScalar(sc * 0.92);
-          ringA.rotation.z += dt * 4.5;
-          ringB.rotation.z -= dt * 4.0;
-          ringMatA.opacity = (1 - rt) * 0.9;
-          ringMatB.opacity = (1 - rt) * 0.85;
+          ringA.rotation.z += dt * 4.8;
+          ringB.rotation.z -= dt * 4.2;
+          ringMatA.opacity = (1 - rt) * 0.92;
+          ringMatB.opacity = (1 - rt) * 0.86;
         }
 
         const bt = Math.min(1, age / beamDur);
+        // Explosive 55ms shoot-out extension from boss -> wall (gives massive forward launch force!)
+        const ext = Math.min(1, age / 0.055);
+        const extEase = 1 - Math.pow(1 - ext, 2.6);
+
         let widthMult = 0;
         let beamAlpha = 0;
         if (bt < 1) {
-          if (age < 0.07) {
-            const p = age / 0.07;
-            widthMult = THREE.MathUtils.lerp(0.65, 1.42, p);
+          if (age < 0.075) {
+            const p = age / 0.075;
+            widthMult = THREE.MathUtils.lerp(0.8, 1.62, p);
             beamAlpha = 1.0;
-          } else if (age < 0.55) {
-            const p = (age - 0.07) / 0.48;
-            widthMult = THREE.MathUtils.lerp(1.42, 0.96, Math.min(1, p * 2.2));
+          } else if (age < 0.56) {
+            const p = (age - 0.075) / 0.485;
+            widthMult = THREE.MathUtils.lerp(1.62, 0.96, Math.min(1, p * 2.4));
             beamAlpha = 1.0;
           } else {
-            const p = (age - 0.55) / (beamDur - 0.55);
+            const p = (age - 0.56) / (beamDur - 0.56);
             widthMult = Math.max(0.02, 0.96 * (1.0 - Math.pow(p, 1.35)));
             beamAlpha = Math.pow(1 - p, 1.15);
           }
         }
 
         const scorchT = age <= beamDur ? 0 : Math.min(1, (age - beamDur) / (maxLife - beamDur));
-        const floorIntensity = age <= beamDur ? Math.max(0.48, beamAlpha) : (1 - scorchT) * 0.42;
+        const floorIntensity = age <= beamDur ? Math.max(0.5, beamAlpha) : (1 - scorchT) * 0.44;
 
         for (const be of beamEntries) {
+          const curLen = Math.max(0.1, be.b.length * extEase);
+          const midX = be.b.dirX * (curLen * 0.5);
+          const midZ = be.b.dirZ * (curLen * 0.5);
+
           be.core.visible = bt < 1;
           be.sheath.visible = bt < 1;
           if (bt < 1) {
-            const flicker = 0.93 + 0.07 * Math.sin(elapsed * 72);
-            be.core.scale.x = coreRadius * widthMult * flicker;
-            be.core.scale.z = coreRadius * widthMult * flicker;
+            const flicker = 0.92 + 0.08 * Math.sin(elapsed * 78);
+            be.core.position.set(midX, beamY, midZ);
+            be.core.scale.set(coreRadius * widthMult * flicker, curLen, coreRadius * widthMult * flicker);
             be.coreMat.opacity = beamAlpha;
 
-            be.sheath.scale.x = sheathRadius * widthMult * 1.04;
-            be.sheath.scale.z = sheathRadius * widthMult * 1.04;
+            be.sheath.position.set(midX, beamY, midZ);
+            be.sheath.scale.set(sheathRadius * widthMult * 1.08, curLen, sheathRadius * widthMult * 1.08);
             be.sheathMat.uniforms.uTime.value = elapsed;
             be.sheathMat.uniforms.uIntensity.value = beamAlpha;
           }
+
+          be.floorStrip.position.set(midX, 0.06, midZ);
+          be.floorStrip.scale.y = curLen;
           be.floorMat.uniforms.uTime.value = elapsed;
           be.floorMat.uniforms.uIntensity.value = floorIntensity;
           be.floorMat.uniforms.uScorch.value = age <= beamDur ? 0 : 1;
 
+          // Propulsion rings race down each beam at high velocity!
+          for (const pr of be.propRings) {
+            const pa = age - pr.delay;
+            const pDur = 0.24;
+            if (pa <= 0 || pa >= pDur || bt >= 1) {
+              pr.mesh.visible = false;
+              continue;
+            }
+            pr.mesh.visible = true;
+            const pt = pa / pDur;
+            const dist = Math.min(be.b.length, 0.8 + pt * Math.min(be.b.length, 13.5));
+            pr.mesh.position.set(be.b.dirX * dist, beamY, be.b.dirZ * dist);
+            pr.mesh.scale.setScalar(0.35 + pt * 0.85);
+            pr.mat.opacity = (1 - pt) * 0.95;
+          }
+
+          // Continuous wall-burn flare & sparks while the beam is actively hitting the wall
           if (be.wallFlare) {
-            be.wallFlare.mesh.visible = bt < 1;
-            if (bt < 1) {
+            const hitActive = bt < 1 && ext >= 0.85;
+            be.wallFlare.mesh.visible = hitActive;
+            if (hitActive) {
               be.wallFlare.mat.uniforms.uIntensity.value = beamAlpha;
-              be.wallFlare.mesh.scale.setScalar(0.95 + widthMult * 0.42);
+              be.wallFlare.mesh.scale.setScalar(1.15 + widthMult * 0.55);
+              if (!this.isSoftwareGl && Math.random() < dt * 24) {
+                const wx = be.b.dirX * be.b.length;
+                const wz = be.b.dirZ * be.b.length;
+                const bounceAng = be.b.angle + Math.PI + (Math.random() - 0.5) * 1.8;
+                const spd = 2.6 + Math.random() * 4.0;
+                this.spawnParticle(
+                  ox + wx,
+                  beamY,
+                  oz + wz,
+                  Math.sin(bounceAng) * spd,
+                  1.5 + Math.random() * 2.4,
+                  Math.cos(bounceAng) * spd,
+                  Math.random() < 0.55 ? 0xffffff : colorHex,
+                  0.92,
+                  0.34,
+                  6.2
+                );
+              }
             }
           }
         }
@@ -2292,8 +2777,23 @@ export const bossVfxMethods = {
     const group = new THREE.Group();
     group.position.set(cx, 0, cz);
 
-    // 1. Intense purple-white supernova burst PointLight
-    this.triggerBossBurstLight(cx, 1.7, cz, voidViolet.getHex(), 170, 0.56);
+    // 1. Intense supernova burst PointLight + Radial Impact Flash + brief 0.14s single-player slow-mo beat!
+    this.triggerBossBurstLight(cx, 1.85, cz, 0x70e8ff, 195, 0.62);
+    this.triggerBossImpactFlash(cx, cz, 0x38e8ff, 1.15, 0.19);
+    this.triggerBossSlowMo(0.14, 0.35);
+
+    // 1b. Blinding white supernova core sphere bursting outward & shattering
+    const novaSphereMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.96,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const novaSphere = new THREE.Mesh(_unitSphereGeo, novaSphereMat);
+    novaSphere.position.y = 1.35;
+    novaSphere.scale.setScalar(0.4);
+    group.add(novaSphere);
 
     // 2. Supernova white-hot core flash
     const flashMat = new THREE.ShaderMaterial({
@@ -2339,7 +2839,7 @@ export const bossVfxMethods = {
     vortexMesh.scale.setScalar(rad * 1.45);
     group.add(vortexMesh);
 
-    // 4. Twin tilted expanding purple + gold gravitational orbital rings (video signature!)
+    // 4. Three tilted expanding multicolored gravitational orbital rings (Gold + Cyan + Rose!)
     const ringMatGold = new THREE.MeshBasicMaterial({
       color: 0xffe49c,
       transparent: true,
@@ -2348,31 +2848,102 @@ export const bossVfxMethods = {
       depthWrite: false,
     });
     const ringGold = new THREE.Mesh(_unitTorusGeo, ringMatGold);
-    ringGold.position.y = 0.9;
-    ringGold.rotation.set(Math.PI / 2 + 0.42, 0.25, 0);
+    ringGold.position.y = 1.25;
+    ringGold.rotation.set(Math.PI / 2 + 0.45, 0.25, 0);
     group.add(ringGold);
 
-    const ringMatPurple = new THREE.MeshBasicMaterial({
-      color: voidViolet.getHex(),
+    const ringMatCyan = new THREE.MeshBasicMaterial({
+      color: 0x38e8ff,
       transparent: true,
       opacity: 0.92,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    const ringPurple = new THREE.Mesh(_unitTorusGeo, ringMatPurple);
-    ringPurple.position.y = 0.9;
-    ringPurple.rotation.set(Math.PI / 2 - 0.38, -0.35, 0);
-    group.add(ringPurple);
+    const ringCyan = new THREE.Mesh(_unitTorusGeo, ringMatCyan);
+    ringCyan.position.y = 1.25;
+    ringCyan.rotation.set(Math.PI / 2 - 0.42, -0.38, 0);
+    group.add(ringCyan);
 
-    // 5. Outer ring of dark-violet void nebula puffs billowing outward
+    const ringMatRose = new THREE.MeshBasicMaterial({
+      color: 0xff4d94,
+      transparent: true,
+      opacity: 0.9,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const ringRose = new THREE.Mesh(_unitTorusGeo, ringMatRose);
+    ringRose.position.y = 1.25;
+    ringRose.rotation.set(0.35, 0.6, 0.3);
+    group.add(ringRose);
+
+    // 5. 28 Multicolor 3D Voxel Stardust Cubes erupting outward in a tumbling supernova!
+    const cosmicPalette = [0x38e8ff, 0xffd24a, 0xff4d94, 0x4ef59a, 0xffffff, 0xff8c38];
+    const burstCubeCount = this.isSoftwareGl ? 10 : 28;
+    const burstCubes: Array<{
+      mesh: THREE.Mesh;
+      mat: THREE.MeshBasicMaterial;
+      vx: number;
+      vy: number;
+      vz: number;
+      rx: number;
+      ry: number;
+    }> = [];
+    for (let i = 0; i < burstCubeCount; i++) {
+      const a = (i / burstCubeCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.35;
+      const spd = 3.2 + Math.random() * 6.8;
+      const mat = new THREE.MeshBasicMaterial({
+        color: cosmicPalette[i % cosmicPalette.length],
+        transparent: true,
+        opacity: 1,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      const sz = 0.14 + Math.random() * 0.18;
+      mesh.scale.setScalar(sz);
+      mesh.position.set(Math.cos(a) * 0.25, 1.35, Math.sin(a) * 0.25);
+      group.add(mesh);
+      burstCubes.push({
+        mesh,
+        mat,
+        vx: Math.cos(a) * spd,
+        vy: 1.5 + Math.random() * 4.2,
+        vz: Math.sin(a) * spd,
+        rx: (Math.random() - 0.5) * 14,
+        ry: (Math.random() - 0.5) * 14,
+      });
+    }
+
+    // 5b. 20 Velocity-stretched rainbow light bars shooting radially out of the supernova
+    const barCount = this.isSoftwareGl ? 8 : 20;
+    const bars: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; dirX: number; dirZ: number; spd: number; vy: number }> = [];
+    for (let i = 0; i < barCount; i++) {
+      const a = (i / barCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.2;
+      const mat = new THREE.MeshBasicMaterial({
+        color: cosmicPalette[i % cosmicPalette.length],
+        transparent: true,
+        opacity: 0.96,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      mesh.rotation.order = 'YXZ';
+      mesh.rotation.y = Math.atan2(Math.cos(a), Math.sin(a));
+      mesh.scale.set(0.065, 0.065, 0.9 + Math.random() * 0.7);
+      mesh.position.set(Math.cos(a) * 0.3, 1.25, Math.sin(a) * 0.3);
+      group.add(mesh);
+      bars.push({ mesh, mat, dirX: Math.cos(a), dirZ: Math.sin(a), spd: 8.2 + Math.random() * 6.5, vy: (Math.random() - 0.3) * 2.5 });
+    }
+
+    // 5c. Outer ring of dark-cosmic faceted nebula blocks billowing outward
     const puffCount = this.isSoftwareGl ? 0 : 12;
     const puffs: Array<{ mesh: THREE.Mesh; dirX: number; dirZ: number; startR: number; spd: number }> = [];
     for (let i = 0; i < puffCount; i++) {
       const a = (i / puffCount) * Math.PI * 2 + Math.random() * 0.2;
       const mat = new THREE.MeshBasicMaterial({
-        color: i % 2 === 0 ? 0x4b187a : voidViolet.getHex(),
+        color: i % 2 === 0 ? 0x2b1556 : cosmicPalette[i % cosmicPalette.length],
         transparent: true,
-        opacity: 0.62,
+        opacity: 0.56,
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(_unitPuffGeo, mat);
@@ -2383,7 +2954,6 @@ export const bossVfxMethods = {
     }
 
     // 6. Multicolor cosmic starlight burst
-    const cosmicPalette = [0x38e8ff, 0xffd24a, 0xff4d94, 0x4ef59a, 0xffffff, 0xff7b24];
     const sparkCount = this.isSoftwareGl ? 16 : 44;
     for (let i = 0; i < sparkCount; i++) {
       const a = (i / sparkCount) * Math.PI * 2 + Math.random() * 0.2;
@@ -2403,7 +2973,7 @@ export const bossVfxMethods = {
     }
 
     this.dynamicGroup.add(group);
-    const maxLife = 1.65;
+    const maxLife = 1.8;
     this.bossVfxItems.push({
       group,
       life: 0,
@@ -2411,25 +2981,68 @@ export const bossVfxMethods = {
       update: (dt, _t, elapsed) => {
         const age = (group.userData.age = (group.userData.age ?? 0) + dt);
 
-        const ft = Math.min(1, age / 0.26);
+        // White supernova core sphere expands violently over 0.24s then shatters away
+        const nt = Math.min(1, age / 0.24);
+        novaSphere.visible = nt < 1;
+        if (nt < 1) {
+          const ease = 1 - Math.pow(1 - nt, 2.2);
+          novaSphere.scale.setScalar(0.35 + ease * rad * 1.05);
+          novaSphereMat.opacity = Math.pow(1 - nt, 1.6);
+        }
+
+        const ft = Math.min(1, age / 0.28);
         flashMesh.visible = ft < 1;
         if (ft < 1) {
           flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.45);
-          flashMesh.scale.setScalar(rad * (1.2 + ft * 1.1));
+          flashMesh.scale.setScalar(rad * (1.25 + ft * 1.25));
         }
 
-        const rt = Math.min(1, age / 0.62);
+        const rt = Math.min(1, age / 0.65);
         ringGold.visible = rt < 1;
-        ringPurple.visible = rt < 1;
+        ringCyan.visible = rt < 1;
+        ringRose.visible = rt < 1;
         if (rt < 1) {
           const ease = 1 - Math.pow(1 - rt, 2.2);
-          const sc = 0.45 + ease * rad * 1.42;
+          const sc = 0.45 + ease * rad * 1.55;
           ringGold.scale.setScalar(sc);
-          ringPurple.scale.setScalar(sc * 0.94);
-          ringGold.rotation.z += dt * 5.2;
-          ringPurple.rotation.z -= dt * 4.4;
+          ringCyan.scale.setScalar(sc * 0.94);
+          ringRose.scale.setScalar(sc * 0.88);
+          ringGold.rotation.z += dt * 5.6;
+          ringCyan.rotation.z -= dt * 4.8;
+          ringRose.rotation.y += dt * 6.0;
           ringMatGold.opacity = (1 - rt) * 0.95;
-          ringMatPurple.opacity = (1 - rt) * 0.9;
+          ringMatCyan.opacity = (1 - rt) * 0.92;
+          ringMatRose.opacity = (1 - rt) * 0.88;
+        }
+
+        // Tumbling multicolor voxel stardust cubes erupting outward
+        const ct = Math.min(1, age / 1.05);
+        for (const bc of burstCubes) {
+          bc.mesh.visible = ct < 1;
+          if (ct < 1) {
+            bc.vy -= 7.2 * dt;
+            bc.mesh.position.x += bc.vx * dt;
+            bc.mesh.position.y = Math.max(0.12, bc.mesh.position.y + bc.vy * dt);
+            bc.mesh.position.z += bc.vz * dt;
+            bc.vx *= Math.exp(-1.8 * dt);
+            bc.vz *= Math.exp(-1.8 * dt);
+            bc.mesh.rotation.x += bc.rx * dt;
+            bc.mesh.rotation.y += bc.ry * dt;
+            bc.mat.opacity = ct > 0.55 ? 1 - (ct - 0.55) / 0.45 : 1;
+          }
+        }
+
+        // Stretched rainbow light bars
+        const brt = Math.min(1, age / 0.36);
+        for (const br of bars) {
+          br.mesh.visible = brt < 1;
+          if (brt < 1) {
+            br.mesh.position.x += br.dirX * br.spd * dt;
+            br.mesh.position.y = Math.max(0.15, br.mesh.position.y + br.vy * dt);
+            br.mesh.position.z += br.dirZ * br.spd * dt;
+            br.mesh.scale.z = Math.max(0.08, (1 - brt) * 1.3);
+            br.mat.opacity = Math.pow(1 - brt, 1.3);
+          }
         }
 
         vortexMat.uniforms.uTime.value = elapsed;

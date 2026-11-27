@@ -267,6 +267,8 @@ export const enemiesMethods = {
       this.audio.playMageCast();
     } else if (chosen === 'nova_ring') {
       this.audio.playBossLaserCharge();
+    } else if (chosen === 'targeted_blast') {
+      this.audio.playBossBlackHoleCharge();
     } else {
       this.audio.playBossTelegraph();
     }
@@ -741,7 +743,7 @@ export const enemiesMethods = {
           // Void Black Hole detonation at locked target position
           const dmg = this.bossDamage(e, BOSS_SKILLS.targeted_blast.damage);
           this.audio.playBossBlackHole();
-          this.forEachLiveHero(() => this.addScreenShake(0.65, 0.34));
+          this.forEachLiveHero(() => this.addScreenShake(0.74, 0.38));
           this.spawnBossBlackHoleVfx(tx, tz, rad, cfg.telegraphColor);
 
           this.forEachLiveHero(() => {
@@ -757,7 +759,7 @@ export const enemiesMethods = {
           // 'slam' heavy floor smash with themed palette & full-screen shake
           const dmg = this.bossDamage(e, BOSS_SKILLS[skill].damage);
           this.audio.playBossSlam();
-          this.forEachLiveHero(() => this.addScreenShake(0.68, 0.36));
+          this.forEachLiveHero(() => this.addScreenShake(0.78, 0.4));
           this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor, e.kind as FloorBossKind);
 
           this.forEachLiveHero(() => {
