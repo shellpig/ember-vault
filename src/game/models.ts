@@ -3335,6 +3335,47 @@ export function createCrateProp(
     return root;
   }
 
+  if (theme === 'alien') {
+    const steel = new THREE.MeshStandardMaterial({ color: 0x2a3240, roughness: 0.42, metalness: 0.6 });
+    if (kind === 'crate') {
+      // Ribbed cargo container (hazard-taped faces) with a steel skid and lid
+      const boxMat = new THREE.MeshStandardMaterial({ map: textures.crateMap, roughness: 0.5, metalness: 0.35 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.66, 0.74), boxMat);
+      body.position.y = 0.37;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      const skid = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.06, 0.8), steel);
+      skid.position.y = 0.03;
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.06, 0.78), steel);
+      lid.position.y = 0.73;
+      lid.castShadow = true;
+      root.add(body, skid, lid);
+    } else {
+      // Cryo canister: steel cylinder, frosted window band, end caps
+      const shell = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.58, 10), steel);
+      shell.position.y = 0.35;
+      shell.castShadow = true;
+      const glass = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.25, 0.16, 10),
+        new THREE.MeshStandardMaterial({
+          color: 0x9fc6dc,
+          roughness: 0.25,
+          metalness: 0.1,
+          emissive: 0x1c3a4c,
+          emissiveIntensity: 0.35,
+        })
+      );
+      glass.position.y = 0.38;
+      const capMat = new THREE.MeshStandardMaterial({ color: 0x3c4656, roughness: 0.35, metalness: 0.7 });
+      const capBottom = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.3, 0.08, 10), capMat);
+      capBottom.position.y = 0.04;
+      const capTop = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.27, 0.1, 10), capMat);
+      capTop.position.y = 0.69;
+      root.add(shell, glass, capBottom, capTop);
+    }
+    return root;
+  }
+
   if (theme === 'flesh') {
     if (kind === 'crate') {
       // Clustered organic chitinous egg-sacs / bio-pods nestled in dark-plum membrane
@@ -3452,6 +3493,85 @@ export function createCrateProp(
   return root;
 }
 
+/**
+ * Spaceship wall tops: 3 low machined variants (all right angles, ~0.3 tall plus one thin 0.54 mast):
+ * 0 pipe bundle, 1 heat-sink box with fins, 2 conduit box with a short antenna mast.
+ */
+function createAlienWallCapGeometries(slabW: number): THREE.BufferGeometry[] {
+  const box = (list: THREE.BufferGeometry[], w: number, h: number, d: number, x: number, y: number, z: number) => {
+    const b = new THREE.BoxGeometry(w, h, d);
+    b.translate(x, y, z);
+    list.push(b);
+  };
+  const v0: THREE.BufferGeometry[] = [];
+  box(v0, slabW, 0.12, slabW, 0, 0.06, 0);
+  box(v0, slabW, 0.12, 0.16, 0, 0.18, -0.52);
+  box(v0, slabW, 0.12, 0.16, 0, 0.18, -0.3);
+  box(v0, slabW, 0.1, 0.12, 0, 0.17, -0.1);
+  box(v0, 0.2, 0.2, 0.62, -0.62, 0.22, -0.32);
+  box(v0, 0.2, 0.2, 0.62, 0.48, 0.22, -0.32);
+
+  const v1: THREE.BufferGeometry[] = [];
+  box(v1, slabW, 0.12, slabW, 0, 0.06, 0);
+  box(v1, 1.1, 0.14, 0.9, 0.22, 0.19, 0.24);
+  for (let i = 0; i < 5; i++) box(v1, 0.06, 0.14, 0.82, -0.18 + i * 0.2, 0.33, 0.24);
+  box(v1, 0.5, 0.1, 0.5, -0.56, 0.17, -0.5);
+
+  const v2: THREE.BufferGeometry[] = [];
+  box(v2, slabW, 0.12, slabW, 0, 0.06, 0);
+  box(v2, 0.86, 0.18, 0.7, -0.32, 0.21, 0.36);
+  box(v2, 0.08, 0.24, 0.08, -0.32, 0.42, 0.36);
+  box(v2, 0.3, 0.04, 0.04, -0.32, 0.52, 0.36);
+  box(v2, slabW, 0.08, 0.2, 0, 0.16, -0.5);
+  box(v2, 0.36, 0.12, 0.36, 0.56, 0.18, 0.4);
+
+  return [mergeSimpleGeometries(v0), mergeSimpleGeometries(v1), mergeSimpleGeometries(v2)];
+}
+
+/** Shared clock for the spaceship floor light strips; updateEnvironment writes the engine time into it. */
+export const alienStripClock = { value: 0 };
+
+/**
+ * Unlit additive strip material that breathes softly (strength ~0.45-0.8, ~3 s period) with a slow wave travelling
+ * across the floor. No lights are involved; all strips share `alienStripClock`.
+ */
+export function createAlienStripMaterial(color: number): THREE.MeshBasicMaterial {
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending, // reads as light on the dark deck without covering it
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uStripTime = alienStripClock;
+    shader.vertexShader =
+      'varying float vStripPhase;\n' +
+      shader.vertexShader.replace(
+        '#include <project_vertex>',
+        [
+          '#include <project_vertex>',
+          '#ifdef USE_INSTANCING',
+          '  vec4 stripWorld = modelMatrix * instanceMatrix * vec4(position, 1.0);',
+          '#else',
+          '  vec4 stripWorld = modelMatrix * vec4(position, 1.0);',
+          '#endif',
+          '  vStripPhase = (stripWorld.x + stripWorld.z) * 0.16;',
+        ].join('\n')
+      );
+    shader.fragmentShader =
+      'uniform float uStripTime;\nvarying float vStripPhase;\n' +
+      shader.fragmentShader.replace(
+        'vec4 diffuseColor = vec4( diffuse, opacity );',
+        'vec4 diffuseColor = vec4( diffuse, opacity * (0.55 + 0.45 * (0.5 + 0.5 * sin(uStripTime * 2.1 - vStripPhase))) );'
+      );
+  };
+  return mat;
+}
+
 /** Merge simple geometries into a single non-indexed BufferGeometry (disposing input parts). */
 function mergeSimpleGeometries(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
   const nonIndexed = parts.map((g) => (g.index ? g.toNonIndexed() : g.clone()));
@@ -3491,11 +3611,12 @@ function mergeSimpleGeometries(parts: THREE.BufferGeometry[]): THREE.BufferGeome
 
 /**
  * Returns wall-top cap geometries anchored with bottom at Y=0.
- * Stone & Alien use 1 clean flat cutaway slab; Cavern & Flesh use 3 irregular blocky rock/organic ridges
+ * Stone uses 1 clean flat cutaway slab; Alien uses 3 machined variants; Cavern & Flesh use 3 irregular blocky rock/organic ridges
  * that rotate per tile and integrate seamlessly with 4-tile translucent wall occlusion fading.
  */
 export function createWallCapGeometries(theme: TerrainTheme, tileSize: number): THREE.BufferGeometry[] {
   const slabW = tileSize + 0.02;
+  if (theme === 'alien') return createAlienWallCapGeometries(slabW);
   if (theme !== 'cavern' && theme !== 'flesh') {
     const flat = new THREE.BoxGeometry(slabW, 0.14, slabW);
     flat.translate(0, 0.07, 0);
@@ -3570,12 +3691,17 @@ export function createWallCapGeometries(theme: TerrainTheme, tileSize: number): 
  * in Cavern (11-20) and Flesh (21-30). Grounded at Y=0, height <= 0.52 so combat readability stays crisp.
  */
 export function createAmbientDecorProp(
-  theme: 'cavern' | 'flesh',
+  theme: 'cavern' | 'flesh' | 'alien',
   biomeId: BiomeConfig['id'],
   kind: number,
   accentColor: number
 ): THREE.Group {
   const root = new THREE.Group();
+
+  if (theme === 'alien') {
+    addAlienDecor(root, biomeId === 'alien_core', kind, accentColor);
+    return root;
+  }
 
   if (theme === 'cavern') {
     const rockDark = new THREE.MeshStandardMaterial({ color: 0x342f2a, roughness: 0.94, metalness: 0.05 });
@@ -3730,6 +3856,97 @@ export function createAmbientDecorProp(
   }
 
   return root;
+}
+
+/**
+ * Spaceship micro-decor (height <= 0.52, wall-hugging): 0 cryo canister pair (Cryo-Deck) or small server rack
+ * (Command Deck), 1 cable coil, 2 broken drone, 3 rare hologram projector (dim, unlit glow only).
+ */
+function addAlienDecor(root: THREE.Group, isCore: boolean, kind: number, accentColor: number): void {
+  const steel = new THREE.MeshStandardMaterial({ color: 0x2c3442, roughness: 0.42, metalness: 0.6 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x161b24, roughness: 0.6, metalness: 0.4 });
+  const dim = (k: number) => new THREE.MeshBasicMaterial({ color: new THREE.Color(accentColor).multiplyScalar(k) });
+
+  if (kind === 0 && isCore) {
+    const rack = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.5, 0.26), dark);
+    rack.position.y = 0.25;
+    rack.castShadow = true;
+    root.add(rack);
+    for (let i = 0; i < 4; i++) {
+      const unit = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.08, 0.02), steel);
+      unit.position.set(0, 0.08 + i * 0.11, 0.135);
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.025, 0.01), dim(i % 2 === 0 ? 0.9 : 0.5));
+      led.position.set(-0.11, 0.08 + i * 0.11, 0.15);
+      root.add(unit, led);
+    }
+  } else if (kind === 0) {
+    const bandMat = new THREE.MeshStandardMaterial({
+      color: 0xa8d0e6,
+      roughness: 0.3,
+      emissive: 0x1a3444,
+      emissiveIntensity: 0.3,
+    });
+    for (const [x, z, h] of [
+      [0, 0, 0.44],
+      [0.24, 0.1, 0.32],
+    ] as Array<[number, number, number]>) {
+      const can = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, h, 8), steel);
+      can.position.set(x, h / 2, z);
+      can.castShadow = true;
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.115, 0.06, 8), bandMat);
+      band.position.set(x, h * 0.6, z);
+      root.add(can, band);
+    }
+  } else if (kind === 1) {
+    // Coiled cable on the floor
+    const cableMat = new THREE.MeshStandardMaterial({ color: 0x1c2029, roughness: 0.75 });
+    for (let i = 0; i < 3; i++) {
+      const loop = new THREE.Mesh(new THREE.TorusGeometry(0.2 - i * 0.04, 0.03, 4, 12), cableMat);
+      loop.rotation.x = Math.PI / 2;
+      loop.position.y = 0.03 + i * 0.05;
+      root.add(loop);
+    }
+    const plug = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.12), steel);
+    plug.position.set(0.26, 0.03, 0.06);
+    root.add(plug);
+  } else if (kind === 2) {
+    // Broken drone: tilted body, one snapped arm, a dead lens
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.3), steel);
+    body.position.y = 0.08;
+    body.rotation.set(0.25, 0.4, 0.18);
+    body.castShadow = true;
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.04, 0.05), dark);
+    arm.position.set(0.12, 0.05, -0.18);
+    arm.rotation.y = 0.7;
+    const rotor = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.02, 8), dark);
+    rotor.position.set(-0.26, 0.02, 0.12);
+    const lens = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.02), dim(0.25));
+    lens.position.set(0, 0.12, 0.16);
+    lens.rotation.copy(body.rotation);
+    root.add(body, arm, rotor, lens);
+  } else {
+    // Hologram projector: low pedestal, faint translucent cone and a small floating glyph
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.1, 8), steel);
+    base.position.y = 0.05;
+    const emitter = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.04, 8), dim(0.8));
+    emitter.position.y = 0.12;
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: accentColor,
+      transparent: true,
+      opacity: 0.12,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const beam = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.32, 8, 1, true), beamMat);
+    beam.rotation.x = Math.PI;
+    beam.position.y = 0.3;
+    const glyph = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.06, 0),
+      new THREE.MeshBasicMaterial({ color: accentColor, transparent: true, opacity: 0.55 })
+    );
+    glyph.position.y = 0.44;
+    root.add(base, emitter, beam, glyph);
+  }
 }
 
 export function createSpikeTrap(): SpikeTrapRig {
