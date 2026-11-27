@@ -1,7 +1,7 @@
 import type { EmbervaultEngine } from '../engine';
 import { HERO_CLASSES, HUNTER } from '../classes';
 import { worldToGrid } from '../dungeon';
-import { _projVec } from '../engine/scratch';
+import { _projVec } from './scratch';
 import { STASH_CAP } from '../hero';
 import { FloatingLabelData, RunSummary } from '../types';
 
