@@ -164,7 +164,7 @@ export interface EnemyStatic {
 
 /**
  * Enemy entry: [id, x100, z100, facing100, hp, flags, (boss) windupProgress100, telegraphX100, telegraphZ100,
- * telegraphRadius100, skillIndex]. Only entries that changed since the last snapshot are sent.
+ * telegraphRadius100, skillIndex]. A telegraphRadius of 0 on a windup means a basic attack (no ground circle). Only entries that changed since the last snapshot are sent.
  */
 export type EnemySnap = number[];
 export const EF_STUN = 1;
@@ -175,6 +175,8 @@ export const EF_AC34 = 16;
 export const EF_AC75 = 32;
 /** Boss state is `flags >> EF_BOSS_SHIFT` (0 chase, 1 windup, 2 strike, 3 recover). */
 export const EF_BOSS_SHIFT = 6;
+/** Boss only (optional, bit 8 sits above the 2-bit boss state): the boss is enraged. Older clients ignore it. */
+export const EF_ENRAGED = 256;
 
 /** Enemy projectile (flies straight, the receiver moves it): [pid, kind, x100, z100, vx100, vz100] */
 export type ProjSnap = [number, string, number, number, number, number];

@@ -77,7 +77,7 @@ export const levelBuildMethods = {
     // later, see enterDungeonFromTown). Raising it is a save point; restoring a frozen floor is not.
     let localDepthRaised = false;
     for (const h of this.heroes) {
-      if (h.inTown || depth <= h.maxDepthReached) continue;
+      if (h.inTown || this.devDepthRun || depth <= h.maxDepthReached) continue;
       h.maxDepthReached = depth;
       if (h === this.localHero) localDepthRaised = true;
     }
@@ -955,7 +955,7 @@ export const levelBuildMethods = {
     } else if (snap) {
       this.pushBanner(`返回第 ${depth} 層`, '怪物已復活 · 傳送門周圍安全');
     } else if (depth % 5 === 0) {
-      const bossKind = getBossForDepth(depth, biome.terrainTheme);
+      const bossKind = getBossForDepth(depth, biome.terrainTheme, this.dungeon.genSeed);
       const cfg = BOSS_CONFIGS[bossKind];
       const shopNote = this.dungeon.shopPos ? ' · Elixir Shop Open' : '';
       this.pushBanner(`DEPTH ${depth} — BOSS FLOOR`, `${cfg.name} Guards the Relic Key${shopNote}`);

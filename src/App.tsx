@@ -515,6 +515,25 @@ export default function App() {
     };
   }, [drawMinimap]);
 
+  // Dev-only URL parameters (`?devDepth=N`) are unlocked by the Vite dev server or by a backend running with DEV_AUTH=1
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .config()
+      .then((c) => {
+        if (cancelled || !c.devAuth) return;
+        EmbervaultEngine.serverDevAuth = true;
+        // The attract-mode run was built before the flag was known: restart it on the requested dev floor
+        if (!import.meta.env.DEV && screenRef.current !== 'playing' && EmbervaultEngine.readDevDepth() !== null) {
+          engineRef.current?.restartRun('warrior');
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Hidden shortcut Ctrl+I opens the Orange & Green Relic Compendium; Esc closes open modals
   useEffect(() => {
     const onGlobalKeyDown = (e: KeyboardEvent) => {

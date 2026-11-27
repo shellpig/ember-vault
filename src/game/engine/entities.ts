@@ -1,7 +1,7 @@
 import type { CommandPayload, GameEvent, GameKind, HandbackPayload, LoadoutPayload } from '../../../shared/game';
 import type { RoomMember } from '../../../shared/room';
 import { HeroClassId, PetSpecies } from '../classes';
-import { BossSkillKind } from './data';
+import { BossActionType, BossSkillKind } from './data';
 import type { CharacterLoadout } from '../hero';
 import { BossTelegraphRig, EnemyRig, GateRig, PetRig, RelicLootRig, SpikeTrapRig, TownPortalRig } from '../models';
 import { RelicItem } from '../relics';
@@ -169,6 +169,22 @@ export interface EnemyEntity {
   bossSkillIndex?: number;
   bossChargeStartX?: number;
   bossChargeStartZ?: number;
+  /** What the current windup / strike / recover belongs to: a skill (ground telegraph) or a basic attack (no telegraph). */
+  bossAction?: BossActionType;
+  /** The type decided for the next action (section 5); rolled once when the previous action finishes. */
+  bossNextType?: BossActionType;
+  /** Type of the last executed action and how many of that type happened in a row. */
+  bossLastType?: BossActionType;
+  bossStreak?: number;
+  /** Enraged (HP first dropped under 50%): faster and hits harder until it dies. */
+  bossEnraged?: boolean;
+  /** nova_ring waves still to be fired after the centre hit: [remaining waves, seconds to next, origin x, origin z, base angle]. */
+  bossNovaWaves?: number;
+  bossNovaTimer?: number;
+  bossNovaX?: number;
+  bossNovaZ?: number;
+  bossNovaAngle?: number;
+  bossNovaDamage?: number;
   // Frost Mage debuffs
   /** Seconds of slow remaining. */
   slowTimer?: number;

@@ -260,6 +260,8 @@ export class EmbervaultEngine {
   persistRun = false;
   /** Suppresses save checkpoints while a run is being (re)built from a save. */
   loadingRun = false;
+  /** This run started through `?devDepth=N`: it never raises `maxDepthReached` and never triggers save checkpoints. */
+  devDepthRun = false;
   heroProjectiles: HeroProjectileEntity[] = [];
   /** Active Hunter pet companions, keyed by owner heroId (max 1 per hunter). */
   pets: Map<string, PetEntity> = new Map();
@@ -298,7 +300,9 @@ export class EmbervaultEngine {
     this.initScene();
     this.initParticlePool();
     this.setupBots(null);
-    this.buildLevel(1);
+    const devDepth = EmbervaultEngine.readDevDepth();
+    this.devDepthRun = devDepth !== null;
+    this.buildLevel(devDepth ?? 1);
     this.bindEvents();
     this.lastTime = performance.now();
     this.emitHud();
@@ -320,6 +324,26 @@ export class EmbervaultEngine {
     }
     g.uuid = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : g.uuid;
     return g;
+  }
+
+  /** Set from `GET /api/config` (`devAuth`): true only against a local dev backend (DEV_AUTH=1), never in production. */
+  static serverDevAuth = false;
+
+  /**
+   * `?devDepth=N` (1-40): start a single-player run on floor N to test boss fights. Works only on the Vite dev server
+   * (`import.meta.env.DEV`, stripped from production builds) or when the backend reports `devAuth`; the URL alone is
+   * never trusted. Null when absent, invalid or not allowed.
+   */
+  static readDevDepth(): number | null {
+    if (!import.meta.env.DEV && !EmbervaultEngine.serverDevAuth) return null;
+    try {
+      const raw = new URLSearchParams(window.location.search).get('devDepth');
+      if (raw === null) return null;
+      const n = Number.parseInt(raw, 10);
+      return Number.isFinite(n) ? Math.max(1, Math.min(40, n)) : null;
+    } catch {
+      return null;
+    }
   }
 
   /** `?bots=N` (0-3): dev override for the number of local bot teammates; null when absent. */

@@ -341,7 +341,7 @@ export const travelMethods = {
     local.rig.root.position.set(local.x, 0, local.z);
     local.rig.body.rotation.y = local.facing;
     this.heroLight.position.set(local.x, 2.0, local.z);
-    if (this.depth > local.maxDepthReached) {
+    if (this.depth > local.maxDepthReached && !this.devDepthRun) {
       local.maxDepthReached = this.depth;
       this.requestSave('floor');
     }
@@ -509,6 +509,10 @@ export const travelMethods = {
       } else {
         this.hero.controlMode = 'auto';
       }
+      // Dev only: `?devDepth=N` overrides the start floor (single player; it never counts as reaching that floor)
+      const devDepth = EmbervaultEngine.readDevDepth();
+      this.devDepthRun = devDepth !== null;
+      if (devDepth !== null) firstDepth = devDepth;
       this.hero.maxDepthReached = deepest;
       this.hero.recomputeRelicStats(false);
       if (loadout) {
@@ -537,12 +541,14 @@ export const travelMethods = {
   /** Snapshot of the persistent character state (gold, upgrades, relics, potions, max depth) for saving. */
   exportCharacterState(this: EmbervaultEngine): CharacterLoadout {
     // A local hero in town has not reached a floor a teammate may have descended to meanwhile
-    return this.localHero.exportLoadout(this.localHero.inTown ? this.localHero.maxDepthReached : this.depth);
+    return this.localHero.exportLoadout(
+      this.localHero.inTown || this.devDepthRun ? this.localHero.maxDepthReached : this.depth
+    );
   },
 
   requestSave(this: EmbervaultEngine, reason: SaveCheckpointReason): void {
     // Only the local character is ever saved (bots and remote teammates never touch the API)
-    if (this.hero.isBot || this.hero.isRemote) return;
+    if (this.hero.isBot || this.hero.isRemote || this.devDepthRun) return;
     if (this.persistRun && !this.loadingRun) this.callbacks.onSaveCheckpoint?.(reason);
   },
 

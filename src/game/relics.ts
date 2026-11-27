@@ -1174,7 +1174,20 @@ export function rollRelicDrops(
       results.push(generateRelic(depth, 'boss', allocId()));
     }
   }
+  // Boss rework (docs/boss-spec.md section 7): every hero's hoard holds at least one yellow-or-better relic
+  if (!results.some((r) => r.rarity !== 'blue')) {
+    results.push(generateRelic(depth, 'boss', allocId(), rollBossRarityAboveBlue(depth)));
+  }
   return results;
+}
+
+/** The normal boss rarity weights with blue excluded (re-rolled), used for the boss hoard guarantee. */
+function rollBossRarityAboveBlue(depth: number): RelicRarity {
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const rarity = rollRarity('boss', depth);
+    if (rarity !== 'blue') return rarity;
+  }
+  return 'yellow';
 }
 
 export function rollAngelBlessing(depth: number): AngelBuff {

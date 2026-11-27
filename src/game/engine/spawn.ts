@@ -1,6 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
 import { findGridPath, gridToWorld } from '../dungeon';
-import { BOSS_CONFIGS, SPECIAL_ELITE_NAMES, getBossForDepth, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isMageLikeRanged, isRangedEnemy, isSwarmEnemy } from './data';
+import { BOSS_ACTION, BOSS_CONFIGS, SPECIAL_ELITE_NAMES, getBossBaseMaxHp, getBossDepthTier, getBossForDepth, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isMageLikeRanged, isRangedEnemy, isSwarmEnemy } from './data';
 import { applyEliteVisuals, createBossTelegraph, createEnemyModel } from '../models';
 import { DungeonData, EnemyKind } from '../types';
 
@@ -120,7 +120,7 @@ export const spawnMethods = {
       if (room.role === 'key') {
         if (isBossFloor) {
           // Spawn a towering terrain-matched Floor Boss in or right in front of the Key Room!
-          const bossKind = getBossForDepth(this.depth, theme);
+          const bossKind = getBossForDepth(this.depth, theme, this.dungeon.genSeed);
           const pathToKey = findGridPath(
             this.dungeon,
             this.dungeon.spawn.gx,
@@ -186,6 +186,32 @@ export const spawnMethods = {
             ) {
               this.addEnemy(escortKinds[spawnedEscorts], cand.gx, cand.gz, biome);
               spawnedEscorts += 1;
+            }
+          }
+
+          // Depth-tier extra escorts (docs/boss-spec.md 1b): regular mobs, unnamed elites and named elites, placed on
+          // free key-room tiles at least ~2 tiles from the boss, spread out by taking every other candidate.
+          const tier = getBossDepthTier(this.depth);
+          const extra: Array<{ kind: EnemyKind; elite: 'none' | 'plain' | 'named' }> = [];
+          const mobCycle: EnemyKind[] = [themeMeleeGuard, themeArcher, themeMage];
+          for (let i = 0; i < tier.mobs; i++) extra.push({ kind: mobCycle[i % mobCycle.length], elite: 'none' });
+          for (let i = 0; i < tier.elites; i++) extra.push({ kind: themeMeleeGuard, elite: 'plain' });
+          for (let i = 0; i < tier.named; i++) extra.push({ kind: i % 2 === 0 ? themeMeleeGuard : themeArcher, elite: 'named' });
+          if (extra.length > 0) {
+            const free: Array<{ gx: number; gz: number }> = [];
+            for (let gz = room.z + 1; gz < room.z + room.h - 1; gz++) {
+              for (let gx = room.x + 1; gx < room.x + room.w - 1; gx++) {
+                if (this.dungeon.tiles[gz]?.[gx] !== 1) continue;
+                if (gx === this.dungeon.keyPos.gx && gz === this.dungeon.keyPos.gz) continue;
+                if (Math.abs(gx - bossTile.gx) + Math.abs(gz - bossTile.gz) < 2) continue;
+                free.push({ gx, gz });
+              }
+            }
+            const step = Math.max(1, Math.floor(free.length / extra.length));
+            for (let i = 0; i < extra.length && free.length > 0; i++) {
+              const t = free[Math.min(free.length - 1, i * step)];
+              const ex = extra[i];
+              this.addEnemy(ex.kind, t.gx, t.gz, biome, ex.elite !== 'none', 0, 0, ex.elite === 'named');
             }
           }
         } else {
@@ -276,7 +302,8 @@ export const spawnMethods = {
     biome: DungeonData['biome'],
     isElite = false,
     offsetX = 0,
-    offsetZ = 0
+    offsetZ = 0,
+    forceNamedElite = false
   ): void {
     if (this.dungeon.tiles[gz]?.[gx] !== 1) return;
     const baseW = gridToWorld(gx, gz);
@@ -319,8 +346,9 @@ export const spawnMethods = {
 
     if (isFloorBoss(kind)) {
       const cfg = BOSS_CONFIGS[kind];
-      const bossTierScale = 1 + Math.max(0, this.depth - 5) * 0.14;
-      const maxHp = Math.round(cfg.baseHp * bossTierScale * this.getEnemyHpScale());
+      const maxHp = Math.round(
+        getBossBaseMaxHp(kind, this.depth) * getBossDepthTier(this.depth).hpMult * this.getEnemyHpScale()
+      );
       const telegraph = createBossTelegraph(cfg.telegraphColor);
       this.dynamicGroup.add(telegraph.group);
 
@@ -359,12 +387,16 @@ export const spawnMethods = {
         bossHitApplied: false,
         bossSkill: cfg.skills[0],
         bossSkillIndex: 0,
+        bossAction: 'skill',
+        bossNextType: Math.random() < BOSS_ACTION.skillChance ? 'skill' : 'basic',
+        bossStreak: 0,
+        bossEnraged: false,
       });
       return;
     }
 
     const eliteEligible = isElite && !isGuardianEnemy(kind) && !isSwarmEnemy(kind);
-    const isSpecialElite = eliteEligible && Math.random() < 0.25;
+    const isSpecialElite = eliteEligible && (forceNamedElite || Math.random() < 0.25);
     let customName: string | undefined;
     if (eliteEligible) {
       if (isSpecialElite) {

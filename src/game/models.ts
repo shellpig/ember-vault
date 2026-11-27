@@ -33,6 +33,8 @@ export interface EnemyRig {
   frozenShell?: THREE.Group;
   /** Lazily attached by the engine while the enemy is slowed (ice spikes). */
   slowMarker?: THREE.Group;
+  /** Lazily attached while an enraged boss is alive (red ground ring + flame column). */
+  rageAura?: THREE.Group;
   flashMaterials: THREE.MeshStandardMaterial[];
 }
 
@@ -82,6 +84,39 @@ export function createBossTelegraph(color: number): BossTelegraphRig {
   group.add(fillDisk);
 
   return { group, outerRing, fillDisk, fillMat, ringMat };
+}
+
+/** Red enrage aura of a boss: a pulsing ground ring and an open flame column (animated by the engine through `userData`). */
+export function createBossRageAura(color: number): THREE.Group {
+  const group = new THREE.Group();
+  const ringMat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.6,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(1.35, 1.75, 40), ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.06;
+  group.add(ring);
+
+  const columnMat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.2,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.45, 2.6, 18, 1, true), columnMat);
+  column.position.y = 1.3;
+  group.add(column);
+
+  group.userData.ring = ring;
+  group.userData.column = column;
+  return group;
 }
 
 export interface GateRig {

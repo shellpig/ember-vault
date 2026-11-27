@@ -2,7 +2,7 @@ import type { EmbervaultEngine } from '../engine';
 import { ACT_DASH, ACT_POMMEL, ACT_POTION } from '../../../shared/game';
 import { FROST_MAGE, HERO_CLASSES, HUNTER } from '../classes';
 import { hasLineOfSight } from '../dungeon';
-import { isGuardianEnemy, isSwarmEnemy } from './data';
+import { getBossDamageTakenMult, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
 import { EnemyEntity, HeroHitParams } from './entities';
 import { createFrozenShell, createSlowMarker, createStunStars } from '../models';
 import { FloatingLabelData } from '../types';
@@ -144,6 +144,16 @@ export const heroCombatMethods = {
     this.emitHud();
   },
 
+  /**
+   * Boss rework (docs/boss-spec.md section 2): melee bosses take 25% less damage from every source. Called as the very
+   * last step of each damage calculation (after crit / relic / set multipliers), right before the HP is reduced and the
+   * floating text is built, so the number shown is the HP that was really removed.
+   */
+  scaleEnemyDamageTaken(this: EmbervaultEngine, enemy: EnemyEntity, dmg: number): number {
+    if (!enemy.isBoss || !isFloorBoss(enemy.kind)) return dmg;
+    return Math.max(1, Math.round(dmg * getBossDamageTakenMult(enemy.kind, this.depth)));
+  },
+
   applyBonusEnemyDamage(
     this: EmbervaultEngine,
     enemy: EnemyEntity,
@@ -153,6 +163,9 @@ export const heroCombatMethods = {
     particleColor: number
   ): void {
     if (enemy.dead || bonusDmg <= 0) return;
+    const rawDmg = bonusDmg;
+    bonusDmg = this.scaleEnemyDamageTaken(enemy, bonusDmg);
+    if (bonusDmg !== rawDmg) label = label.replace(`-${rawDmg}`, `-${bonusDmg}`);
     enemy.hp -= bonusDmg;
     enemy.hitFlash = 0.12;
     this.hero.totalDamageDealt += bonusDmg;
@@ -352,7 +365,7 @@ export const heroCombatMethods = {
       }
     }
 
-    const dmg = Math.max(1, Math.round(baseDmg * mult));
+    const dmg = this.scaleEnemyDamageTaken(enemy, Math.max(1, Math.round(baseDmg * mult)));
 
     this.hero.totalDamageDealt += dmg;
     if (isCrit) this.hero.critCount += 1;
@@ -690,7 +703,7 @@ export const heroCombatMethods = {
         mult *= enemy.isBoss ? 1.25 : 1.5;
       }
 
-      const dmg = Math.max(1, Math.round(normalBase * mult));
+      const dmg = this.scaleEnemyDamageTaken(enemy, Math.max(1, Math.round(normalBase * mult)));
       this.hero.totalDamageDealt += dmg;
       if (isCrit) this.hero.critCount += 1;
       this.hero.ai.lastCombatDamageTime = this.elapsed;
