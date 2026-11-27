@@ -264,8 +264,8 @@ function main() {
     const s = readFileSync(f, 'utf8');
     for (const m of s.matchAll(/^export const (\w+Methods) = \{/gm)) objs.push({ name: m[1], file: relative(root, f) });
   }
-  const assigned = [...engineSrc.matchAll(/Object\.assign\(EmbervaultEngine\.prototype,([^)]*)\)/g)].flatMap((m) => m[1].split(',').map((x) => x.trim()).filter(Boolean));
-  const merged = [...engineSrc.matchAll(/^export interface EmbervaultEngine extends ([^{]*)\{/gm)].flatMap((m) => m[1].split(',').map((x) => x.trim()).filter(Boolean));
+  const assigned = [...engineSrc.matchAll(/Object\.assign\(\s*EmbervaultEngine\.prototype,([^)]*)\)/g)].flatMap((m) => m[1].split(',').map((x) => x.trim()).filter(Boolean));
+  const merged = [...engineSrc.matchAll(/^export interface EmbervaultEngine\s+extends ([^{]*)\{/gm)].flatMap((m) => m[1].split(',').map((x) => x.trim()).filter(Boolean));
   for (const o of objs) {
     const T = o.name.charAt(0).toUpperCase() + o.name.slice(1);
     if (!assigned.includes(o.name)) problems.push(`mount: ${o.name} (${o.file}) is not passed to Object.assign(EmbervaultEngine.prototype, ...)`);

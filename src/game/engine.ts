@@ -130,6 +130,11 @@ interface EngineCallbacks {
   onMinimapUpdate: (snap: MinimapSnapshot) => void;
   onWebGLError: (message: string) => void;
 }
+/**
+ * Engine state + constructor + main loop + public API. The fields are deliberately not `private`: the method
+ * modules in src/game/engine/*.ts (mounted below with `Object.assign(EmbervaultEngine.prototype, ...)`) operate on
+ * `this`. New methods go into the module that matches their domain (see AGENTS.md).
+ */
 export class EmbervaultEngine {
   container: HTMLElement;
   callbacks: EngineCallbacks;
@@ -301,7 +306,7 @@ export class EmbervaultEngine {
   }
 
   // ---------------------------------------------------------------------------------------------------------
-  // Heroes[] plumbing (P4-B): actor switching, bots, rescue
+  // Static helpers and constants (the per-hero / level / multiplayer methods live in src/game/engine/*.ts)
   // ---------------------------------------------------------------------------------------------------------
 
   static createQuietGroup(): THREE.Group {
@@ -335,10 +340,6 @@ export class EmbervaultEngine {
     const want = Number.isFinite(requested) ? Math.floor(requested as number) : max;
     return Math.max(1, Math.min(max, want));
   }
-
-  // ---------------------------------------------------------------------------------------------------------
-  // Level contexts (P4-C): the dungeon and the town each own a set of level fields; swap them in and out
-  // ---------------------------------------------------------------------------------------------------------
 
   static readonly RESCUE_RADIUS = 1.5;
   static readonly RESCUE_SECONDS = 3.0;
@@ -502,10 +503,6 @@ export class EmbervaultEngine {
     }
     return null;
   }
-
-  // =========================================================================
-  // FROST MAGE — combat core
-  // =========================================================================
 
   update(dt: number): void {
     // P7: while the room connection is being re-established the host freezes everything; a teammate freezes the dungeon view
@@ -799,5 +796,47 @@ type MovementMethods = typeof movementMethods;
 type AiMethods = typeof aiMethods;
 type FrameMethods = typeof frameMethods;
 type EnemiesMethods = typeof enemiesMethods;
-export interface EmbervaultEngine extends HudMethods, CoreMpMethods, HostMpMethods, GuestMpMethods, TownMpMethods, PartyMethods, SceneMethods, LevelBuildMethods, TownMethods, SpawnMethods, InputMethods, TravelMethods, EconomyMethods, HeroCombatMethods, ClassSkillsMethods, LootMethods, MovementMethods, AiMethods, FrameMethods, EnemiesMethods {}
-Object.assign(EmbervaultEngine.prototype, hudMethods, coreMpMethods, hostMpMethods, guestMpMethods, townMpMethods, partyMethods, sceneMethods, levelBuildMethods, townMethods, spawnMethods, inputMethods, travelMethods, economyMethods, heroCombatMethods, classSkillsMethods, lootMethods, movementMethods, aiMethods, frameMethods, enemiesMethods);
+export interface EmbervaultEngine
+  extends HudMethods,
+    CoreMpMethods,
+    HostMpMethods,
+    GuestMpMethods,
+    TownMpMethods,
+    PartyMethods,
+    SceneMethods,
+    LevelBuildMethods,
+    TownMethods,
+    SpawnMethods,
+    InputMethods,
+    TravelMethods,
+    EconomyMethods,
+    HeroCombatMethods,
+    ClassSkillsMethods,
+    LootMethods,
+    MovementMethods,
+    AiMethods,
+    FrameMethods,
+    EnemiesMethods {}
+Object.assign(
+  EmbervaultEngine.prototype,
+  hudMethods,
+  coreMpMethods,
+  hostMpMethods,
+  guestMpMethods,
+  townMpMethods,
+  partyMethods,
+  sceneMethods,
+  levelBuildMethods,
+  townMethods,
+  spawnMethods,
+  inputMethods,
+  travelMethods,
+  economyMethods,
+  heroCombatMethods,
+  classSkillsMethods,
+  lootMethods,
+  movementMethods,
+  aiMethods,
+  frameMethods,
+  enemiesMethods,
+);
