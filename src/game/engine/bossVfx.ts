@@ -345,14 +345,17 @@ void main() {
 }
 `;
 
-/** 70-degree Stained-Glass / Prism Fan Cone Shader (video 00:55-01:02). */
+/** 70-degree Gothic Stained-Glass / Prism Fan Cone Shader (4-color jewel palette, dark cathedral lead muntins, beveled facets, staggered ignition & fracture shatter). */
 const PRISM_CONE_FRAG = /* glsl */ `
 uniform float uTime;
 uniform float uProgress;
 uniform float uFade;
+uniform float uBurst;
 uniform float uHalfAngle;
 uniform vec3 uColor;
 uniform vec3 uCoreColor;
+uniform vec3 uColor3;
+uniform vec3 uColor4;
 varying vec2 vUv;
 
 vec2 hash2(vec2 p) {
@@ -363,18 +366,21 @@ vec2 hash2(vec2 p) {
 void main() {
   vec2 p = vUv * 2.0 - 1.0;
   float r = length(p);
-  if (r > 1.0 || r < 0.04) discard;
+  if (r > 1.0 || r < 0.05) discard;
   // Local +Y is forward aim direction
-  float ang = abs(atan(p.x, p.y));
+  float signedAng = atan(p.x, p.y);
+  float ang = abs(signedAng);
   if (ang > uHalfAngle) discard;
+  float angNorm = signedAng / max(uHalfAngle, 0.001);
 
-  // Voronoi stained-glass cells
-  vec2 uvCell = p * 6.5;
+  // Polar-aligned cathedral stained-glass Voronoi panes (naturally taper toward the apex like a rose-window fan)
+  vec2 uvCell = vec2(angNorm * 4.4, r * 6.2);
   vec2 n = floor(uvCell);
   vec2 f = fract(uvCell);
   float md = 8.0;
   float md2 = 8.0;
   vec2 cellId = vec2(0.0);
+  vec2 bestDiff = vec2(0.0);
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
       vec2 g = vec2(float(i), float(j));
@@ -385,31 +391,79 @@ void main() {
         md2 = md;
         md = d;
         cellId = n + g;
+        bestDiff = diff;
       } else if (d < md2) {
         md2 = d;
       }
     }
   }
-  float cellEdge = smoothstep(0.08, 0.02, md2 - md);
-  float cellHue = fract(sin(dot(cellId, vec2(41.3, 289.1))) * 43758.5453);
-  vec3 facetCol = mix(uColor, uCoreColor, 0.25 + 0.55 * cellHue);
 
-  // Crisp outer arc, side borders & 2 concentric distance arcs
-  float outerArc = smoothstep(0.94, 0.975, r);
-  float sideEdge = smoothstep(uHalfAngle - 0.045, uHalfAngle - 0.01, ang);
-  float midArcs = smoothstep(0.025, 0.008, abs(r - 0.48)) + smoothstep(0.025, 0.008, abs(r - 0.74));
+  float edgeDist = md2 - md;
+  float leadMask = smoothstep(0.09, 0.028, edgeDist);
+  float glassBevel = smoothstep(0.15, 0.08, edgeDist) * (1.0 - leadMask);
 
-  // Fill sweep outward with uProgress
-  float fillMask = 1.0 - smoothstep(uProgress - 0.08, uProgress + 0.02, r);
-  float sweepWave = smoothstep(0.09, 0.0, abs(r - uProgress));
+  // 4-color hand-tuned jewel stained-glass palette + 3D beveled facet gradient
+  float cellRand = fract(sin(dot(cellId, vec2(41.3, 289.1))) * 43758.5453);
+  float cellRand2 = fract(sin(dot(cellId, vec2(127.1, 73.7))) * 29311.3127);
+  vec3 jewel = cellRand < 0.25 ? uColor
+             : cellRand < 0.50 ? uCoreColor
+             : cellRand < 0.75 ? uColor3
+             : uColor4;
+  float facetTilt = clamp(dot(normalize(bestDiff + vec2(0.001)), vec2(0.55, 0.83)) * 0.5 + 0.5, 0.0, 1.0);
+  vec3 facetCol = mix(jewel * 0.58, jewel * 1.42 + vec3(0.15), facetTilt);
 
-  float border = clamp(outerArc + sideEdge + midArcs * 0.75, 0.0, 1.0);
-  float shimmer = 0.75 + 0.25 * sin(uTime * 10.0 + cellHue * 6.283);
+  // Iridescent prismatic light sweep gliding across the cut glass panes
+  float sweepPhase = sin(r * 11.5 - uTime * 7.5 + angNorm * 3.8 + cellRand * 6.2831);
+  float iridescence = smoothstep(0.62, 0.99, sweepPhase);
+  vec3 prismSheen = mix(uCoreColor, vec3(1.0, 0.97, 0.88), 0.55) * iridescence * 0.78;
 
-  vec3 col = facetCol * (0.28 + fillMask * 0.52) * shimmer * (1.0 - cellEdge * 0.45)
-           + vec3(1.0, 0.98, 1.0) * (border * 1.35 + sweepWave * 1.15 + cellEdge * 0.25);
+  // Cathedral Gothic fan frame: 5 radial muntin ribs, 2 concentric arches & scalloped pointed-arch outer border
+  float ribWave = abs(fract(angNorm * 2.0 + 0.5) - 0.5);
+  float radialRib = smoothstep(0.055, 0.018, ribWave) * smoothstep(0.08, 0.18, r);
+  float sideBorder = smoothstep(uHalfAngle - 0.045, uHalfAngle - 0.012, ang);
+  float scallop = 0.032 * abs(sin(angNorm * 3.14159265 * 4.0));
+  float outerArch = smoothstep(0.922 - scallop, 0.96 - scallop, r);
+  float outerRim = smoothstep(0.966, 0.992, r);
+  float innerArch = smoothstep(0.022, 0.006, abs(r - 0.26)) + smoothstep(0.024, 0.007, abs(r - 0.58));
 
-  float alpha = clamp((0.28 + fillMask * 0.42 + border * 0.95 + sweepWave * 0.8) * uFade, 0.0, 1.0);
+  float frameLead = clamp(radialRib * 0.92 + outerArch * 0.75 + innerArch * 0.88, 0.0, 1.0);
+  float brightOutline = clamp(sideBorder + outerRim + innerArch * 0.65 + radialRib * 0.52, 0.0, 1.0);
+
+  // Stage transitions: windup staggered ignition -> final 22% supercharge -> eruption -> 0.32s seam fracture & pane shatter
+  float isBurst = step(0.001, uBurst);
+  float eruptionBoost = smoothstep(0.0, 0.12, uBurst);
+  float shatterT = clamp((uBurst - 0.5) * 2.0, 0.0, 1.0);
+  float compress = mix(smoothstep(0.78, 1.0, uProgress), 0.0, isBurst);
+
+  float paneGate = r * 0.76 + cellRand2 * 0.18;
+  float lit = mix(smoothstep(paneGate - 0.06, paneGate + 0.05, uProgress), 1.0, isBurst);
+  float sweepWave = mix(smoothstep(0.085, 0.0, abs(r - uProgress)), 0.0, isBurst);
+
+  float crackFlash = step(0.5001, uBurst) * exp(-shatterT * 4.2) * (leadMask + frameLead);
+  float paneSurvive = mix(1.0, 1.0 - smoothstep(cellRand2 * 0.76, cellRand2 * 0.76 + 0.16, shatterT * 1.18), step(0.5001, uBurst));
+
+  // Crisp dark cathedral lead lines that glow gilded white-gold during compression & shatter
+  vec3 leadBase = vec3(0.05, 0.03, 0.09);
+  vec3 leadGlow = mix(uCoreColor, vec3(1.0, 0.97, 0.88), 0.72);
+  float seamHot = clamp(compress * 0.9 + crackFlash * 2.3 + sweepWave * 0.75, 0.0, 1.6);
+  vec3 leadCol = mix(leadBase, leadGlow, clamp(seamHot, 0.0, 1.0))
+               + vec3(1.0, 0.96, 0.88) * max(0.0, seamHot - 0.75);
+
+  float shimmer = 0.88 + 0.12 * sin(uTime * 11.0 + cellRand * 6.2831);
+  vec3 glassCol = facetCol * (0.48 + lit * 0.92 + eruptionBoost * 0.42) * shimmer
+                + prismSheen * (0.35 + lit * 0.95)
+                + jewel * glassBevel * (0.6 + lit * 0.85);
+
+  float totalLead = clamp(leadMask + frameLead, 0.0, 1.0);
+  vec3 col = mix(glassCol, leadCol, totalLead * 0.88);
+  col += mix(uCoreColor, vec3(1.0, 0.98, 0.92), 0.65)
+       * (brightOutline * (0.72 + compress * 0.85 + eruptionBoost * 0.45) + sweepWave * 1.2);
+  col += vec3(1.0, 0.98, 0.95) * crackFlash * 1.3;
+
+  float paneAlpha = (0.36 + lit * 0.50 + eruptionBoost * 0.10) * paneSurvive;
+  float leadAlpha = totalLead * (0.86 * paneSurvive + crackFlash * 0.95);
+  float outlineAlpha = (brightOutline * 0.94 + sweepWave * 0.88) * mix(1.0, 1.0 - shatterT * 0.85, step(0.5001, uBurst));
+  float alpha = clamp(max(max(paneAlpha, leadAlpha), outlineAlpha) * uFade, 0.0, 1.0);
   gl_FragColor = vec4(col, alpha);
 }
 `;
@@ -856,6 +910,22 @@ export interface BossWindupRig {
   orbitalGuideBeam?: THREE.Mesh;
 }
 
+/** 4-color Gothic stained-glass jewel palette per Boss theme for `prism_cone`. */
+function getPrismPalette(bossKind?: FloorBossKind, fallbackHex = 0xb838ff): readonly [number, number, number, number] {
+  if (bossKind === 'boss_leviathan_heart') {
+    // 25F Flesh/Crimson Cathedral: ruby crimson, molten gold, violet-magenta, ember amber
+    return [0xff245c, 0xffc234, 0xd828ff, 0xff5e24];
+  }
+  if (bossKind === 'boss_xeno_commander') {
+    // 35F Plasma/Xeno Cathedral: plasma violet, ice cyan, neon magenta, royal sapphire
+    return [0xb838ff, 0x24e8ff, 0xff2eb8, 0x3b7bff];
+  }
+  if (bossKind === 'boss_crystal_wyrm') {
+    return [0x38d8ff, 0xc855ff, 0x38ffa8, 0xff55cc];
+  }
+  return [fallbackHex, 0x24e8ff, 0xff2eb8, 0xffc234];
+}
+
 const _unitPlaneGeo = new THREE.PlaneGeometry(2, 2);
 const _unitBeamFloorGeo = new THREE.PlaneGeometry(1, 1);
 const _unitCylGeo = new THREE.CylinderGeometry(1, 1, 1, 14, 1, true);
@@ -933,6 +1003,8 @@ export const bossVfxMethods = {
           uHalfAngle: { value: BOSS_PRISM.halfAngle },
           uColor: { value: dummyColor },
           uCoreColor: { value: dummyColor },
+          uColor3: { value: dummyColor },
+          uColor4: { value: dummyColor },
         },
         transparent: true,
         depthWrite: false,
@@ -1146,12 +1218,8 @@ export const bossVfxMethods = {
         ? 0x38c8ff
         : cfg.telegraphColor;
     const color = new THREE.Color(effColorHex);
-    const prismAccent =
-      e.kind === 'boss_crystal_wyrm'
-        ? new THREE.Color(0xd96bff)
-        : e.kind === 'boss_leviathan_heart'
-        ? new THREE.Color(0xffb84d)
-        : new THREE.Color(0x38e8ff);
+    const prismPalette = getPrismPalette(e.kind as FloorBossKind, effColorHex);
+    const prismAccent = new THREE.Color(prismPalette[1]);
 
     let rig = this.bossWindupRigs.get(e.id);
     if (!rig || rig.skill !== skill) {
@@ -1187,12 +1255,14 @@ export const bossVfxMethods = {
           uFade: { value: 1 },
           uBurst: { value: 0 },
           uHalfAngle: { value: BOSS_PRISM.halfAngle },
-          uColor: { value: color.clone() },
-          uCoreColor: { value: prismAccent.clone() },
+          uColor: { value: skill === 'prism_cone' ? new THREE.Color(prismPalette[0]) : color.clone() },
+          uCoreColor: { value: new THREE.Color(prismPalette[1]) },
+          uColor3: { value: new THREE.Color(prismPalette[2]) },
+          uColor4: { value: new THREE.Color(prismPalette[3]) },
         },
         transparent: true,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
+        blending: skill === 'prism_cone' ? THREE.NormalBlending : THREE.AdditiveBlending,
         side: THREE.DoubleSide,
         polygonOffset: true,
         polygonOffsetFactor: -3,
@@ -1996,7 +2066,9 @@ export const bossVfxMethods = {
           -Math.sin(ang) * (3.2 + progress * 4.0),
           1.2 + Math.random() * 1.4,
           -Math.cos(ang) * (3.2 + progress * 4.0),
-          compress > 0 || Math.random() < 0.4 ? 0xffffff : Math.random() < 0.5 ? cfg.telegraphColor : prismAccent.getHex(),
+          compress > 0 || Math.random() < 0.3
+            ? 0xffffff
+            : prismPalette[Math.floor(Math.random() * prismPalette.length)],
           0.82,
           0.28,
           -0.4
@@ -3991,10 +4063,11 @@ export const bossVfxMethods = {
   },
 
   /**
-   * `prism_cone` Stained-Glass / Crystal Fan Eruption & Shatter VFX (video 00:55-01:02):
-   * - Lingering stained-glass prism fan floor decal
-   * - 14 staggered 3D translucent crystal/bone/plasma prisms erupting outward across the 70-degree cone
-   * - Collective shatter at 0.28s into sparkling multi-hued crystal shards + burst PointLight
+   * `prism_cone` Upgraded Cathedral Stained-Glass Fan Eruption & Shatter VFX:
+   * - 4-color Gothic stained-glass fan floor decal with crisp dark lead muntins, beveled facets & 0.32s fracture shatter
+   * - Radial Impact Flash + forward crescent shockwave + white-hot focal flash
+   * - 14 multi-colored 3D translucent stained-glass prism spires erupting across the 70-degree cone
+   * - Collective shatter at 0.32s: floor seams overexpose & shatter + 22 tumbling stained-glass voxel shards + 20 energy bars
    */
   spawnBossPrismConeVfx(
     this: EmbervaultEngine,
@@ -4007,38 +4080,36 @@ export const bossVfxMethods = {
     bossKind?: FloorBossKind
   ): void {
     if (this.bgSim) return;
-    const isCrystal = bossKind === 'boss_crystal_wyrm';
-    const isFlesh = bossKind === 'boss_leviathan_heart';
-    const color = new THREE.Color(colorHex);
-    const accent = isCrystal
-      ? new THREE.Color(0xd96bff)
-      : isFlesh
-      ? new THREE.Color(0xffb84d)
-      : new THREE.Color(0x38e8ff);
+    const palette = getPrismPalette(bossKind, colorHex);
+    const color = new THREE.Color(palette[0]);
+    const accent = new THREE.Color(palette[1]);
 
     const group = new THREE.Group();
     group.position.set(ox, 0, oz);
 
     const cx = ox + Math.sin(baseAngle) * (range * 0.55);
     const cz = oz + Math.cos(baseAngle) * (range * 0.55);
-    this.triggerBossBurstLight(cx, 1.8, cz, colorHex, 185, 0.58);
-    this.triggerBossImpactFlash(cx, cz, colorHex, 0.96, 0.15);
+    this.triggerBossBurstLight(cx, 1.8, cz, palette[0], 185, 0.58);
+    this.triggerBossImpactFlash(cx, cz, palette[0], 0.96, 0.15);
 
-    // 1. Lingering stained-glass prism fan floor decal
+    // 1. Backlit Gothic stained-glass prism fan floor decal (NormalBlending for crisp dark lead muntins & jewel hues!)
     const fanMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT,
       fragmentShader: PRISM_CONE_FRAG,
       uniforms: {
         uTime: { value: this.elapsed },
         uProgress: { value: 1.0 },
-        uFade: { value: 0.95 },
+        uFade: { value: 0.98 },
+        uBurst: { value: 0.15 },
         uHalfAngle: { value: halfAngle },
-        uColor: { value: color.clone() },
-        uCoreColor: { value: accent.clone() },
+        uColor: { value: new THREE.Color(palette[0]) },
+        uCoreColor: { value: new THREE.Color(palette[1]) },
+        uColor3: { value: new THREE.Color(palette[2]) },
+        uColor4: { value: new THREE.Color(palette[3]) },
       },
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: -3,
@@ -4094,7 +4165,7 @@ export const bossVfxMethods = {
     flashMesh.scale.setScalar(3.4);
     group.add(flashMesh);
 
-    // 2. 3 rows of staggered 3D prism spires inside the 70-degree cone
+    // 2. 3 rows of staggered 4-color stained-glass 3D prism spires inside the 70-degree cone
     const rows = this.isSoftwareGl ? [2, 3] : [3, 5, 6];
     const prisms: Array<{ mesh: THREE.Mesh; delay: number; maxH: number; wx: number; wz: number; col: number; shattered: boolean }> = [];
     rows.forEach((count, rowIdx) => {
@@ -4105,13 +4176,13 @@ export const bossVfxMethods = {
         const ang = baseAngle + u * (halfAngle * 0.86);
         const px = Math.sin(ang) * dist;
         const pz = Math.cos(ang) * dist;
-        const colHex = i % 2 === 0 ? colorHex : accent.getHex();
+        const colHex = palette[(rowIdx * 3 + i) % palette.length];
         const mat = new THREE.MeshStandardMaterial({
           color: colHex,
           emissive: colHex,
-          emissiveIntensity: 1.5,
-          roughness: 0.14,
-          metalness: 0.25,
+          emissiveIntensity: 1.55,
+          roughness: 0.12,
+          metalness: 0.28,
           transparent: true,
           opacity: 0.9,
         });
@@ -4126,8 +4197,8 @@ export const bossVfxMethods = {
       }
     });
 
-    // 3. 18 Tumbling & Bouncing 3D Voxel Prism Debris Cubes (erupt on collective shatter beat!)
-    const debrisCount = this.isSoftwareGl ? 6 : 18;
+    // 3. 22 Tumbling & Bouncing Multi-Colored Stained-Glass Voxel Shards (erupt on collective shatter beat!)
+    const debrisCount = this.isSoftwareGl ? 6 : 22;
     const debris: Array<{
       mesh: THREE.Mesh;
       vx: number;
@@ -4140,15 +4211,15 @@ export const bossVfxMethods = {
     for (let i = 0; i < debrisCount; i++) {
       const u = (Math.random() - 0.5) * 2;
       const ang = baseAngle + u * (halfAngle * 0.92);
-      const dist = range * (0.28 + Math.random() * 0.68);
-      const colHex = i % 3 === 0 ? 0xffffff : i % 2 === 0 ? colorHex : accent.getHex();
+      const dist = range * (0.24 + Math.random() * 0.72);
+      const colHex = i % 5 === 0 ? 0xffffff : palette[i % palette.length];
       const size = 0.15 + Math.random() * 0.18;
       const mat = new THREE.MeshStandardMaterial({
         color: colHex,
         emissive: colHex,
-        emissiveIntensity: 1.45,
-        roughness: 0.16,
-        metalness: 0.3,
+        emissiveIntensity: 1.5,
+        roughness: 0.12,
+        metalness: 0.32,
         transparent: true,
         opacity: 1,
       });
@@ -4170,7 +4241,7 @@ export const bossVfxMethods = {
       });
     }
 
-    // 4. 20 High-speed Velocity-Stretched Voxel Energy Bars blasting forward across the 70-degree cone!
+    // 4. 20 High-speed Multi-Colored Velocity-Stretched Voxel Energy Bars blasting forward across the 70-degree cone!
     const streakCount = this.isSoftwareGl ? 8 : 20;
     const streaks: Array<{
       mesh: THREE.Mesh;
@@ -4189,7 +4260,7 @@ export const bossVfxMethods = {
       const szDir = Math.cos(ang);
       const startD = onShatter ? range * (0.3 + Math.random() * 0.55) : 0.7 + Math.random() * 1.2;
       const mat = new THREE.MeshBasicMaterial({
-        color: i % 3 === 0 ? 0xffffff : i % 2 === 0 ? colorHex : accent.getHex(),
+        color: i % 5 === 0 ? 0xffffff : palette[i % palette.length],
         transparent: true,
         opacity: 0.96,
         blending: THREE.AdditiveBlending,
@@ -4224,7 +4295,14 @@ export const bossVfxMethods = {
       update: (dt, _t, elapsed) => {
         const age = (group.userData.age = (group.userData.age ?? 0) + dt);
         fanMat.uniforms.uTime.value = elapsed;
-        fanMat.uniforms.uFade.value = Math.pow(1 - Math.min(1, age / maxLife), 1.3) * 0.92;
+        if (age < shatterAt) {
+          fanMat.uniforms.uBurst.value = 0.15 + (age / shatterAt) * 0.34;
+          fanMat.uniforms.uFade.value = 0.98;
+        } else {
+          const sFrac = Math.min(1, (age - shatterAt) / (maxLife - shatterAt));
+          fanMat.uniforms.uBurst.value = 0.5 + sFrac * 0.5;
+          fanMat.uniforms.uFade.value = Math.pow(1 - sFrac, 1.15) * 0.96;
+        }
 
         const ft = Math.min(1, age / 0.24);
         flashMesh.visible = ft < 1;
