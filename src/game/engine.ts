@@ -345,6 +345,14 @@ interface BossConfig {
   projectileKind?: ProjectileKind;
 }
 
+/**
+ * Town station grid positions (single source for visuals, minimap blips, proximity checks and AI pathing).
+ * Screen-up on the isometric camera is -(gx+gz); screen-right is +(gx-gz); plaza centre is (13, 13).
+ */
+const TOWN_SHOP_GRID = { gx: 9, gz: 17 };
+const TOWN_ALTAR_GRID = { gx: 11, gz: 19 };
+const TOWN_STASH_GRID = { gx: 17, gz: 18 };
+
 const DUNGEON_BOSS_ROTATION: FloorBossKind[] = [
   'boss_juggernaut',
   'boss_lich',
@@ -2952,8 +2960,8 @@ export class EmbervaultEngine {
       keyPos: { gx: -10, gz: -10 },
       doorPos: { gx: -10, gz: -10, horizontal: true },
       stairsPos: { gx: 19, gz: 11 }, // Town Portal on screen RIGHT (cyan blip on minimap)
-      shopPos: { gx: 8, gz: 17 }, // Potion Shop on screen LEFT
-      altarPos: { gx: 11, gz: 20 }, // Upgrade Altar on screen LEFT (same side as Potion Shop)
+      shopPos: { ...TOWN_SHOP_GRID }, // Potion Shop on screen LEFT
+      altarPos: { ...TOWN_ALTAR_GRID }, // Upgrade Altar on screen LEFT (same side as Potion Shop)
       props: [],
       biome: townBiome,
     };
@@ -3131,9 +3139,9 @@ export class EmbervaultEngine {
       kind: 'angel',
     });
 
-    // 6. Outdoor Potion Shop on screen LEFT at (8, 17)
+    // 6. Outdoor Potion Shop on screen LEFT (TOWN_SHOP_GRID)
     {
-      const sw = gridToWorld(8, 17);
+      const sw = gridToWorld(TOWN_SHOP_GRID.gx, TOWN_SHOP_GRID.gz);
       const shop = createPotionShop(this.textures.glowMap);
       shop.root.position.set(sw.x, 0, sw.z);
       this.townGroup.add(shop.root);
@@ -3154,9 +3162,9 @@ export class EmbervaultEngine {
       });
     }
 
-    // 7. Outdoor Upgrade Altar on screen LEFT (same side as Potion Shop) at (11, 20)
+    // 7. Outdoor Upgrade Altar on screen LEFT (same side as Potion Shop) (TOWN_ALTAR_GRID)
     {
-      const aw = gridToWorld(11, 20);
+      const aw = gridToWorld(TOWN_ALTAR_GRID.gx, TOWN_ALTAR_GRID.gz);
       const altar = createUpgradeAltar(this.textures.glowMap);
       altar.root.position.set(aw.x, 0, aw.z);
       this.townGroup.add(altar.root);
@@ -3199,9 +3207,9 @@ export class EmbervaultEngine {
       });
     }
 
-    // 8b. Stash chest (town warehouse) at (18, 20): open plaza corner, clear of portal, altar and shop
+    // 8b. Stash chest (town warehouse) at TOWN_STASH_GRID: open plaza area, clear of portal, altar and shop
     {
-      const cg = { gx: 18, gz: 20 };
+      const cg = TOWN_STASH_GRID;
       const cw = gridToWorld(cg.gx, cg.gz);
       const chest = createStashChest(this.textures.glowMap);
       chest.root.position.set(cw.x, 0, cw.z);
