@@ -52,7 +52,10 @@ export const guestMpMethods = {
     local.rig.body.position.y = 0;
     g.depth = lv.n;
     this.depth = lv.n;
-    this.buildLevel(lv.n, { mpSeed: lv.seed, guest: true });
+    const mpTreasure = lv.tr
+      ? { roomId: lv.tr.r, chests: lv.tr.c.map(([gx, gz, opened]) => ({ gx, gz, opened: opened === 1 })) }
+      : undefined;
+    this.buildLevel(lv.n, { mpSeed: lv.seed, guest: true, mpTreasure });
     g.built = true;
     this.mpApplyViewGroupsForRemotes();
     this.mpGuestApplySnapshot(lv.snap, true);
@@ -581,6 +584,17 @@ export const guestMpMethods = {
       if (lp.halo) lp.halo.visible = false;
       if (lp.decal) (lp.decal.material as THREE.MeshBasicMaterial).opacity = 0.46;
       if (lp.pool) (lp.pool.material as THREE.MeshBasicMaterial).opacity = 0.12;
+    }
+    // Treasure chests the host opened (the burst plays once; a chest built already open stays as it is)
+    const treasure = this.dungeon.treasure;
+    if (w.tc && treasure) {
+      for (const i of w.tc) {
+        const c = treasure.chests[i];
+        if (!c || c.opened) continue;
+        c.opened = true;
+        this.playChestOpened(i);
+        this.emitMinimap();
+      }
     }
     for (const i of w.br) {
       const br = this.breakables[i];
