@@ -77,7 +77,7 @@ export const levelBuildMethods = {
     // later, see enterDungeonFromTown). Raising it is a save point; restoring a frozen floor is not.
     let localDepthRaised = false;
     for (const h of this.heroes) {
-      if (h.inTown || depth <= h.maxDepthReached) continue;
+      if (h.inTown || this.devDepthRun || depth <= h.maxDepthReached) continue;
       h.maxDepthReached = depth;
       if (h === this.localHero) localDepthRaised = true;
     }
