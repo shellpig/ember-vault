@@ -281,6 +281,7 @@ export const sceneMethods = {
       const dist = Math.hypot(lp.x - this.hero.x, lp.z - this.hero.z);
       if (lp.kind === 'key' && this.hasKey) continue;
       if (lp.kind === 'gate' && this.doorUnlocked) continue;
+      if (lp.kind === 'chest' && lp.used) continue; // an opened treasure chest stops glowing
       if (dist > maxLightDist) continue;
 
       let intensity = lp.baseIntensity;
@@ -403,7 +404,8 @@ export const sceneMethods = {
         lp.kind === 'shop' ||
         lp.kind === 'angel' ||
         lp.kind === 'portal' ||
-        lp.kind === 'stash'
+        lp.kind === 'stash' ||
+        lp.kind === 'chest'
           ? -4.5
           : lp.kind === 'rune' || lp.kind === 'key' || lp.kind === 'stairs'
           ? -3.5

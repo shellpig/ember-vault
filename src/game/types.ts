@@ -56,6 +56,21 @@ export interface DungeonPropData {
   facing?: number; // radians for wall torches / banners
 }
 
+/** One chest of the treasure room. `opened` is the only part that changes after the floor was built. */
+export interface TreasureChestData {
+  gx: number;
+  gz: number;
+  opened: boolean;
+}
+
+/** The floor's treasure room (docs/treasure-room-spec.md): which room, and where its chests stand. */
+export interface TreasureRoomData {
+  roomId: number;
+  chests: TreasureChestData[];
+  /** The local hero already got the "treasure room found" banner for this floor (per client, not synced). */
+  announced?: boolean;
+}
+
 export interface DungeonData {
   width: number;
   height: number;
@@ -69,6 +84,8 @@ export interface DungeonData {
   stairsPos: { gx: number; gz: number };
   altarPos?: { gx: number; gz: number };
   shopPos?: { gx: number; gz: number };
+  /** Set by the host (or the single player engine) right after generation; teammates receive it in the `level` payload. */
+  treasure?: TreasureRoomData;
   biome: BiomeConfig;
   /** The random part of the generator seed (multiplayer: the host announces it so every client builds the same map). */
   genSeed?: number;
@@ -205,6 +222,8 @@ export interface MinimapSnapshot {
   altarZ?: number;
   shopX?: number;
   shopZ?: number;
+  /** Treasure room chests (gold = still closed, grey = opened); drawn only where the tile was explored. */
+  chests?: Array<{ x: number; z: number; opened: boolean }>;
   enemies: Array<{ x: number; z: number; isBoss?: boolean; isElite?: boolean }>;
   relics?: Array<{ x: number; z: number; rarity: RelicRarity }>;
 }
@@ -326,6 +345,8 @@ export interface HudState {
   discoveredRelicIds: string[];
   inTown: boolean;
   nearPortal: boolean;
+  /** Dungeon: the local hero stands next to a treasure chest that can be opened (F). */
+  nearChest: boolean;
   /** Doors the town gate can lead to (own portal, teammates' portals, or the floor entrance). Empty outside town. */
   portalOptions: TownPortalOption[];
   /** In town: teammates are still fighting in the dungeon (it keeps running, monsters will not respawn). */

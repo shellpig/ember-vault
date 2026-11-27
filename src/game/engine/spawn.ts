@@ -13,6 +13,10 @@ export const spawnMethods = {
       (r) => r.role !== 'start' && r.role !== 'key' && r.role !== 'exit'
     );
     const lastCombatRoomId = combatRooms[combatRooms.length - 1]?.id ?? -1;
+    // The treasure room (docs/treasure-room-spec.md 2) holds no monsters, no swarms and none of the headcount bonus mobs.
+    // The room is never the last combat room (that one carries the guaranteed floor elite), see pickTreasureRoom.
+    const treasureRoomId = this.dungeon.treasure?.roomId ?? -1;
+    const monsterRooms = combatRooms.filter((r) => r.id !== treasureRoomId);
     let elitesSpawned = 0;
     const maxElites = Math.min(4, 1 + Math.floor(this.dungeon.rooms.length / 6));
 
@@ -115,7 +119,7 @@ export const spawnMethods = {
     let swarmPacksSpawned = 0;
 
     for (const room of this.dungeon.rooms) {
-      if (room.role === 'start') continue;
+      if (room.role === 'start' || room.id === treasureRoomId) continue;
 
       if (room.role === 'key') {
         if (isBossFloor) {
@@ -249,8 +253,8 @@ export const spawnMethods = {
     }
 
     // Guarantee at least one fast swarm pack appears on every floor
-    if (swarmPacksSpawned === 0 && combatRooms.length > 0) {
-      const targetRoom = combatRooms[Math.floor(combatRooms.length / 2)];
+    if (swarmPacksSpawned === 0 && monsterRooms.length > 0) {
+      const targetRoom = monsterRooms[Math.floor(monsterRooms.length / 2)];
       if (this.dungeon.tiles[targetRoom.cz]?.[targetRoom.cx] === 1) {
         spawnSwarmPack(targetRoom.cx, targetRoom.cz);
       }
@@ -259,11 +263,11 @@ export const spawnMethods = {
     // Spec §4 headcount scaling: +10% monsters per extra hero. The bonus is computed from the whole floor's regular
     // monster count (so it is felt even when every pack is tiny) and dealt out one by one over the combat rooms.
     const extraHeroes = this.getHeroCount() - 1;
-    if (extraHeroes > 0 && combatRooms.length > 0) {
+    if (extraHeroes > 0 && monsterRooms.length > 0) {
       const regularCount = this.enemies.filter((e) => !e.isBoss).length;
       const bonus = Math.floor((regularCount * extraHeroes) / 10);
       for (let i = 0; i < bonus; i++) {
-        const room = combatRooms[i % combatRooms.length];
+        const room = monsterRooms[i % monsterRooms.length];
         const kind = themePool[(room.id * 2 + i + 1) % themePool.length];
         for (let attempt = 0; attempt < 8; attempt++) {
           const gx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));

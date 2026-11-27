@@ -183,6 +183,7 @@ const INITIAL_HUD: HudState = {
   hasShopOnFloor: false,
   inTown: false,
   nearPortal: false,
+  nearChest: false,
   portalOptions: [],
   dungeonRunning: false,
   nearAngel: false,
@@ -440,6 +441,17 @@ export default function App() {
       ctx.fillRect(snap.shopX * cell - 1, snap.shopZ * cell - 1, cell + 2, cell + 2);
       ctx.fillStyle = '#ffd6e0';
       ctx.fillRect(snap.shopX * cell, snap.shopZ * cell, cell, cell);
+    }
+
+    // Treasure room chests: gold while closed, grey once opened (only where the tile was explored)
+    if (snap.chests) {
+      for (const c of snap.chests) {
+        if (!snap.explored[c.z]?.[c.x]) continue;
+        ctx.fillStyle = c.opened ? '#3d424e' : '#8a5a10';
+        ctx.fillRect(c.x * cell - 1, c.z * cell - 1, cell + 2, cell + 2);
+        ctx.fillStyle = c.opened ? '#9097a6' : '#ffd24a';
+        ctx.fillRect(c.x * cell, c.z * cell, cell, cell);
+      }
     }
 
     // Dropped Relic markers on minimap (highlight Orange & Green drops brightly)
@@ -1790,7 +1802,36 @@ export default function App() {
           </div>
         )}
 
-        {!hud.inTown && hud.nearPortal && !hud.nearAltar && !hud.nearShop && !hud.rescuePrompt && (
+        {!hud.inTown && hud.nearChest && !hud.nearAltar && !hud.nearShop && !hud.rescuePrompt && (
+          <div
+            data-testid="chest-prompt"
+            className="mb-2.5 bg-[#0c0e14]/95 border border-[#d9a441] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[#403320] pb-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Archive className="w-4 h-4 text-[#ffd566] shrink-0" />
+                <span className="font-display text-xs font-bold tracking-[0.12em] text-[#f5dc99] whitespace-nowrap">
+                  寶箱 · TREASURE CHEST
+                </span>
+              </div>
+              <span className="font-hud text-[11px] text-[#e8c777] whitespace-nowrap">按 F 開啟</span>
+            </div>
+            <button
+              type="button"
+              data-testid="chest-open"
+              onClick={() => engineRef.current?.useNearbyTreasureChest()}
+              className="w-full flex items-center justify-between gap-2 px-3 py-2 border border-[#b8903a] bg-[#261d0e] hover:border-[#f0c75e] hover:bg-[#332712] text-[#ffe3a0] font-hud text-xs font-semibold transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <Archive className="w-4 h-4 text-[#ffd25a] shrink-0" />
+                <span>打開寶箱</span>
+              </div>
+              <span className="font-hud text-[11px] text-[#e0bf74] whitespace-nowrap">按 F 或點擊</span>
+            </button>
+          </div>
+        )}
+
+        {!hud.inTown && hud.nearPortal && !hud.nearChest && !hud.nearAltar && !hud.nearShop && !hud.rescuePrompt && (
           <div className="mb-2.5 bg-[#0c0e14]/95 border border-[#49c8f0] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2">
             <div className="flex items-center justify-between gap-3 border-b border-[#1f3b4a] pb-2">
               <div className="flex items-center gap-2 min-w-0">

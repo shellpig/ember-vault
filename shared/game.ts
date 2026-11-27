@@ -89,7 +89,9 @@ export type CommandPayload =
   /** Back to town (B, or free = 1 when walking through an existing dungeon portal). */
   | { c: 'town'; free?: 1 }
   /** The "回到城鎮" button on the downed screen. */
-  | { c: 'death' };
+  | { c: 'death' }
+  /** Treasure room: open chest number `i` (index in the level payload's chest list; the host checks reach and state). */
+  | { c: 'chest'; i: number };
 
 export interface HandbackPayload {
   /** Hero id whose portal to leave through, or 'entrance'. */
@@ -134,6 +136,8 @@ export interface LevelPayload {
   fl?: 1;
   /** The complete world (all enemies etc.). */
   snap: SnapshotPayload;
+  /** Optional (treasure room floors only): room id and chests as [gx, gz, opened 0 | 1]. Older clients ignore it. */
+  tr?: { r: number; c: Array<[number, number, 0 | 1]> };
   /** The receiver's own private state. */
   priv: PrivatePayload;
 }
@@ -196,6 +200,8 @@ export interface WorldSnap {
   ru: number[];
   /** Indices (in build order) of the broken crates / urns */
   br: number[];
+  /** Optional (treasure room floors only): indices of the opened treasure chests. Older clients ignore it. */
+  tc?: number[];
 }
 
 /**

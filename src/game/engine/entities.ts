@@ -3,7 +3,7 @@ import type { RoomMember } from '../../../shared/room';
 import { HeroClassId, PetSpecies } from '../classes';
 import { BossActionType, BossSkillKind } from './data';
 import type { CharacterLoadout } from '../hero';
-import { BossTelegraphRig, EnemyRig, GateRig, PetRig, RelicLootRig, SpikeTrapRig, TownPortalRig } from '../models';
+import { BossTelegraphRig, EnemyRig, GateRig, PetRig, RelicLootRig, SpikeTrapRig, TownPortalRig, TreasureChestRig } from '../models';
 import { RelicItem } from '../relics';
 import { DungeonTextureSet } from '../textures';
 import { BossAttackState, DungeonData, EnemyKind, ProjectileKind } from '../types';
@@ -348,10 +348,19 @@ export interface AnimatedLightProp {
     | 'portal'
     | 'angel'
     | 'stash'
+    | 'chest'
     | 'lamp';
   used?: boolean;
   /** For `kind: 'portal'` lights of a hero's dungeon portal: whose portal it is. */
   heroId?: string;
+}
+
+/** A treasure chest model in the scene (index-aligned with `dungeon.treasure.chests`; the opened flag lives there). */
+export interface TreasureChestEntity {
+  rig: TreasureChestRig;
+  light: AnimatedLightProp;
+  x: number;
+  z: number;
 }
 
 export interface SavedDungeonSnapshot {
@@ -404,6 +413,7 @@ export interface LevelCtx {
   hasKey: boolean;
   doorUnlocked: boolean;
   heroPortalRigs: Map<string, TownPortalRig>;
+  treasureRigs: TreasureChestEntity[];
 }
 
 export interface WallOcclusionTile {
