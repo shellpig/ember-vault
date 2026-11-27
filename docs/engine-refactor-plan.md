@@ -100,9 +100,9 @@ Object.assign(EmbervaultEngine.prototype, hudMethods);   // 執行期掛回原�
 
 ## 5. 完成狀態
 
-- [ ] R0
-- [ ] R1
-- [ ] R2
-- [ ] R3
-- [ ] R4
+- [x] R0（另含 `scratch.ts`，因 `hud.ts` 用到共用暫存向量）
+- [x] R1
+- [x] R2（`mp/` 另分出 `core.ts`，共 4 檔）
+- [x] R3（`findNearbyDungeonPortal` 因預設參數 `= this.hero` 造成 TS 循環推導而留在 `engine.ts`）
+- [x] R4（待使用者實玩確認後合併 `main`）
 - [ ] R5（選做）

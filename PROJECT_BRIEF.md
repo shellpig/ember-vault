@@ -29,7 +29,8 @@
 │   ├── mage-spec.md              # 冰雪法師規格書
 │   ├── hunter-spec.md            # 亞馬遜獵人規格書（弓箭、戰寵、升級、遺物特例）
 │   ├── p1-setup.md               # P1 Google OAuth、D1 與本機開發設定指南
-│   └── p5-setup.md               # P5-A Room Worker 部署、本機三開與流量預算指南
+│   ├── p5-setup.md               # P5-A Room Worker 部署、本機三開與流量預算指南
+│   └── engine-refactor-plan.md   # engine.ts 拆檔重構施工規格與完成狀態（R0～R5）
 ├── migrations/
 │   └── 0001_init.sql             # D1 schema：accounts, sessions, characters, trades
 ├── shared/                       # 瀏覽器／Pages Functions／Room Worker 共用純 TS
@@ -52,8 +53,16 @@
 │   ├── App.tsx / main.tsx / api.ts / saveManager.ts
 │   ├── net/roomClient.ts         # 瀏覽器房間 WebSocket 客戶端
 │   ├── components/               # AccountScreens, RoomScreens, StashModal, RelicModals, ClassEmblem
-│   └── game/                     # engine.ts, hero.ts, classes.ts, dungeon.ts, relics.ts,
-│                                 # models.ts, textures.ts, audio.ts, types.ts
+│   └── game/                     # engine.ts（引擎本體：欄位／建構子／主迴圈／公開 API／組裝）、hero.ts、classes.ts、
+│       │                         # dungeon.ts、relics.ts、models.ts、textures.ts、audio.ts、types.ts
+│       └── engine/               # engine.ts 拆出的方法模組（`this: EmbervaultEngine` 方法物件，掛回原型）
+│           ├── data.ts / entities.ts / scratch.ts      # Boss 設定與判斷函式、內部型別、共用暫存向量
+│           ├── party.ts / scene.ts / levelBuild.ts / town.ts / spawn.ts / input.ts
+│           ├── travel.ts / economy.ts / heroCombat.ts / classSkills.ts / loot.ts / enemies.ts
+│           ├── movement.ts / ai.ts / frame.ts / hud.ts
+│           └── mp/                # core.ts, host.ts, guest.ts, town.ts（多人 `mp*` 方法）
+├── scripts/
+│   └── verify-engine-split.mjs   # 純搬移比對腳本（以 origin/main 的 engine.ts 為基準，逐方法／宣告比對）
 ├── wrangler.toml                 # Pages 設定（D1 binding DB、ROOM DO binding、GOOGLE_CLIENT_ID）
 └── package.json                  # scripts 與依賴
 ```
@@ -119,12 +128,14 @@ npm run deploy:room
 | [`docs/mage-spec.md`](docs/mage-spec.md) | 冰雪法師完整規格（攻擊循環、技能、護盾、升級、遺物） | 修改法師機制、平衡或遺物互動時查閱 |
 | [`docs/hunter-spec.md`](docs/hunter-spec.md) | 亞馬遜獵人完整規格（弓箭普攻、疾步、戰寵召喚／強化與生命週期、升級、遺物特例、HUD 與多人同步） | 修改獵人或戰寵機制、平衡或遺物互動時查閱 |
 | [`docs/p1-setup.md`](docs/p1-setup.md) | Google OAuth、D1 建立與 migration、Pages 設定與本機開發 | 設定環境、除錯登入／存檔 API 時查閱 |
+| [`docs/engine-refactor-plan.md`](docs/engine-refactor-plan.md) | `engine.ts` 拆檔重構的施工規格、驗證方式與完成狀態 | 重構引擎檔案結構、或想知道 engine 方法為什麼分檔時查閱 |
 | [`docs/p5-setup.md`](docs/p5-setup.md) | Room Worker 部署順序、本機三開開發、多開發帳號與 DO 免費額度估算 | 設定／部署房間後端或設計 P5-B 流量上限時查閱 |
 
 ---
 
 ## 近期動態與下一步
 
+- **engine.ts 拆檔重構（分支 `refactor/engine-split`，R0～R4 完成，待實玩確認後合併 `main`）**：14,581 行的 `src/game/engine.ts` 拆成 `engine.ts`（約 840 行：欄位、建構子、`update`、`tick`、`dispose`、組裝）＋ `src/game/engine/` 23 個模組（方法物件 `this: EmbervaultEngine`，以 `export interface EmbervaultEngine extends …Methods` 宣告合併＋`Object.assign(EmbervaultEngine.prototype, …)` 掛回；只 `import type` 引擎，僅在用到 `EmbervaultEngine.XXX` 靜態成員的模組做值 import）。方法內容逐字搬移、行為不變、`App.tsx` 與公開 API 未動；以 `node scripts/verify-engine-split.mjs` 逐方法比對（391 個成員與 55 個模組層級宣告全數一致）。**之後新方法請放進 `src/game/engine/<領域>.ts`（見 `AGENTS.md` 實作守則 8）**；施工細節與 R5（拆超大函式，選做）見 `docs/engine-refactor-plan.md`。
 - **隊友 HUD 與 bot 打磨（`2baa5c2`、`2992098`、`6b06926`）**：左上角狀態板下方新增精簡隊友列（單人 bot／多人其他玩家：職業色點、LV、名字、血條、法師護盾細條、倒地／城鎮標記，寬約狀態板一半）；戰寵卡縮成同款精簡列（保留動物圖示，狂野激勵倒數顯示在列外右側）；bot 隨機取名（`BOT_NAMES`，含搞笑名）；單人喝藥水同時幫受傷 bot 回同量 HP；`HeroSnap` 尾端新增選用欄位 `level`、`maxShield` 供隊友列顯示（Room DO 只轉送，不需 `deploy:room`）。
 - **同伴跟隨（`e0d0a4b`）**：bot 與戰寵快到螢幕邊緣（NDC 0.9）即瞬移回玩家／主人身旁（非本機鏡頭的戰寵以距離 12 判斷）；bot 離玩家 > 7.5 放棄戰鬥優先歸隊、回到 5 以內才重新參戰。常數在 `classes.ts`。
 - **獵人 UI 修正（`d49f365`）**：祭壇攻速選項改用藍色 `Gauge` 圖示（新 accent `atkSpeed`），左上角新增攻速加成標籤，結算畫面獵人顯示「攻速／射速」。
@@ -147,4 +158,4 @@ npm run deploy:room
 ### 下一步
 1. **確認 P6／P7 遠端部署**：`npm run db:migrate:remote`（migration `0002`，建房限流）與 `npm run deploy:room`（P6 起 Room Worker 綁 D1、P7 DO 變更）是否已對正式環境執行；未執行時正式站開房／交易會失敗。
 2. **P6／P7 端到端驗收**：兩個帳號實測交易（提出／修改／確認／取消、斷線與離開城鎮、重新載入後存檔）與中途加入、成員重連、房主 15 秒接管、自選起始層（房主）、隊友 HUD 列。
-3. **後續候選**（[`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §10）：難度系統內容（大廳目前為灰字）、房主轉移、公開配對、伺服器端防作弊驗證；另可排 `src/game/engine.ts`（> 14,000 行）拆檔重構。
+3. **後續候選**（[`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §10）：難度系統內容（大廳目前為灰字）、房主轉移、公開配對、伺服器端防作弊驗證；`src/game/engine.ts` 拆檔已完成（R5 拆超大函式為選做，見 `docs/engine-refactor-plan.md`）。
