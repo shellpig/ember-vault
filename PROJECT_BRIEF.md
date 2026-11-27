@@ -125,7 +125,11 @@ npm run deploy:room
 
 ## 近期動態與下一步
 
-- **自選起始層與單人 bot 選項（分支 `feat/start-depth-bots`）**：`maxDepth > 1` 的角色可在單人大廳／房間大廳（房主）以滑桿自選 1～`maxDepth` 的起始層（預設最深層）；選擇只留在房主／單人客戶端（`restartRun(..., startDepth)`、`MpConfig.startDepth`），引擎再 clamp，**不改協定、不改 D1、不需 `npm run deploy:room`**，起始較淺不會降低 `max_depth`。單人大廳也能選 0～3 個 bot 並各自指定職業（存 `localStorage`）：bot 等級 = 玩家升級總數並依該職業祭壇選項輪流平均分配（滿上限讓給其他）、遺物數值加成為玩家的 80%（`Hero.relicScale`；傳說特效與四件套光環不可縮放、照常生效）、玩家升級或換裝即時同步；bot 不存檔、不打 API、不開房。`?bots=N` 保留為開發覆寫。規格見 `docs/multiplayer-spec.md` §5.1、P4-B 備註與 §10。
+- **隊友 HUD 與 bot 打磨（`2baa5c2`、`2992098`、`6b06926`）**：左上角狀態板下方新增精簡隊友列（單人 bot／多人其他玩家：職業色點、LV、名字、血條、法師護盾細條、倒地／城鎮標記，寬約狀態板一半）；戰寵卡縮成同款精簡列（保留動物圖示，狂野激勵倒數顯示在列外右側）；bot 隨機取名（`BOT_NAMES`，含搞笑名）；單人喝藥水同時幫受傷 bot 回同量 HP；`HeroSnap` 尾端新增選用欄位 `level`、`maxShield` 供隊友列顯示（Room DO 只轉送，不需 `deploy:room`）。
+- **同伴跟隨（`e0d0a4b`）**：bot 與戰寵快到螢幕邊緣（NDC 0.9）即瞬移回玩家／主人身旁（非本機鏡頭的戰寵以距離 12 判斷）；bot 離玩家 > 7.5 放棄戰鬥優先歸隊、回到 5 以內才重新參戰。常數在 `classes.ts`。
+- **獵人 UI 修正（`d49f365`）**：祭壇攻速選項改用藍色 `Gauge` 圖示（新 accent `atkSpeed`），左上角新增攻速加成標籤，結算畫面獵人顯示「攻速／射速」。
+- **建置修正（`4f423a0`、`99d0cec`）**：`0eaac26`（洞窟／巨獸體內地形）提交時 `bun.lock` 被舊版覆蓋，Cloudflare `bun install --frozen-lockfile` 失敗導致正式站停在舊版；已還原 lockfile。AI Studio 參考素材 `public/assets/aistudio/` 移出版控並加入 `.gitignore`。**以 Gemini／AI Studio 改動後提交前，留意 `bun.lock` 是否被改動。**
+- **自選起始層與單人 bot 選項（merge `0cac834`）**：`maxDepth > 1` 的角色可在單人大廳／房間大廳（房主）以滑桿自選 1～`maxDepth` 的起始層（預設最深層）；選擇只留在房主／單人客戶端（`restartRun(..., startDepth)`、`MpConfig.startDepth`），引擎再 clamp，**不改協定、不改 D1、不需 `npm run deploy:room`**，起始較淺不會降低 `max_depth`。單人大廳也能選 0～3 個 bot 並各自指定職業（存 `localStorage`）：bot 等級 = 玩家升級總數並依該職業祭壇選項輪流平均分配（滿上限讓給其他）、遺物數值加成為玩家的 80%（`Hero.relicScale`；傳說特效與四件套光環不可縮放、照常生效）、玩家升級或換裝即時同步；bot 不存檔、不打 API、不開房。`?bots=N` 保留為開發覆寫。規格見 `docs/multiplayer-spec.md` §5.1、P4-B 備註與 §10。
 - **城鎮佈局微調（`16d69fb`，直接提交 `main`）**：商店 (8,17)→(9,17)、祭壇 (11,20)→(11,19)、倉庫寶箱 (18,20)→(17,18)，座標集中為 `TOWN_SHOP_GRID`／`TOWN_ALTAR_GRID`／`TOWN_STASH_GRID`。
 - **P7 中途加入／重連＋打磨（已合併 `main`，待驗收）**：DO 不再因開局拒絕加入（移除 409 `game_started`），`welcome.started` 讓加入者略過房間大廳；房主引擎對中途加入者建英雄並送 `tw`（新增選用欄位 `st` 帶隊伍狀態），無門可走時以合成 `handback`（`entrance`）走既有路徑放到本層 room 0。成員斷線由 `RoomClient.reconnect()` 退避重連（1/2/4/8 秒、30 秒窗口）並重新抓雲端存檔後當作中途加入者重進。房主斷線進 15 秒寬限（`meta.hostGoneUntil` + DO alarm、`hostState` 訊息、`resumeToken` 經 `x-ev-resume`），同頁面回來即接管並重送 `level`；重新整理或逾時照舊 `roomClosed`。插值延遲改為依到達 jitter 在 110–220 ms（城鎮 260–420 ms）自適應，無新訊息。建房限流 429 `room_create_limited`（`migrations/0002_room_creates.sql`）。本機以 `wrangler dev` + `pages dev` 加 Node WebSocket 腳本實測了 DO 與限流路徑；**尚未做雙瀏覽器端到端驗收（中途加入者走傳送門／出生入口、重連覆蓋層、房主接管後的畫面）**。**部署：`npm run db:migrate:remote` → Pages → `npm run deploy:room`，見 `docs/p5-setup.md`。**
 - **P6 城鎮交易（已合併 `main`，待驗收）**：Room Worker 新增 D1 binding `DB`，`VerifiedIdentity` 新增 `characterId`；DO 新增 `townState`、`tradeReq`／`tradeAccept`／`tradeOffer`／`tradeConfirm`／`tradeCancel` 與伺服器 `tradeWait`／`tradeRequest`／`tradeOpen`／`tradeUpdate`／`tradeError`／`tradeEnd`／`tradeDone`（交易草稿只放記憶體；任一方改提供即重置雙方確認；`rev` 防止確認到已過期的版本）。執行時讀雙方 D1 存檔，經純函式 `applyTrade`（`shared/trade.ts`）驗證後以單一 D1 batch 寫兩個存檔與 `trades` 紀錄，並用 `changes()` 守門語句讓版本不符時整批回滾（已用本機 D1 與本機 Room DO 實測）。客戶端：隊伍面板「交易」按鈕、邀請提示、`TradeModal`；交易前 `SaveManager.beginTrade()` flush 並暫停上傳、引擎 `setTradeLock` 鎖背包／金幣／倉庫；結果以 HTTP 取新存檔覆蓋（倉庫不經 WebSocket）。`dev:room`／`dev:api` 皆加 `--persist-to .wrangler/state` 讓本機 D1 共用。**部署：`npm run deploy:room` 與 Pages 需一起更新。** 尚未做雙瀏覽器端到端手動驗收。
@@ -141,5 +145,6 @@ npm run deploy:room
 - **P1～P3（PR #1～#3，`0ef1c99`、`d04e527`、`f687a02`）**：完成 Google 登入、D1 雲端存檔與 8 角色管理（P1）、200 格城鎮倉庫（P2）、倒地原地開門與死亡不結束本局（P3）。
 
 ### 下一步
-1. **P6 城鎮交易驗收**：兩個瀏覽器帳號實測交易 UI、取消／斷線／離開城鎮路徑與重新載入後的存檔；通過後合併並部署（`npm run deploy:room` 與 Pages 一起）。
-2. **後續階段與待決項**：P7 中途加入／斷線重連與延遲補償打磨；待決項詳見 [`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §10（難度系統內容、自選較淺起始層、房主轉移、公開配對、伺服器端防作弊驗證）。
+1. **確認 P6／P7 遠端部署**：`npm run db:migrate:remote`（migration `0002`，建房限流）與 `npm run deploy:room`（P6 起 Room Worker 綁 D1、P7 DO 變更）是否已對正式環境執行；未執行時正式站開房／交易會失敗。
+2. **P6／P7 端到端驗收**：兩個帳號實測交易（提出／修改／確認／取消、斷線與離開城鎮、重新載入後存檔）與中途加入、成員重連、房主 15 秒接管、自選起始層（房主）、隊友 HUD 列。
+3. **後續候選**（[`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §10）：難度系統內容（大廳目前為灰字）、房主轉移、公開配對、伺服器端防作弊驗證；另可排 `src/game/engine.ts`（> 14,000 行）拆檔重構。
