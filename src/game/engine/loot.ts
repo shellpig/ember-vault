@@ -1,6 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
 import { q100 } from '../../../shared/game';
-import { isGuardianEnemy, isSwarmEnemy } from './data';
+import { BOSS_LOOT, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, BreakableEntity, EnemyEntity } from './entities';
 import { Hero } from '../hero';
 import { createLootMesh, createRelicLootMesh } from '../models';
@@ -123,22 +123,22 @@ export const lootMethods = {
         true
       );
 
-      // Boss Treasure Hoard: 12 high-value bouncing gold coins scaled +6.5%/floor + Healing Elixir + Guaranteed Boss Relics
+      // Boss Treasure Hoard: 12 high-value bouncing gold coins (x1.5) scaled +6.5%/floor + Healing Elixir + Guaranteed Boss Relics
       // (every hero gets their own hoard)
       const goldScale = this.getDepthGoldScale();
       const bossKiller = this.hero;
       for (const h of this.heroes) {
         if (h.inTown) continue;
         this.setActor(h);
-        for (let i = 0; i < 12; i++) {
-          const a = (i / 12) * Math.PI * 2 + Math.random() * 0.3;
+        for (let i = 0; i < BOSS_LOOT.coinCount; i++) {
+          const a = (i / BOSS_LOOT.coinCount) * Math.PI * 2 + Math.random() * 0.3;
           const r = 0.35 + Math.random() * 1.05;
           const baseBossCoin = 10 + Math.floor(Math.random() * 5);
           this.spawnLoot(
             enemy.x + Math.cos(a) * r,
             enemy.z + Math.sin(a) * r,
             'gold',
-            Math.max(10, Math.round(baseBossCoin * goldScale))
+            Math.max(10, Math.round(baseBossCoin * goldScale * BOSS_LOOT.goldMult))
           );
         }
         this.spawnLoot(enemy.x, enemy.z, 'potion');
