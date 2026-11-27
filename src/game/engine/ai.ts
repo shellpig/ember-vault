@@ -1,7 +1,7 @@
 import type { EmbervaultEngine } from '../engine';
 import { BOT_REGROUP_DIST, BOT_REGROUP_DONE_DIST, COMPANION_EDGE_NDC, COMPANION_WARP_DIST, FROST_MAGE, HERO_CLASSES, HUNTER, UpgradeKind } from '../classes';
 import { findGridPath, gridToWorld, hasLineOfSight, isTileWalkable, worldToGrid, worldToWalkableGrid } from '../dungeon';
-import { BOSS_AI, BOSS_NOVA, BOSS_VOLLEY, isGuardianEnemy, isSwarmEnemy } from './data';
+import { BOSS_AI, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, EnemyEntity, LootEntity } from './entities';
 import { _projVec } from './scratch';
 import { Hero } from '../hero';
@@ -326,6 +326,29 @@ export const aiMethods = {
           const mv = stepAway(-fz * side, fx * side);
           if (this.hero.dashCooldown <= 0 && remaining < BOSS_AI.dashLeadTime + 0.1) this.performDash();
           return mv;
+        }
+        continue;
+      }
+
+      if (e.bossSkill === 'prism_cone') {
+        const bdx = hx - e.x;
+        const bdz = hz - e.z;
+        const bDist = Math.hypot(bdx, bdz);
+        if (bDist < BOSS_PRISM.range + margin) {
+          const fx = Math.sin(e.facing);
+          const fz = Math.cos(e.facing);
+          const along = bdx * fx + bdz * fz;
+          const lateral = bdx * -fz + bdz * fx;
+          let diff = Math.atan2(bdx, bdz) - e.facing;
+          while (diff > Math.PI) diff -= Math.PI * 2;
+          while (diff < -Math.PI) diff += Math.PI * 2;
+          if (along > -0.4 && Math.abs(diff) <= BOSS_PRISM.halfAngle + 0.14) {
+            this.hero.ai.status = 'Evading Prism Cone';
+            const side = lateral === 0 ? this.hero.ai.strafeSign : Math.sign(lateral);
+            const mv = stepAway(-fz * side, fx * side);
+            if (this.hero.dashCooldown <= 0 && remaining < BOSS_AI.dashLeadTime + 0.1) this.performDash();
+            return mv;
+          }
         }
         continue;
       }

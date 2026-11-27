@@ -11,7 +11,14 @@ export type FloorBossKind =
   | 'boss_mothership_ai'
   | 'boss_xeno_commander';
 
-export type BossSkillKind = 'slam' | 'charge_slam' | 'nova_ring' | 'ranged_volley' | 'targeted_blast';
+export type BossSkillKind =
+  | 'slam'
+  | 'charge_slam'
+  | 'nova_ring'
+  | 'ranged_volley'
+  | 'targeted_blast'
+  | 'prism_cone'
+  | 'orbital_barrage';
 
 /** Stable index order for syncing `bossSkill` over multiplayer snapshots. */
 export const BOSS_SKILL_LIST: readonly BossSkillKind[] = [
@@ -20,7 +27,14 @@ export const BOSS_SKILL_LIST: readonly BossSkillKind[] = [
   'nova_ring',
   'ranged_volley',
   'targeted_blast',
+  'prism_cone',
+  'orbital_barrage',
 ];
+
+/** Special start-depth sentinel for the hidden PC Boss Test Arena (Boss Rush) mode. */
+export const BOSS_ARENA_DEPTH = 99;
+/** Ordered wave depths spawned in the Boss Test Arena (5F..40F dual-boss, then loops). */
+export const BOSS_ARENA_WAVES: readonly number[] = [5, 10, 15, 20, 25, 30, 35, 40];
 
 /** A boss action is either one of its skills (ground telegraph) or a basic attack (docs/boss-spec.md sections 3-5). */
 export type BossActionType = 'skill' | 'basic';
@@ -56,14 +70,15 @@ export const TOWN_STASH_GRID = { gx: 17, gz: 18 };
 /** Depth 5 is always the first (beginner) boss. */
 export const FIRST_BOSS: FloorBossKind = 'boss_juggernaut';
 
-/** Depth 10: one of these, drawn once per floor from the dungeon seed (see `getBossForDepth`). */
-export const DUNGEON_DEPTH10_BOSS_POOL: FloorBossKind[] = ['boss_lich', 'boss_colossus'];
+/** Depth 10 is now always the Ossuary Archlich (Molten Colossus moved to Depth 40 dual-boss). */
+export const DEPTH10_BOSS: FloorBossKind = 'boss_lich';
 
 export const CAVERN_BOSS_ROTATION: FloorBossKind[] = ['boss_crystal_wyrm', 'boss_fungal_king'];
 
 export const FLESH_BOSS_ROTATION: FloorBossKind[] = ['boss_leviathan_heart', 'boss_abyssal_brain'];
 
-export const ALIEN_BOSS_ROTATION: FloorBossKind[] = ['boss_mothership_ai', 'boss_xeno_commander'];
+/** Depth 35 = Xeno Overlord, Depth 40 = Omega Core AI (+ Molten Colossus dual-boss). */
+export const ALIEN_BOSS_ROTATION: FloorBossKind[] = ['boss_xeno_commander', 'boss_mothership_ai'];
 
 export const SPECIAL_ELITE_NAMES: string[] = [
   // 帥氣／酷炫風格
@@ -120,7 +135,7 @@ function hashSeed(seed: number, salt: number): number {
  * announces it in `level.seed` and every client regenerates the same dungeon from it, so the depth-10 random pick is
  * identical everywhere without any extra protocol field (docs/boss-spec.md section 8).
  */
-export function getBossForDepth(depth: number, theme: TerrainTheme, genSeed = 0): FloorBossKind {
+export function getBossForDepth(depth: number, theme: TerrainTheme, _genSeed = 0): FloorBossKind {
   const bossIdx = Math.max(0, Math.floor(depth / 5) - 1);
   if (theme === 'cavern') {
     return CAVERN_BOSS_ROTATION[bossIdx % CAVERN_BOSS_ROTATION.length];
@@ -132,7 +147,14 @@ export function getBossForDepth(depth: number, theme: TerrainTheme, genSeed = 0)
     return ALIEN_BOSS_ROTATION[bossIdx % ALIEN_BOSS_ROTATION.length];
   }
   if (depth <= 5) return FIRST_BOSS;
-  return DUNGEON_DEPTH10_BOSS_POOL[hashSeed(genSeed, depth) % DUNGEON_DEPTH10_BOSS_POOL.length];
+  return DEPTH10_BOSS;
+}
+
+/** Returns all floor bosses spawned on a boss floor (Depth 40 is the dual-boss finale). */
+export function getBossesForDepth(depth: number, theme: TerrainTheme, genSeed = 0): FloorBossKind[] {
+  const primary = getBossForDepth(depth, theme, genSeed);
+  if (depth === 40) return [primary, 'boss_colossus'];
+  return [primary];
 }
 
 export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
@@ -163,7 +185,7 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     skills: ['nova_ring'],
     projectileKind: 'mage_orb',
   },
-  // Alternate Dungeon Boss: Molten Rush Charge
+  // Depth 40 Dual-Boss Partner: Molten Colossus
   boss_colossus: {
     name: 'MOLTEN COLOSSUS',
     bossType: 'melee',
@@ -172,11 +194,11 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     speed: 1.92,
     damage: 17,
     telegraphColor: 0xff7b24,
-    telegraphRadius: 2.65,
-    triggerRange: 2.95,
-    skills: ['charge_slam'],
+    telegraphRadius: 2.8,
+    triggerRange: 3.1,
+    skills: ['charge_slam', 'slam'],
   },
-  // Depth 11-20 Cavern Boss #1 (2 Skills: Slam + Crystal Dash Rush)
+  // Depth 15 Cavern Boss #1 (Slam expanded range + Charge + Prism Cone)
   boss_crystal_wyrm: {
     name: 'CRYSTAL BEHEMOTH',
     bossType: 'melee',
@@ -185,12 +207,12 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     speed: 2.15,
     damage: 17,
     telegraphColor: 0x3be8ff,
-    telegraphRadius: 2.85,
-    triggerRange: 3.0,
-    skills: ['slam', 'charge_slam'],
+    telegraphRadius: 3.6,
+    triggerRange: 4.2,
+    skills: ['slam', 'charge_slam', 'prism_cone'],
     projectileKind: 'crystal_shard',
   },
-  // Depth 11-20 Cavern Boss #2 (2 Skills: Spore Slam + 6-Orb Spore Ring)
+  // Depth 20 Cavern Boss #2 (Spore Slam + Laser Nova + Orbital Barrage)
   boss_fungal_king: {
     name: 'SPORE SOVEREIGN',
     bossType: 'caster',
@@ -201,10 +223,10 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x4ef58a,
     telegraphRadius: 3.05,
     triggerRange: 3.2,
-    skills: ['slam', 'nova_ring'],
+    skills: ['slam', 'nova_ring', 'orbital_barrage'],
     projectileKind: 'spore_orb',
   },
-  // Depth 21-30 Monster Interior Boss #1 (3 Skills incl. Ranged: Bone Volley + Arterial Lunge + Pulse Ring)
+  // Depth 25 Monster Interior Boss #1 (Bone Volley + Arterial Charge + Prism Cone)
   boss_leviathan_heart: {
     name: 'HEART OF THE BEAST',
     bossType: 'melee',
@@ -212,13 +234,13 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     baseHp: 210,
     speed: 2.08,
     damage: 18,
-    telegraphColor: 0xff8826,
+    telegraphColor: 0xff4c29,
     telegraphRadius: 2.95,
     triggerRange: 3.05,
-    skills: ['ranged_volley', 'charge_slam', 'nova_ring'],
+    skills: ['ranged_volley', 'charge_slam', 'prism_cone'],
     projectileKind: 'bone_dart',
   },
-  // Depth 21-30 Monster Interior Boss #2 (3 Skills incl. Ranged: Bio-Plasma Fan + Targeted Lock Blast + Synapse Ring)
+  // Depth 30 Monster Interior Boss #2 (Bio-Plasma Fan + Black Hole + Orbital Barrage)
   boss_abyssal_brain: {
     name: 'NEURAL OVERMIND',
     bossType: 'caster',
@@ -229,10 +251,10 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x36f5d4,
     telegraphRadius: 3.1,
     triggerRange: 3.3,
-    skills: ['ranged_volley', 'targeted_blast', 'nova_ring'],
+    skills: ['ranged_volley', 'targeted_blast', 'orbital_barrage'],
     projectileKind: 'bio_orb',
   },
-  // Depth 31-40 Alien Spaceship Boss #1 (3 Skills incl. Ranged: Ion Barrage + Orbital Target Lock + Quantum Nova)
+  // Depth 40 Alien Spaceship Finale Boss #1 (Ion Barrage + Tech Blue 8-Laser Nova + Orbital Barrage; paired with Molten Colossus)
   boss_mothership_ai: {
     name: 'OMEGA CORE AI',
     bossType: 'caster',
@@ -243,10 +265,10 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0xff4757,
     telegraphRadius: 3.1,
     triggerRange: 3.4,
-    skills: ['ranged_volley', 'targeted_blast', 'nova_ring'],
+    skills: ['ranged_volley', 'nova_ring', 'orbital_barrage'],
     projectileKind: 'ion_orb',
   },
-  // Depth 31-40 Alien Spaceship Boss #2 (3 Skills incl. Ranged: Plasma Spread + Warp Lunge + EMP Ring)
+  // Depth 35 Alien Spaceship Boss #1 (Plasma Spread + Warp Charge + Plasma Prism Cone)
   boss_xeno_commander: {
     name: 'XENO OVERLORD',
     bossType: 'melee',
@@ -257,7 +279,7 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x39ff7a,
     telegraphRadius: 3.0,
     triggerRange: 3.15,
-    skills: ['ranged_volley', 'charge_slam', 'nova_ring'],
+    skills: ['ranged_volley', 'charge_slam', 'prism_cone'],
     projectileKind: 'plasma_bolt',
   },
 };
@@ -298,7 +320,9 @@ export const BOSS_DEPTH_TIERS: readonly BossDepthTier[] = [
   { maxDepth: 10, damageReduction: 0.1, hpMult: 1.1, mobs: 1, elites: 0, named: 0 },
   { maxDepth: 20, damageReduction: 0.15, hpMult: 1.25, mobs: 2, elites: 1, named: 0 },
   { maxDepth: 30, damageReduction: 0.2, hpMult: 1.5, mobs: 3, elites: 0, named: 1 },
-  { maxDepth: Infinity, damageReduction: 0.3, hpMult: 2.0, mobs: 3, elites: 0, named: 2 },
+  { maxDepth: 39, damageReduction: 0.3, hpMult: 2.0, mobs: 3, elites: 0, named: 2 },
+  // Depth 40 dual-boss finale: no elite escorts, 4 regular mobs; each boss gets 0.7x dual-boss HP factor
+  { maxDepth: Infinity, damageReduction: 0.3, hpMult: 1.4, mobs: 4, elites: 0, named: 0 },
 ];
 
 /** Boss depth tier of a floor (floors past 40 keep the last tier). */
@@ -332,7 +356,24 @@ export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
   charge_slam: { windup: 0.7, strike: 0.3, damage: 1.25, range: 5.4, needsLos: true, radius: 2.25 },
   ranged_volley: { windup: 0.5, strike: 0.1, damage: 0.9, range: 7.8, needsLos: true, radius: 1.45 },
   targeted_blast: { windup: 0.7, strike: 0.1, damage: 1.5, range: 6.4, radius: 2.25 },
+  prism_cone: { windup: 0.75, strike: 0.1, damage: 1.35, range: 6.2, radius: 5.8 },
+  orbital_barrage: { windup: 0.65, strike: 0.1, damage: 0.95, range: 9.5, radius: 1.85 },
 };
+
+/** prism_cone: 70-degree stained-glass crystal/bone/plasma fan (tracks first 40% of windup, then locks). */
+export const BOSS_PRISM = {
+  halfAngle: (35 * Math.PI) / 180,
+  range: 5.8,
+  aimTrackFraction: 0.4,
+} as const;
+
+/** orbital_barrage: 3 sequential sky-to-ground energy pillars chasing live heroes. */
+export const BOSS_ORBITAL = {
+  shots: 3,
+  shotInterval: 0.38,
+  windup: 0.65,
+  radius: 1.85,
+} as const;
 
 /** nova_ring: radial bright-white laser beams (stop at walls, single hit per target across centre + beams). */
 export const BOSS_NOVA = {

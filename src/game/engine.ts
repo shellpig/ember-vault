@@ -91,6 +91,7 @@ import { aiMethods } from './engine/ai';
 import { frameMethods } from './engine/frame';
 import { enemiesMethods } from './engine/enemies';
 import { treasureMethods } from './engine/treasure';
+import { BOSS_ARENA_DEPTH } from './engine/data';
 import { bossVfxMethods } from './engine/bossVfx';
 import type { BossVfxInstance, BossWindupRig } from './engine/bossVfx';
 
@@ -275,6 +276,11 @@ export class EmbervaultEngine {
   loadingRun = false;
   /** This run started through `?devDepth=N`: it never raises `maxDepthReached` and never triggers save checkpoints. */
   devDepthRun = false;
+  /** Hidden PC Boss Test Arena (Boss Rush) mode: 18x18 arena, 5s wave countdown, level-scaled bosses, no loot/saves. */
+  bossArenaMode = false;
+  bossArenaWave = 0;
+  bossArenaCountdown = 0;
+  bossArenaActive = false;
   heroProjectiles: HeroProjectileEntity[] = [];
   /** Active Hunter pet companions, keyed by owner heroId (max 1 per hunter). */
   pets: Map<string, PetEntity> = new Map();
@@ -373,8 +379,9 @@ export class EmbervaultEngine {
     }
   }
 
-  /** Clamps a requested start floor to [1, maxDepth]; a missing / invalid request means "the deepest floor". */
+  /** Clamps a requested start floor to [1, maxDepth]; preserves the special BOSS_ARENA_DEPTH sentinel. */
   static clampStartDepth(requested: number | undefined, maxDepth: number): number {
+    if (requested === BOSS_ARENA_DEPTH) return BOSS_ARENA_DEPTH;
     const max = Math.max(1, Math.floor(Number(maxDepth) || 1));
     const want = Number.isFinite(requested) ? Math.floor(requested as number) : max;
     return Math.max(1, Math.min(max, want));
@@ -660,6 +667,7 @@ export class EmbervaultEngine {
       this.updateTreasure(dt);
 
       // 5. Update Enemies, Pets & Projectiles
+      if (this.bossArenaMode) this.updateBossArena(dt);
       this.updatePets(dt);
       this.updateEnemies(dt);
       this.updateProjectiles(dt);

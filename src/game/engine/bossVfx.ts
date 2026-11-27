@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { EmbervaultEngine } from '../engine';
-import { BOSS_CONFIGS, BOSS_NOVA, BOSS_VOLLEY, BossSkillKind, FloorBossKind } from './data';
+import { BOSS_CONFIGS, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, BossSkillKind, FloorBossKind } from './data';
 import { EnemyEntity } from './entities';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -285,6 +285,136 @@ void main() {
   float tip = smoothstep(0.0, 0.25, vUv.y) * (1.0 - smoothstep(0.7, 1.0, vUv.y));
   vec3 col = mix(uColor, vec3(1.0, 0.96, 0.88), 0.45 + 0.35 * streak) * 1.65;
   float alpha = clamp(tip * (0.45 + 0.55 * streak) * uIntensity, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+/** 70-degree Stained-Glass / Prism Fan Cone Shader (video 00:55-01:02). */
+const PRISM_CONE_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uProgress;
+uniform float uFade;
+uniform float uHalfAngle;
+uniform vec3 uColor;
+uniform vec3 uCoreColor;
+varying vec2 vUv;
+
+vec2 hash2(vec2 p) {
+  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+  return fract(sin(p) * 43758.5453);
+}
+
+void main() {
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  if (r > 1.0 || r < 0.04) discard;
+  // Local +Y is forward aim direction
+  float ang = abs(atan(p.x, p.y));
+  if (ang > uHalfAngle) discard;
+
+  // Voronoi stained-glass cells
+  vec2 uvCell = p * 6.5;
+  vec2 n = floor(uvCell);
+  vec2 f = fract(uvCell);
+  float md = 8.0;
+  float md2 = 8.0;
+  vec2 cellId = vec2(0.0);
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 o = hash2(n + g);
+      vec2 diff = g + o - f;
+      float d = length(diff);
+      if (d < md) {
+        md2 = md;
+        md = d;
+        cellId = n + g;
+      } else if (d < md2) {
+        md2 = d;
+      }
+    }
+  }
+  float cellEdge = smoothstep(0.08, 0.02, md2 - md);
+  float cellHue = fract(sin(dot(cellId, vec2(41.3, 289.1))) * 43758.5453);
+  vec3 facetCol = mix(uColor, uCoreColor, 0.25 + 0.55 * cellHue);
+
+  // Crisp outer arc, side borders & 2 concentric distance arcs
+  float outerArc = smoothstep(0.94, 0.975, r);
+  float sideEdge = smoothstep(uHalfAngle - 0.045, uHalfAngle - 0.01, ang);
+  float midArcs = smoothstep(0.025, 0.008, abs(r - 0.48)) + smoothstep(0.025, 0.008, abs(r - 0.74));
+
+  // Fill sweep outward with uProgress
+  float fillMask = 1.0 - smoothstep(uProgress - 0.08, uProgress + 0.02, r);
+  float sweepWave = smoothstep(0.09, 0.0, abs(r - uProgress));
+
+  float border = clamp(outerArc + sideEdge + midArcs * 0.75, 0.0, 1.0);
+  float shimmer = 0.75 + 0.25 * sin(uTime * 10.0 + cellHue * 6.283);
+
+  vec3 col = facetCol * (0.28 + fillMask * 0.52) * shimmer * (1.0 - cellEdge * 0.45)
+           + vec3(1.0, 0.98, 1.0) * (border * 1.35 + sweepWave * 1.15 + cellEdge * 0.25);
+
+  float alpha = clamp((0.28 + fillMask * 0.42 + border * 0.95 + sweepWave * 0.8) * uFade, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+/** High-tech orbital radar / targeting grid shader (Omega Core AI tech nova_ring & orbital_barrage). */
+const TECH_RADAR_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uProgress;
+uniform float uFade;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+void main() {
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  if (r > 1.0) discard;
+  float a = atan(p.y, p.x);
+
+  float outerRing = smoothstep(0.93, 0.96, r) * (1.0 - smoothstep(0.985, 1.0, r));
+  float ring2 = smoothstep(0.64, 0.665, r) * (1.0 - smoothstep(0.675, 0.7, r));
+  float ring3 = smoothstep(0.32, 0.34, r) * (1.0 - smoothstep(0.35, 0.37, r));
+
+  // Crisp crosshair axes + 24 digital tick marks
+  float crossH = smoothstep(0.022, 0.006, abs(p.y)) * smoothstep(0.16, 0.22, r);
+  float crossV = smoothstep(0.022, 0.006, abs(p.x)) * smoothstep(0.16, 0.22, r);
+  float ticks = step(0.55, fract((a + uTime * 0.9) * 24.0 / 6.2831853))
+              * smoothstep(0.84, 0.86, r) * (1.0 - smoothstep(0.91, 0.93, r));
+
+  // Rotating radar sweep beam
+  float sweepAng = fract((a - uTime * (2.6 + uProgress * 4.5)) / 6.2831853);
+  float sweep = pow(1.0 - sweepAng, 5.0) * 0.55;
+
+  float fillR = mix(0.12, 0.96, uProgress);
+  float lockRing = smoothstep(0.04, 0.0, abs(r - fillR));
+
+  float hot = smoothstep(0.55, 1.0, uProgress);
+  vec3 col = uColor * (outerRing * 1.6 + ring2 * 1.0 + ring3 * 0.9 + (crossH + crossV) * 0.8 + ticks * 0.85 + sweep + lockRing * 1.5)
+           + vec3(0.94, 0.99, 1.0) * (lockRing * (0.6 + hot * 0.9) + outerRing * hot * 0.75);
+
+  float alpha = clamp((outerRing + ring2 * 0.65 + ring3 * 0.6 + (crossH + crossV) * 0.55 + ticks * 0.65 + sweep + lockRing * 0.9) * uFade, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+/** Sky-to-ground orbital energy pillar shader (high-speed downward plasma stream). */
+const ORBITAL_BEAM_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uLife;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+void main() {
+  // vUv.y = 0 at ground, 1 at sky; flow streams rapidly DOWNWARD
+  float s1 = sin(vUv.y * 28.0 + uTime * 42.0 + vUv.x * 12.566) * 0.5 + 0.5;
+  float s2 = sin(vUv.y * 52.0 + uTime * 64.0 - vUv.x * 18.849) * 0.5 + 0.5;
+  float energy = 0.55 + 0.3 * s1 + 0.25 * pow(s2, 2.0);
+  float fade = pow(1.0 - uLife, 1.2);
+  float topFade = 1.0 - smoothstep(0.85, 1.0, vUv.y);
+
+  vec3 col = mix(uColor, vec3(1.0, 0.99, 1.0), 0.45 + 0.35 * s2) * energy * 1.85;
+  float alpha = clamp(energy * fade * topFade * 0.9, 0.0, 1.0);
   gl_FragColor = vec4(col, alpha);
 }
 `;
@@ -588,6 +718,7 @@ const _unitSphereGeo = new THREE.SphereGeometry(1, 16, 12);
 const _unitTorusGeo = new THREE.TorusGeometry(1, 0.075, 10, 42);
 const _unitHexGateGeo = new THREE.RingGeometry(0.62, 0.85, 6);
 const _unitSpikeGeo = new THREE.ConeGeometry(0.27, 1.35, 5);
+const _unitPrismGeo = new THREE.OctahedronGeometry(0.34, 0);
 const _unitRibGeo = new THREE.BoxGeometry(0.32, 1.55, 0.58);
 const _unitChargeConeGeo = new THREE.ConeGeometry(1.15, 2.2, 14, 1, true);
 const _unitPuffGeo = new THREE.IcosahedronGeometry(0.42, 1);
@@ -629,6 +760,9 @@ export const bossVfxMethods = {
       PILLAR_FLAME_FRAG,
       CRESCENT_ARC_FRAG,
       CHARGE_CONE_FRAG,
+      PRISM_CONE_FRAG,
+      TECH_RADAR_FRAG,
+      ORBITAL_BEAM_FRAG,
     ];
     const warmGroup = new THREE.Group();
     warmGroup.position.set(0, -100, 0);
@@ -646,6 +780,7 @@ export const bossVfxMethods = {
           uBurst: { value: 0 },
           uIntensity: { value: 1 },
           uScorch: { value: 0 },
+          uHalfAngle: { value: BOSS_PRISM.halfAngle },
           uColor: { value: dummyColor },
           uCoreColor: { value: dummyColor },
         },
@@ -774,7 +909,16 @@ export const bossVfxMethods = {
   ): boolean {
     if (this.bgSim) return false;
     const cfg = BOSS_CONFIGS[e.kind as FloorBossKind];
-    const color = new THREE.Color(cfg.telegraphColor);
+    const isTechBoss = e.kind === 'boss_mothership_ai' || e.kind === 'boss_xeno_commander';
+    // Tech nova_ring on Omega Core AI uses bright sci-fi ice-blue; Archlich uses arcane violet
+    const effColorHex = skill === 'nova_ring' && e.kind === 'boss_mothership_ai' ? 0x38c8ff : cfg.telegraphColor;
+    const color = new THREE.Color(effColorHex);
+    const prismAccent =
+      e.kind === 'boss_crystal_wyrm'
+        ? new THREE.Color(0xd96bff)
+        : e.kind === 'boss_leviathan_heart'
+        ? new THREE.Color(0xffb84d)
+        : new THREE.Color(0x38e8ff);
 
     let rig = this.bossWindupRigs.get(e.id);
     if (!rig || rig.skill !== skill) {
@@ -786,9 +930,17 @@ export const bossVfxMethods = {
 
       const frag =
         skill === 'nova_ring'
-          ? HEXAGRAM_FRAG
+          ? isTechBoss
+            ? TECH_RADAR_FRAG
+            : HEXAGRAM_FRAG
           : skill === 'targeted_blast'
           ? GRAVITY_WELL_FRAG
+          : skill === 'prism_cone'
+          ? PRISM_CONE_FRAG
+          : skill === 'orbital_barrage'
+          ? isTechBoss
+            ? TECH_RADAR_FRAG
+            : HEXAGRAM_FRAG
           : SLAM_TELEGRAPH_FRAG;
 
       const groundMat = new THREE.ShaderMaterial({
@@ -799,7 +951,9 @@ export const bossVfxMethods = {
           uProgress: { value: 0 },
           uFade: { value: 1 },
           uBurst: { value: 0 },
+          uHalfAngle: { value: BOSS_PRISM.halfAngle },
           uColor: { value: color.clone() },
+          uCoreColor: { value: prismAccent.clone() },
         },
         transparent: true,
         depthWrite: false,
@@ -810,7 +964,12 @@ export const bossVfxMethods = {
         polygonOffsetUnits: -3,
       });
       const groundMesh = new THREE.Mesh(_unitPlaneGeo, groundMat);
-      groundMesh.rotation.x = -Math.PI / 2;
+      if (skill === 'prism_cone') {
+        groundMesh.rotation.order = 'YXZ';
+        groundMesh.rotation.x = Math.PI / 2;
+      } else {
+        groundMesh.rotation.x = -Math.PI / 2;
+      }
       groundMesh.position.y = 0.055;
       group.add(groundMesh);
 
@@ -972,6 +1131,9 @@ export const bossVfxMethods = {
     rig.groundMat.uniforms.uFade.value = 1;
     rig.groundMat.uniforms.uBurst.value = 0;
     rig.group.children[0].scale.setScalar(rad);
+    if (skill === 'prism_cone') {
+      rig.group.children[0].rotation.y = baseAngle;
+    }
 
     if (skill === 'slam') {
       if (!this.isSoftwareGl && Math.random() < 0.5 + progress * 0.45) {
@@ -2363,6 +2525,407 @@ export const bossVfxMethods = {
           tm.uniforms.uTime.value = elapsed;
           tm.uniforms.uIntensity.value = (1 - t) * 0.65;
         }
+      },
+      dispose: () => {
+        this.dynamicGroup.remove(group);
+        disposeOwnedMaterials(group);
+      },
+    });
+  },
+
+  /**
+   * `prism_cone` Stained-Glass / Crystal Fan Eruption & Shatter VFX (video 00:55-01:02):
+   * - Lingering stained-glass prism fan floor decal
+   * - 14 staggered 3D translucent crystal/bone/plasma prisms erupting outward across the 70-degree cone
+   * - Collective shatter at 0.28s into sparkling multi-hued crystal shards + burst PointLight
+   */
+  spawnBossPrismConeVfx(
+    this: EmbervaultEngine,
+    ox: number,
+    oz: number,
+    baseAngle: number,
+    range: number,
+    halfAngle: number,
+    colorHex: number,
+    bossKind?: FloorBossKind
+  ): void {
+    if (this.bgSim) return;
+    const isCrystal = bossKind === 'boss_crystal_wyrm';
+    const isFlesh = bossKind === 'boss_leviathan_heart';
+    const color = new THREE.Color(colorHex);
+    const accent = isCrystal
+      ? new THREE.Color(0xd96bff)
+      : isFlesh
+      ? new THREE.Color(0xffb84d)
+      : new THREE.Color(0x38e8ff);
+
+    const group = new THREE.Group();
+    group.position.set(ox, 0, oz);
+
+    const cx = ox + Math.sin(baseAngle) * (range * 0.55);
+    const cz = oz + Math.cos(baseAngle) * (range * 0.55);
+    this.triggerBossBurstLight(cx, 1.8, cz, colorHex, 155, 0.52);
+
+    // 1. Lingering stained-glass prism fan floor decal
+    const fanMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: PRISM_CONE_FRAG,
+      uniforms: {
+        uTime: { value: this.elapsed },
+        uProgress: { value: 1.0 },
+        uFade: { value: 0.95 },
+        uHalfAngle: { value: halfAngle },
+        uColor: { value: color.clone() },
+        uCoreColor: { value: accent.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    });
+    const fanMesh = new THREE.Mesh(_unitPlaneGeo, fanMat);
+    fanMesh.rotation.order = 'YXZ';
+    fanMesh.rotation.y = baseAngle;
+    fanMesh.rotation.x = Math.PI / 2;
+    fanMesh.position.y = 0.056;
+    fanMesh.scale.setScalar(range);
+    group.add(fanMesh);
+
+    // 2. 3 rows of staggered 3D prism spires inside the 70-degree cone
+    const rows = this.isSoftwareGl ? [2, 3] : [3, 5, 6];
+    const prisms: Array<{ mesh: THREE.Mesh; delay: number; maxH: number; wx: number; wz: number; col: number; shattered: boolean }> = [];
+    rows.forEach((count, rowIdx) => {
+      const rFrac = (rowIdx + 1) / (rows.length + 0.25);
+      const dist = range * rFrac;
+      for (let i = 0; i < count; i++) {
+        const u = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
+        const ang = baseAngle + u * (halfAngle * 0.86);
+        const px = Math.sin(ang) * dist;
+        const pz = Math.cos(ang) * dist;
+        const colHex = i % 2 === 0 ? colorHex : accent.getHex();
+        const mat = new THREE.MeshStandardMaterial({
+          color: colHex,
+          emissive: colHex,
+          emissiveIntensity: 1.35,
+          roughness: 0.14,
+          metalness: 0.25,
+          transparent: true,
+          opacity: 0.88,
+        });
+        const mesh = new THREE.Mesh(_unitPrismGeo, mat);
+        mesh.position.set(px, 0, pz);
+        mesh.rotation.y = ang + i * 0.4;
+        const maxH = 1.65 + rFrac * 1.45;
+        mesh.scale.set(0.7 + rFrac * 0.35, 0.01, 0.7 + rFrac * 0.35);
+        mesh.visible = false;
+        group.add(mesh);
+        prisms.push({ mesh, delay: rowIdx * 0.035 + i * 0.01, maxH, wx: ox + px, wz: oz + pz, col: colHex, shattered: false });
+      }
+    });
+
+    this.dynamicGroup.add(group);
+    const shatterAt = 0.32;
+    const maxLife = 1.15;
+    this.bossVfxItems.push({
+      group,
+      life: 0,
+      maxLife,
+      update: (dt, _t, elapsed) => {
+        const age = (group.userData.age = (group.userData.age ?? 0) + dt);
+        fanMat.uniforms.uTime.value = elapsed;
+        fanMat.uniforms.uFade.value = Math.pow(1 - Math.min(1, age / maxLife), 1.3) * 0.92;
+
+        for (const pr of prisms) {
+          const pa = age - pr.delay;
+          if (pa <= 0) {
+            pr.mesh.visible = false;
+            continue;
+          }
+          if (age >= shatterAt) {
+            pr.mesh.visible = false;
+            if (!pr.shattered) {
+              pr.shattered = true;
+              const shards = this.isSoftwareGl ? 2 : 4;
+              for (let s = 0; s < shards; s++) {
+                const sa = Math.random() * Math.PI * 2;
+                const spd = 2.4 + Math.random() * 4.2;
+                this.spawnParticle(
+                  pr.wx,
+                  0.6 + Math.random() * 0.9,
+                  pr.wz,
+                  Math.cos(sa) * spd,
+                  2.4 + Math.random() * 3.4,
+                  Math.sin(sa) * spd,
+                  s % 2 === 0 ? 0xffffff : pr.col,
+                  0.85,
+                  0.48,
+                  7.8
+                );
+              }
+            }
+            continue;
+          }
+          pr.mesh.visible = true;
+          const rise = Math.min(1, pa / 0.11);
+          const overshoot = 1 + Math.sin(rise * Math.PI) * 0.2;
+          const h = pr.maxH * rise * overshoot;
+          pr.mesh.scale.y = Math.max(0.05, h);
+          pr.mesh.position.y = h * 0.35;
+        }
+      },
+      dispose: () => {
+        this.dynamicGroup.remove(group);
+        disposeOwnedMaterials(group);
+      },
+    });
+  },
+
+  /**
+   * Standalone windup telegraph for sequential `orbital_barrage` shots (ground seal + sky energy portal).
+   */
+  spawnBossOrbitalTelegraphVfx(
+    this: EmbervaultEngine,
+    tx: number,
+    tz: number,
+    rad: number,
+    windupDur: number,
+    colorHex: number,
+    isTech = false
+  ): void {
+    if (this.bgSim) return;
+    const color = new THREE.Color(colorHex);
+    const group = new THREE.Group();
+    group.position.set(tx, 0, tz);
+
+    const groundMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: isTech ? TECH_RADAR_FRAG : HEXAGRAM_FRAG,
+      uniforms: {
+        uTime: { value: this.elapsed },
+        uProgress: { value: 0 },
+        uFade: { value: 1 },
+        uColor: { value: color.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    });
+    const groundMesh = new THREE.Mesh(_unitPlaneGeo, groundMat);
+    groundMesh.rotation.x = -Math.PI / 2;
+    groundMesh.position.y = 0.056;
+    groundMesh.scale.setScalar(rad);
+    group.add(groundMesh);
+
+    // High-altitude sky portal ring opening at y = 6.2
+    const portalMat = new THREE.MeshBasicMaterial({
+      color: colorHex,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const portalRing = new THREE.Mesh(_unitTorusGeo, portalMat);
+    portalRing.position.y = 6.2;
+    portalRing.rotation.x = Math.PI / 2;
+    portalRing.scale.setScalar(0.2);
+    group.add(portalRing);
+
+    // Thin vertical aiming guide beam from sky portal down to ground
+    const guideMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const guide = new THREE.Mesh(_unitCoreCylGeo, guideMat);
+    guide.position.y = 3.1;
+    guide.scale.set(0.04, 6.2, 0.04);
+    group.add(guide);
+
+    this.dynamicGroup.add(group);
+    this.bossVfxItems.push({
+      group,
+      life: 0,
+      maxLife: windupDur,
+      update: (dt, t, elapsed) => {
+        groundMat.uniforms.uTime.value = elapsed;
+        groundMat.uniforms.uProgress.value = t;
+        portalRing.scale.setScalar(0.3 + t * rad * 0.78);
+        portalRing.rotation.z += dt * (4 + t * 6);
+        guide.scale.x = 0.03 + t * 0.07;
+        guide.scale.z = 0.03 + t * 0.07;
+        guideMat.opacity = 0.25 + t * 0.65;
+      },
+      dispose: () => {
+        this.dynamicGroup.remove(group);
+        disposeOwnedMaterials(group);
+      },
+    });
+  },
+
+  /**
+   * `orbital_barrage` Sky-to-Ground Energy Pillar Strike VFX (video 00:26-00:30 Astral Cataclysm):
+   * - Blazing white-core sky pillar + downward-streaming plasma sheath
+   * - Twin ascending 3D energy torus rings rising up the beam
+   * - White-hot flash + burst PointLight + Voronoi scorch aftermath
+   */
+  spawnBossOrbitalPillarVfx(
+    this: EmbervaultEngine,
+    tx: number,
+    tz: number,
+    rad: number,
+    colorHex: number
+  ): void {
+    if (this.bgSim) return;
+    const color = new THREE.Color(colorHex);
+    const group = new THREE.Group();
+    group.position.set(tx, 0, tz);
+
+    this.triggerBossBurstLight(tx, 2.2, tz, colorHex, 155, 0.48);
+
+    // 1. Sky-to-ground beam core + outer plasma sheath (height 12)
+    const beamH = 12;
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 1,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const core = new THREE.Mesh(_unitCoreCylGeo, coreMat);
+    core.position.y = beamH * 0.5;
+    core.scale.set(rad * 0.28, beamH, rad * 0.28);
+    group.add(core);
+
+    const sheathMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: ORBITAL_BEAM_FRAG,
+      uniforms: {
+        uTime: { value: this.elapsed },
+        uLife: { value: 0 },
+        uColor: { value: color.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    const sheath = new THREE.Mesh(_unitCylGeo, sheathMat);
+    sheath.position.y = beamH * 0.5;
+    sheath.scale.set(rad * 0.58, beamH, rad * 0.58);
+    group.add(sheath);
+
+    // 2. Twin ascending energy rings (video signature!)
+    const ringMat1 = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.92,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const ring1 = new THREE.Mesh(_unitTorusGeo, ringMat1);
+    ring1.rotation.x = Math.PI / 2;
+    ring1.position.y = 0.4;
+    group.add(ring1);
+
+    const ringMat2 = new THREE.MeshBasicMaterial({
+      color: colorHex,
+      transparent: true,
+      opacity: 0.88,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const ring2 = new THREE.Mesh(_unitTorusGeo, ringMat2);
+    ring2.rotation.x = Math.PI / 2;
+    ring2.position.y = 1.4;
+    group.add(ring2);
+
+    // 3. Voronoi scorch ground crater
+    const scorchMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: VORONOI_SCORCH_FRAG,
+      uniforms: {
+        uLife: { value: 0 },
+        uColor: { value: color.clone() },
+        uCoreColor: { value: new THREE.Color(0xffffff) },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const scorch = new THREE.Mesh(_unitPlaneGeo, scorchMat);
+    scorch.rotation.x = -Math.PI / 2;
+    scorch.position.y = 0.05;
+    scorch.scale.setScalar(rad * 1.15);
+    group.add(scorch);
+
+    if (!this.isSoftwareGl) {
+      for (let i = 0; i < 20; i++) {
+        const a = (i / 20) * Math.PI * 2;
+        const spd = 2.8 + Math.random() * 4.2;
+        this.spawnParticle(
+          tx + Math.cos(a) * rad * 0.3,
+          0.3,
+          tz + Math.sin(a) * rad * 0.3,
+          Math.cos(a) * spd,
+          2.2 + Math.random() * 3.5,
+          Math.sin(a) * spd,
+          i % 2 === 0 ? 0xffffff : colorHex,
+          1.1,
+          0.48,
+          6.5
+        );
+      }
+    }
+
+    this.dynamicGroup.add(group);
+    const beamDur = 0.48;
+    const maxLife = 1.4;
+    this.bossVfxItems.push({
+      group,
+      life: 0,
+      maxLife,
+      update: (dt, _t, elapsed) => {
+        const age = (group.userData.age = (group.userData.age ?? 0) + dt);
+        const bt = Math.min(1, age / beamDur);
+        core.visible = bt < 1;
+        sheath.visible = bt < 1;
+        if (bt < 1) {
+          const w = age < 0.06 ? THREE.MathUtils.lerp(0.5, 1.3, age / 0.06) : Math.max(0.02, 1.3 * (1 - Math.pow((age - 0.06) / (beamDur - 0.06), 1.4)));
+          core.scale.set(rad * 0.28 * w, beamH, rad * 0.28 * w);
+          coreMat.opacity = Math.pow(1 - bt, 1.2);
+          sheath.scale.set(rad * 0.58 * w, beamH, rad * 0.58 * w);
+          sheathMat.uniforms.uTime.value = elapsed;
+          sheathMat.uniforms.uLife.value = bt;
+        }
+
+        const rt = Math.min(1, age / 0.62);
+        ring1.visible = rt < 1;
+        ring2.visible = rt < 1;
+        if (rt < 1) {
+          const ease = 1 - Math.pow(1 - rt, 2.0);
+          ring1.position.y = 0.35 + ease * 3.2;
+          ring1.scale.setScalar(rad * (0.55 + ease * 0.85));
+          ringMat1.opacity = (1 - rt) * 0.9;
+
+          ring2.position.y = 1.3 + ease * 3.6;
+          ring2.scale.setScalar(rad * (0.7 + ease * 0.95));
+          ringMat2.opacity = (1 - rt) * 0.85;
+        }
+
+        scorchMat.uniforms.uLife.value = Math.min(1, age / maxLife);
       },
       dispose: () => {
         this.dynamicGroup.remove(group);

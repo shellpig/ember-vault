@@ -319,6 +319,10 @@ export interface HudState {
   fadeOpacity: number;
   aiStatus: string;
   boss: BossHudInfo | null;
+  /** All engaged living bosses (1 normally, 2 on Depth 40 dual-boss finale). */
+  bosses: BossHudInfo[];
+  /** Boss Test Arena 5s wave countdown banner, or null when a wave is active / normal dungeon. */
+  arenaCountdown: { sec: number; wave: number; waveDepth: number; label: string } | null;
   isDead: boolean;
   runSummary: RunSummary | null;
   /** 0-1 rescue progress on the (downed) local hero while a teammate is reviving them. */

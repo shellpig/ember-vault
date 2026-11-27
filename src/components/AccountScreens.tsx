@@ -453,15 +453,40 @@ export function CharacterSelectScreen({
 // Lobby
 // ---------------------------------------------------------------------------
 
-/** Start floor slider (1..max depth). Renders nothing for a character that has not been past floor 1. */
-export function StartDepthPicker({ maxDepth, value, onChange }: { maxDepth: number; value: number; onChange: (v: number) => void }) {
-  if (maxDepth <= 1) return null;
+import { BOSS_ARENA_DEPTH } from '../game/engine/data';
+import { useTouchPrimary } from './TouchControls';
+
+let bossArenaSecretUnlocked = false;
+export function isBossArenaUnlocked(): boolean {
+  return bossArenaSecretUnlocked;
+}
+
+/** Start floor slider (1..max depth, plus hidden rightmost BOSS 測試戰 notch when unlocked on PC). */
+export function StartDepthPicker({
+  maxDepth,
+  value,
+  onChange,
+  arenaUnlocked = false,
+}: {
+  maxDepth: number;
+  value: number;
+  onChange: (v: number) => void;
+  arenaUnlocked?: boolean;
+}) {
+  const showArena = arenaUnlocked;
+  if (maxDepth <= 1 && !showArena) return null;
+  const sliderMax = showArena ? maxDepth + 1 : maxDepth;
+  const isArena = showArena && value === BOSS_ARENA_DEPTH;
+  const sliderVal = isArena ? sliderMax : Math.max(1, Math.min(maxDepth, value));
   return (
     <div className="w-full flex flex-col gap-1" data-testid="start-depth-picker">
       <div className="flex items-center justify-between font-hud text-xs text-[#aeb3c2]">
         <label htmlFor="start-depth">起始層數</label>
-        <span className="tabular-nums text-[#f3e1b4]" data-testid="start-depth-value">
-          第 {value} 層
+        <span
+          className={`tabular-nums ${isArena ? 'text-[#ff7866] font-bold' : 'text-[#f3e1b4]'}`}
+          data-testid="start-depth-value"
+        >
+          {isArena ? 'BOSS 測試戰' : `第 ${sliderVal} 層`}
         </span>
       </div>
       <input
@@ -469,17 +494,35 @@ export function StartDepthPicker({ maxDepth, value, onChange }: { maxDepth: numb
         data-testid="start-depth"
         type="range"
         min={1}
-        max={maxDepth}
+        max={sliderMax}
         step={1}
-        value={value}
-        onChange={(e) => onChange(Math.max(1, Math.min(maxDepth, Number(e.target.value) || maxDepth)))}
-        className="w-full accent-[#d6b25e]"
+        value={sliderVal}
+        onChange={(e) => {
+          const raw = Number(e.target.value) || maxDepth;
+          if (showArena && raw >= sliderMax) {
+            onChange(BOSS_ARENA_DEPTH);
+          } else {
+            onChange(Math.max(1, Math.min(maxDepth, raw)));
+          }
+        }}
+        className={`w-full ${isArena ? 'accent-[#ff5e4d]' : 'accent-[#d6b25e]'}`}
       />
       <div className="flex items-center justify-between font-hud text-[10px] text-[#6a6f80] tabular-nums">
         <span>1</span>
-        <button type="button" className="hover:text-[#f3e1b4] cursor-pointer" onClick={() => onChange(maxDepth)}>
-          最深 {maxDepth}
-        </button>
+        <div className="flex items-center gap-2">
+          <button type="button" className="hover:text-[#f3e1b4] cursor-pointer" onClick={() => onChange(maxDepth)}>
+            最深 {maxDepth}
+          </button>
+          {showArena && (
+            <button
+              type="button"
+              className="text-[#ff8a7a] hover:text-[#ffb4a8] cursor-pointer font-semibold"
+              onClick={() => onChange(BOSS_ARENA_DEPTH)}
+            >
+              BOSS 測試戰
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -502,9 +545,11 @@ export function LobbyScreen({
   onJoinRoom: (code: string) => void;
 }) {
   const cls = HERO_CLASSES[save.class_id as HeroClassId];
+  const isTouch = useTouchPrimary();
   const [code, setCode] = useState('');
   const [codeError, setCodeError] = useState<string | null>(null);
   const [startDepth, setStartDepth] = useState(Math.max(1, save.max_depth));
+  const [arenaUnlocked, setArenaUnlocked] = useState(() => bossArenaSecretUnlocked);
   const [bots, setBots] = useState<BotSetup>(() => loadBotSetup());
 
   const setBotCount = (n: number) => {
@@ -527,6 +572,17 @@ export function LobbyScreen({
 
   return (
     <Shell title="大廳" subtitle="LOBBY">
+      {!isTouch && (
+        <button
+          type="button"
+          aria-label="boss-arena-secret"
+          onClick={() => {
+            bossArenaSecretUnlocked = true;
+            setArenaUnlocked(true);
+          }}
+          className="fixed top-0 left-0 w-16 h-16 opacity-0 z-50 cursor-default"
+        />
+      )}
       <div className={`${PANEL} px-6 py-6 flex flex-col items-center gap-4`}>
         <div className="text-center">
           <div className="font-display text-xl font-bold tracking-[0.12em] text-[#f3e1b4]">{save.name}</div>
@@ -538,7 +594,12 @@ export function LobbyScreen({
         <div className="font-hud text-xs text-[#6a6f80] cursor-not-allowed select-none" aria-disabled="true">
           難度：即將推出
         </div>
-        <StartDepthPicker maxDepth={save.max_depth} value={startDepth} onChange={setStartDepth} />
+        <StartDepthPicker
+          maxDepth={save.max_depth}
+          value={startDepth}
+          onChange={setStartDepth}
+          arenaUnlocked={arenaUnlocked}
+        />
         <div className="w-full flex flex-col gap-2" data-testid="bot-picker">
           <div className="flex items-center justify-between font-hud text-xs text-[#aeb3c2]">
             <span>單人機器人隊友</span>
@@ -595,7 +656,8 @@ export function LobbyScreen({
           >
             單人開始
             <span className="block font-hud text-[11px] text-[#b9a77a]">
-              從第 {startDepth} 層開始{bots.length > 0 ? ` · ${bots.length} 位機器人` : ''} · 不連線
+              {startDepth === BOSS_ARENA_DEPTH ? 'BOSS 測試戰（不掉寶）' : `從第 ${startDepth} 層開始`}
+              {bots.length > 0 ? ` · ${bots.length} 位機器人` : ''} · 不連線
             </span>
           </button>
           <button type="button" data-testid="create-room" className={`${BTN_PLAIN} w-full`} onClick={onCreateRoom}>

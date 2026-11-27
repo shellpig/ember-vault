@@ -1,5 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
 import { HERO_CLASSES, HUNTER } from '../classes';
+import { BOSS_ARENA_WAVES, BOSS_CONFIGS, getBossesForDepth } from './data';
 import { worldToGrid } from '../dungeon';
 import { _projVec } from './scratch';
 import { STASH_CAP } from '../hero';
@@ -84,12 +85,33 @@ export const hudMethods = {
     if (this.bgSim || this.isSilentActor()) return; // the HUD only ever shows the local hero
     const lh = this.localHero;
     const rescueHud = this.getRescueHud();
-    const activeBoss = this.viewEnemies().find(
-      (e) =>
-        e.isBoss &&
-        !e.dead &&
-        Math.hypot(e.x - lh.x, e.z - lh.z) < 15.5
-    );
+    const engagedBosses = this.viewEnemies()
+      .filter((e) => e.isBoss && !e.dead && Math.hypot(e.x - lh.x, e.z - lh.z) < (this.bossArenaMode ? 32 : 15.5))
+      .sort((a, b) => Math.hypot(a.x - lh.x, a.z - lh.z) - Math.hypot(b.x - lh.x, b.z - lh.z))
+      .slice(0, 2);
+    const bossesHud = engagedBosses.map((b) => ({
+      name: b.bossName ?? 'DUNGEON BOSS',
+      title: b.bossTitle ?? '',
+      hp: Math.max(0, b.hp),
+      maxHp: b.maxHp,
+      state: b.bossState ?? 'chase',
+    }));
+    const arenaCountdown =
+      this.bossArenaMode && !this.bossArenaActive && this.bossArenaCountdown > 0
+        ? (() => {
+            const wd = BOSS_ARENA_WAVES[this.bossArenaWave % BOSS_ARENA_WAVES.length];
+            const th = wd <= 10 ? 'dungeon' : wd <= 20 ? 'cavern' : wd <= 30 ? 'flesh' : 'alien';
+            const names = getBossesForDepth(wd, th, 0)
+              .map((k) => BOSS_CONFIGS[k].name)
+              .join(' & ');
+            return {
+              sec: Math.max(1, Math.ceil(this.bossArenaCountdown)),
+              wave: this.bossArenaWave + 1,
+              waveDepth: wd,
+              label: names,
+            };
+          })()
+        : null;
 
     this.callbacks.onHudChange({
       hp: lh.hp,
@@ -133,15 +155,9 @@ export const hudMethods = {
       pommelMaxCooldown: lh.pommelMaxCooldown,
       fadeOpacity: this.fadeOpacity,
       aiStatus: lh.ai.status,
-      boss: activeBoss
-        ? {
-            name: activeBoss.bossName ?? 'DUNGEON BOSS',
-            title: activeBoss.bossTitle ?? '',
-            hp: Math.max(0, activeBoss.hp),
-            maxHp: activeBoss.maxHp,
-            state: activeBoss.bossState ?? 'chase',
-          }
-        : null,
+      boss: bossesHud[0] ?? null,
+      bosses: bossesHud,
+      arenaCountdown,
       isDead: lh.isDead,
       runSummary: lh.isDead ? this.buildRunSummary() : null,
       beingRescued: rescueHud.beingRescued,

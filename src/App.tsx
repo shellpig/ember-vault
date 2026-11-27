@@ -208,6 +208,8 @@ const INITIAL_HUD: HudState = {
   fadeOpacity: 1,
   aiStatus: 'Exploring Chambers',
   boss: null,
+  bosses: [],
+  arenaCountdown: null,
   isDead: false,
   runSummary: null,
   beingRescued: 0,
@@ -1507,40 +1509,68 @@ export default function App() {
         )}
       </div>
 
-      {/* Top-Center Boss Health Bar (Appears when engaging a Floor Boss) */}
-      {!hud.isDead && hud.boss && (
-        <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 z-30 w-[min(360px,54vw)]">
-          <div className="bg-[#0c0e14]/92 border border-[#b87c40]/85 px-3.5 py-2 shadow-[0_8px_24px_rgba(0,0,0,0.75)]">
-            <div className="flex items-baseline justify-between gap-2 mb-1.5">
-              <div className="flex items-baseline gap-2 min-w-0">
-                <span className="font-display text-xs md:text-sm font-bold tracking-[0.14em] text-[#f5d58c] truncate">
-                  {hud.boss.name}
-                </span>
-                <span className="hidden sm:inline font-hud text-[10px] text-[#9fa4b5] truncate">
-                  {hud.boss.title}
-                </span>
+      {/* Top-Center Boss Health Bar(s) — supports 1 boss or 2 side-by-side on Depth 40 dual-boss */}
+      {!hud.isDead && hud.bosses.length > 0 && (
+        <div
+          className={`pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 z-30 flex gap-2.5 ${
+            hud.bosses.length > 1 ? 'w-[min(680px,82vw)]' : 'w-[min(360px,54vw)]'
+          }`}
+        >
+          {hud.bosses.map((b, idx) => (
+            <div
+              key={`${b.name}-${idx}`}
+              className="flex-1 min-w-0 bg-[#0c0e14]/92 border border-[#b87c40]/85 px-3.5 py-2 shadow-[0_8px_24px_rgba(0,0,0,0.75)]"
+            >
+              <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                <div className="flex items-baseline gap-2 min-w-0">
+                  <span className="font-display text-xs md:text-sm font-bold tracking-[0.12em] text-[#f5d58c] truncate">
+                    {b.name}
+                  </span>
+                  {hud.bosses.length === 1 && (
+                    <span className="hidden sm:inline font-hud text-[10px] text-[#9fa4b5] truncate">
+                      {b.title}
+                    </span>
+                  )}
+                </div>
+                {b.state === 'windup' ? (
+                  <span className="font-hud text-[10px] font-bold tracking-wider text-[#ff6b57] whitespace-nowrap">
+                    DODGE!
+                  </span>
+                ) : b.state === 'recover' ? (
+                  <span className="font-hud text-[10px] font-bold tracking-wider text-[#62f5b4] whitespace-nowrap">
+                    COUNTER!
+                  </span>
+                ) : (
+                  <span className="font-hud text-[10px] text-[#c7b68d] whitespace-nowrap tabular-nums">
+                    {b.hp} / {b.maxHp}
+                  </span>
+                )}
               </div>
-              {hud.boss.state === 'windup' ? (
-                <span className="font-hud text-[10px] font-bold tracking-wider text-[#ff6b57] whitespace-nowrap">
-                  DODGE!
-                </span>
-              ) : hud.boss.state === 'recover' ? (
-                <span className="font-hud text-[10px] font-bold tracking-wider text-[#62f5b4] whitespace-nowrap">
-                  COUNTER!
-                </span>
-              ) : (
-                <span className="font-hud text-[10px] text-[#c7b68d] whitespace-nowrap">
-                  {hud.boss.hp} / {hud.boss.maxHp}
-                </span>
-              )}
+              <div className="w-full h-2 bg-[#1a161c] border border-[#4a3629] overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-[#9e1b2d] via-[#d93043] to-[#f2784b] transition-all duration-150"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (b.hp / Math.max(1, b.maxHp)) * 100))}%`,
+                  }}
+                />
+              </div>
             </div>
-            <div className="w-full h-2 bg-[#1a161c] border border-[#4a3629] overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-[#9e1b2d] via-[#d93043] to-[#f2784b] transition-all duration-150"
-                style={{
-                  width: `${Math.max(0, Math.min(100, (hud.boss.hp / Math.max(1, hud.boss.maxHp)) * 100))}%`,
-                }}
-              />
+          ))}
+        </div>
+      )}
+
+      {/* Top-Center Boss Test Arena 5s Wave Countdown */}
+      {!hud.isDead && hud.arenaCountdown && (
+        <div className="pointer-events-none absolute top-5 left-1/2 -translate-x-1/2 z-30">
+          <div className="bg-[#0c0e14]/95 border border-[#ff725c] px-6 py-2.5 text-center shadow-[0_8px_28px_rgba(0,0,0,0.85)]">
+            <div className="font-display text-xs md:text-sm font-bold tracking-[0.16em] text-[#ffd89c] whitespace-nowrap">
+              BOSS 測試戰 · 第 {hud.arenaCountdown.wave} 波（{hud.arenaCountdown.waveDepth}F）
+            </div>
+            <div className="font-hud text-[11px] text-[#c8ccd8] mt-0.5 whitespace-nowrap">
+              {hud.arenaCountdown.label}
+            </div>
+            <div className="font-display text-2xl font-bold text-[#ff7c66] mt-1 tabular-nums">
+              {hud.arenaCountdown.sec}
             </div>
           </div>
         </div>

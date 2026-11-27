@@ -187,6 +187,53 @@ function createRng(seed: number): () => number {
  * player, attract mode) the random part is drawn from Math.random exactly as before, so the global RNG sequence of a
  * single player run is unchanged. The value used is stored in `genSeed` so the host can announce it.
  */
+export function generateBossArena(seed?: number): DungeonData {
+  const width = 18;
+  const height = 18;
+  const biome = DUNGEON_BIOMES[0];
+  const genSeed = seed ?? Math.floor(Math.random() * 100000);
+
+  const tiles: TileType[][] = Array.from({ length: height }, (_, gz) =>
+    Array.from({ length: width }, (_, gx) => {
+      if (gx === 0 || gz === 0 || gx === width - 1 || gz === height - 1) return 2 as TileType;
+      return 1 as TileType;
+    })
+  );
+  const explored: boolean[][] = Array.from({ length: height }, () =>
+    Array.from({ length: width }, () => true)
+  );
+
+  const rooms: RoomRect[] = [
+    { id: 0, x: 1, z: 1, w: 16, h: 16, cx: 9, cz: 9, role: 'start' },
+  ];
+
+  const props: DungeonPropData[] = [
+    { type: 'brazier', gx: 3, gz: 3 },
+    { type: 'brazier', gx: 14, gz: 3 },
+    { type: 'brazier', gx: 3, gz: 14 },
+    { type: 'brazier', gx: 14, gz: 14 },
+    { type: 'torch', gx: 9, gz: 1, facing: 0 },
+    { type: 'torch', gx: 9, gz: 16, facing: Math.PI },
+    { type: 'torch', gx: 1, gz: 9, facing: Math.PI / 2 },
+    { type: 'torch', gx: 16, gz: 9, facing: -Math.PI / 2 },
+  ];
+
+  return {
+    width,
+    height,
+    tiles,
+    explored,
+    rooms,
+    props,
+    spawn: { gx: 9, gz: 14 },
+    keyPos: { gx: 0, gz: 0 },
+    doorPos: { gx: 0, gz: 0, horizontal: true },
+    stairsPos: { gx: 0, gz: 0 },
+    biome,
+    genSeed,
+  };
+}
+
 export function generateDungeon(depth: number, seed?: number): DungeonData {
   // Expand dungeon dimensions by ~20% after every 5 completed floors (34 -> 41 -> 49 -> 59 -> 68 max)
   const tier = Math.floor((depth - 1) / 5);

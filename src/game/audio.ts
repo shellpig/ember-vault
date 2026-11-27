@@ -705,6 +705,90 @@ export class DungeonAudio {
     src.start(now, 0.03, 0.7);
   }
 
+  public playBossPrismShatter(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    // Crystalline shimmering chime burst (stained-glass prisms erupting & shattering)
+    [1320, 1760, 2217, 2637].forEach((freq, i) => {
+      const osc = this.ctx!.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, now + i * 0.025);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.65, now + i * 0.025 + 0.34);
+      const g = this.ctx!.createGain();
+      g.gain.setValueAtTime(0.22, now + i * 0.025);
+      g.gain.exponentialRampToValueAtTime(0.001, now + i * 0.025 + 0.36);
+      osc.connect(g);
+      g.connect(this.masterGain!);
+      osc.start(now + i * 0.025);
+      osc.stop(now + i * 0.025 + 0.38);
+    });
+
+    // Crisp glass-shatter crackle
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const hp = this.ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.setValueAtTime(2600, now);
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.36, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+    src.connect(hp);
+    hp.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(now, 0.02, 0.44);
+  }
+
+  public playBossOrbitalStrike(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    // Sky-to-ground orbital beam thunderclap
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(220, now);
+    sub.frequency.exponentialRampToValueAtTime(34, now + 0.42);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.55, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + 0.46);
+    sub.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 0.48);
+
+    const beam = this.ctx.createOscillator();
+    beam.type = 'sawtooth';
+    beam.frequency.setValueAtTime(1240, now);
+    beam.frequency.exponentialRampToValueAtTime(240, now + 0.36);
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'bandpass';
+    lp.frequency.setValueAtTime(1500, now);
+    lp.frequency.exponentialRampToValueAtTime(380, now + 0.38);
+    lp.Q.value = 1.8;
+    const bg = this.ctx.createGain();
+    bg.gain.setValueAtTime(0.3, now);
+    bg.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
+    beam.connect(lp);
+    lp.connect(bg);
+    bg.connect(this.masterGain);
+    beam.start(now);
+    beam.stop(now + 0.44);
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1100, now);
+    bp.frequency.exponentialRampToValueAtTime(220, now + 0.4);
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.34, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.44);
+    src.connect(bp);
+    bp.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(now, 0.05, 0.46);
+  }
+
   public playBossVolley(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

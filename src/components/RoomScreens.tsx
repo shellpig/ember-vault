@@ -5,7 +5,7 @@ import { HERO_CLASSES, type HeroClassId } from '../game/classes';
 import { RoomClient, RoomConnectError, roomErrorText } from '../net/roomClient';
 import { MAX_CHAT_LENGTH, ROOM_MAX_PLAYERS, type ChatMsg, type RoomMember, type ServerMessage } from '../../shared/room';
 import type { CharacterSave } from '../../shared/character';
-import { BTN_PLAIN, PANEL, Shell, StartDepthPicker } from './AccountScreens';
+import { BTN_PLAIN, PANEL, Shell, StartDepthPicker, isBossArenaUnlocked } from './AccountScreens';
 
 export type RoomEntry = { kind: 'create' } | { kind: 'join'; code: string };
 
@@ -288,7 +288,12 @@ export function RoomLobbyScreen({
         <div className="flex flex-col items-center gap-2">
           {isHost && (
             <div className="w-[min(360px,90vw)]">
-              <StartDepthPicker maxDepth={save.max_depth} value={startDepth} onChange={setStartDepth} />
+              <StartDepthPicker
+                maxDepth={save.max_depth}
+                value={startDepth}
+                onChange={setStartDepth}
+                arenaUnlocked={isBossArenaUnlocked()}
+              />
             </div>
           )}
           <div className="flex gap-3">

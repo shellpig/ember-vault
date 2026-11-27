@@ -380,6 +380,7 @@ export const lootMethods = {
    * and the guaranteed boss relics. Shared by the boss kill and the treasure chests.
    */
   dropBossHoard(this: EmbervaultEngine, x: number, z: number): void {
+    if (this.bossArenaMode) return;
     const goldScale = this.getDepthGoldScale();
     for (let i = 0; i < BOSS_LOOT.coinCount; i++) {
       const a = (i / BOSS_LOOT.coinCount) * Math.PI * 2 + Math.random() * 0.3;
@@ -458,6 +459,7 @@ export const lootMethods = {
     vx = 0,
     vz = 0
   ): void {
+    if (this.bossArenaMode) return;
     const relicRig = createRelicLootMesh(relic.rarity, this.textures?.glowMap);
     relicRig.root.position.set(x, 0, z);
     this.dynamicGroup.add(relicRig.root);
@@ -541,6 +543,7 @@ export const lootMethods = {
   },
 
   spawnLoot(this: EmbervaultEngine, x: number, z: number, type: 'gold' | 'potion', customValue?: number): void {
+    if (this.bossArenaMode) return;
     if (this.hero.isBot) {
       this.grantBotLoot(type, customValue);
       return;

@@ -1,11 +1,12 @@
 import type { EmbervaultEngine } from '../engine';
 import { findGridPath, gridToWorld } from '../dungeon';
-import { BOSS_ACTION, BOSS_CONFIGS, SPECIAL_ELITE_NAMES, getBossBaseMaxHp, getBossDepthTier, getBossForDepth, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isMageLikeRanged, isRangedEnemy, isSwarmEnemy } from './data';
+import { BOSS_ACTION, BOSS_ARENA_WAVES, BOSS_CONFIGS, SPECIAL_ELITE_NAMES, getBossBaseMaxHp, getBossDepthTier, getBossesForDepth, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isMageLikeRanged, isRangedEnemy, isSwarmEnemy } from './data';
 import { applyEliteVisuals, createBossTelegraph, createEnemyModel } from '../models';
-import { DungeonData, EnemyKind } from '../types';
+import { DungeonData, EnemyKind, TerrainTheme } from '../types';
 
 export const spawnMethods = {
   spawnEnemies(this: EmbervaultEngine): void {
+    if (this.bossArenaMode) return; // Boss Test Arena spawns waves via updateBossArena()
     const biome = this.dungeon.biome;
     const theme = biome.terrainTheme;
     const isBossFloor = this.depth % 5 === 0;
@@ -123,8 +124,8 @@ export const spawnMethods = {
 
       if (room.role === 'key') {
         if (isBossFloor) {
-          // Spawn a towering terrain-matched Floor Boss in or right in front of the Key Room!
-          const bossKind = getBossForDepth(this.depth, theme, this.dungeon.genSeed);
+          // Spawn the floor's Boss(es) — Depth 40 is the dual-boss finale (Omega Core AI + Molten Colossus)!
+          const bossKinds = getBossesForDepth(this.depth, theme, this.dungeon.genSeed);
           const pathToKey = findGridPath(
             this.dungeon,
             this.dungeon.spawn.gx,
@@ -163,7 +164,23 @@ export const spawnMethods = {
               };
           }
 
-          this.addEnemy(bossKind, bossTile.gx, bossTile.gz, biome);
+          this.addEnemy(bossKinds[0], bossTile.gx, bossTile.gz, biome);
+          if (bossKinds.length > 1) {
+            const secondSpots = [
+              { gx: bossTile.gx + 2, gz: bossTile.gz },
+              { gx: bossTile.gx - 2, gz: bossTile.gz },
+              { gx: bossTile.gx, gz: bossTile.gz + 2 },
+              { gx: bossTile.gx, gz: bossTile.gz - 2 },
+              { gx: room.cx - 1, gz: room.cz - 1 },
+            ];
+            const secondTile =
+              secondSpots.find(
+                (s) =>
+                  this.dungeon.tiles[s.gz]?.[s.gx] === 1 &&
+                  (s.gx !== this.dungeon.keyPos.gx || s.gz !== this.dungeon.keyPos.gz)
+              ) ?? bossTile;
+            this.addEnemy(bossKinds[1], secondTile.gx, secondTile.gz, biome);
+          }
 
           // Spawn 1–2 terrain-matched ranged escorts near the Boss so ranged-first Auto priority applies
           const escortKinds: EnemyKind[] =
@@ -281,16 +298,104 @@ export const spawnMethods = {
   },
 
   /** Spec §4: monster HP x (1 + (n - 1)) for n heroes - 2 heroes = 2x, 4 heroes = 4x (bosses and elites included). */
+  /** Effective depth used for enemy HP & damage scaling (in Boss Test Arena, derived from host level). */
+  getEffectiveSimDepth(this: EmbervaultEngine): number {
+    if (!this.bossArenaMode) return this.depth;
+    const hostHero = this.mp ? (this.heroById(this.mp.hostId) ?? this.localHero) : this.localHero;
+    const hostLevel = 1 + hostHero.getTotalUpgradeLevel();
+    return Math.max(1, Math.min(40, Math.round(hostLevel * 0.65)));
+  },
+
+  /** Spawn one wave of the Boss Test Arena (5F..40F dual-boss, then loops) at the center of the 18x18 room. */
+  spawnBossArenaWave(this: EmbervaultEngine, waveIdx: number): void {
+    const waveDepth = BOSS_ARENA_WAVES[waveIdx % BOSS_ARENA_WAVES.length];
+    const theme: TerrainTheme =
+      waveDepth <= 10 ? 'dungeon' : waveDepth <= 20 ? 'cavern' : waveDepth <= 30 ? 'flesh' : 'alien';
+    const biome = this.dungeon.biome;
+    const bossKinds = getBossesForDepth(waveDepth, theme, 0);
+
+    const cx = 9;
+    const cz = 9;
+    if (bossKinds.length > 1) {
+      this.addEnemy(bossKinds[0], cx - 2, cz, biome);
+      this.addEnemy(bossKinds[1], cx + 2, cz, biome);
+    } else {
+      this.addEnemy(bossKinds[0], cx, cz, biome);
+    }
+
+    const themeArcher: EnemyKind =
+      theme === 'cavern' ? 'cavern_spitter' : theme === 'flesh' ? 'flesh_spiner' : theme === 'alien' ? 'alien_gunner' : 'archer';
+    const themeMage: EnemyKind =
+      theme === 'cavern' ? 'cavern_shaman' : theme === 'flesh' ? 'flesh_eye' : theme === 'alien' ? 'alien_psion' : 'mage';
+    const themeMelee: EnemyKind =
+      theme === 'cavern' ? 'cavern_golem' : theme === 'flesh' ? 'flesh_tendril' : theme === 'alien' ? 'alien_trooper' : 'skeleton';
+
+    // Match the exact escort roster of `waveDepth`
+    const escortList: Array<{ kind: EnemyKind; elite: 'none' | 'plain' | 'named' }> = [];
+    const baseRanged: EnemyKind[] =
+      waveDepth >= 10 ? [themeArcher, themeMage] : [Math.floor(waveDepth / 5) % 2 === 1 ? themeArcher : themeMage];
+    for (const rk of baseRanged) escortList.push({ kind: rk, elite: 'none' });
+
+    const tier = getBossDepthTier(waveDepth);
+    const mobCycle: EnemyKind[] = [themeMelee, themeArcher, themeMage];
+    for (let i = 0; i < tier.mobs; i++) escortList.push({ kind: mobCycle[i % mobCycle.length], elite: 'none' });
+    for (let i = 0; i < tier.elites; i++) escortList.push({ kind: themeMelee, elite: 'plain' });
+    for (let i = 0; i < tier.named; i++) escortList.push({ kind: i % 2 === 0 ? themeMelee : themeArcher, elite: 'named' });
+
+    const ringOffsets = [
+      { dx: -3, dz: -2 },
+      { dx: 3, dz: -2 },
+      { dx: -4, dz: 1 },
+      { dx: 4, dz: 1 },
+      { dx: 0, dz: -3 },
+      { dx: -2, dz: -4 },
+      { dx: 2, dz: -4 },
+      { dx: -4, dz: -3 },
+      { dx: 4, dz: -3 },
+    ];
+    escortList.forEach((es, idx) => {
+      const off = ringOffsets[idx % ringOffsets.length];
+      this.addEnemy(es.kind, cx + off.dx, cz + off.dz, biome, es.elite !== 'none', 0, 0, es.elite === 'named');
+    });
+
+    const names = bossKinds.map((k) => BOSS_CONFIGS[k].name).join(' & ');
+    this.audio.playBossTelegraph();
+    this.pushBanner(`第 ${waveIdx + 1} 波 · ${waveDepth}F 頭目登場`, names, true);
+  },
+
+  /** Per-frame Boss Test Arena wave state machine (5s countdown -> spawn wave -> wait clear -> repeat). */
+  updateBossArena(this: EmbervaultEngine, dt: number): void {
+    if (!this.bossArenaMode) return;
+    if (this.bossArenaActive) {
+      if (this.enemies.every((e) => e.dead)) {
+        this.bossArenaActive = false;
+        this.bossArenaWave += 1;
+        this.bossArenaCountdown = 5.0;
+        this.emitHud();
+      }
+      return;
+    }
+    const prevSec = Math.ceil(this.bossArenaCountdown);
+    this.bossArenaCountdown = Math.max(0, this.bossArenaCountdown - dt);
+    if (this.bossArenaCountdown <= 0) {
+      this.bossArenaActive = true;
+      this.spawnBossArenaWave(this.bossArenaWave);
+      this.emitHud();
+    } else if (Math.ceil(this.bossArenaCountdown) !== prevSec) {
+      this.emitHud();
+    }
+  },
+
   getEnemyHpScale(this: EmbervaultEngine): number {
     return 1 + (this.getHeroCount() - 1);
   },
 
   getDepthDamageScale(this: EmbervaultEngine): number {
-    return 1 + (this.depth - 1) * 0.12;
+    return 1 + (this.getEffectiveSimDepth() - 1) * 0.12;
   },
 
   getSwarmDepthDamageScale(this: EmbervaultEngine): number {
-    return 1 + (this.depth - 1) * 0.06;
+    return 1 + (this.getEffectiveSimDepth() - 1) * 0.06;
   },
 
   getDepthGoldScale(this: EmbervaultEngine): number {
@@ -350,8 +455,9 @@ export const spawnMethods = {
 
     if (isFloorBoss(kind)) {
       const cfg = BOSS_CONFIGS[kind];
+      const effDepth = this.getEffectiveSimDepth();
       const maxHp = Math.round(
-        getBossBaseMaxHp(kind, this.depth) * getBossDepthTier(this.depth).hpMult * this.getEnemyHpScale()
+        getBossBaseMaxHp(kind, effDepth) * getBossDepthTier(effDepth).hpMult * this.getEnemyHpScale()
       );
       const telegraph = createBossTelegraph(cfg.telegraphColor);
       this.dynamicGroup.add(telegraph.group);

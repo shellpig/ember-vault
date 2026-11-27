@@ -1,6 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
-import { TILE_SIZE, generateDungeon, gridToWorld, worldToGrid } from '../dungeon';
-import { BOSS_CONFIGS, getBossForDepth } from './data';
+import { TILE_SIZE, generateBossArena, generateDungeon, gridToWorld, worldToGrid } from '../dungeon';
+import { BOSS_ARENA_DEPTH, BOSS_CONFIGS, getBossForDepth } from './data';
 import { SavedDungeonSnapshot } from './entities';
 import type { TreasureRoomData } from '../types';
 import { _camTarget, _color, _mat4, _pos, _quat, _scale } from './scratch';
@@ -83,16 +83,24 @@ export const levelBuildMethods = {
     this.clearLevel();
     this.inTown = false;
     this.depth = depth;
+    const isBossArena = depth === BOSS_ARENA_DEPTH;
+    this.bossArenaMode = isBossArena;
+    if (isBossArena) {
+      this.devDepthRun = true;
+      this.bossArenaWave = 0;
+      this.bossArenaCountdown = 5.0;
+      this.bossArenaActive = false;
+    }
     // maxDepth only moves for heroes that actually stand in the dungeon (a local hero in town reaches the new floor
     // later, see enterDungeonFromTown). Raising it is a save point; restoring a frozen floor is not.
     let localDepthRaised = false;
     for (const h of this.heroes) {
-      if (h.inTown || this.devDepthRun || depth <= h.maxDepthReached) continue;
+      if (h.inTown || this.devDepthRun || isBossArena || depth <= h.maxDepthReached) continue;
       h.maxDepthReached = depth;
       if (h === this.localHero) localDepthRaised = true;
     }
     // (the 'floor' save is requested below, after the treasure room roll: that roll moves the pity counter that is saved)
-    const saveFloor = !bg && (!options?.savedSnapshot || localDepthRaised);
+    const saveFloor = !bg && !isBossArena && (!options?.savedSnapshot || localDepthRaised);
 
     let buffExpired = false;
     for (const h of this.heroes) {
@@ -122,10 +130,12 @@ export const levelBuildMethods = {
         h.floorKills = 0;
       }
       // Room game teammates build the host's floor from its seed (everything static comes out of this generator)
-      this.dungeon = generateDungeon(depth, options?.mpSeed);
+      this.dungeon = isBossArena ? generateBossArena(options?.mpSeed) : generateDungeon(depth, options?.mpSeed);
       // Treasure room: the host / single player rolls it (and moves the pity counter); a teammate adopts the host's result
-      if (options?.guest) this.adoptTreasureRoom(options.mpTreasure);
-      else this.rollTreasureRoom();
+      if (!isBossArena) {
+        if (options?.guest) this.adoptTreasureRoom(options.mpTreasure);
+        else this.rollTreasureRoom();
+      }
     }
     if (saveFloor) this.requestSave('floor');
     const biome = this.dungeon.biome;
@@ -799,8 +809,8 @@ export const levelBuildMethods = {
     // 4c. Treasure room chests (docs/treasure-room-spec.md; none on most floors)
     this.buildTreasureChests();
 
-    // 5. Floating Golden Relic Key Pedestal
-    {
+    // 5. Floating Golden Relic Key Pedestal (skipped in Boss Test Arena)
+    if (!isBossArena) {
       const { x, z } = gridToWorld(this.dungeon.keyPos.gx, this.dungeon.keyPos.gz);
       const ped = createKeyPedestal(this.sharedShadowMap, this.textures.glowMap);
       ped.root.position.set(x, 0, z);
@@ -824,8 +834,8 @@ export const levelBuildMethods = {
       });
     }
 
-    // 6. Locked Bronze-Oak Gate
-    {
+    // 6. Locked Bronze-Oak Gate (skipped in Boss Test Arena)
+    if (!isBossArena) {
       const { gx, gz, horizontal } = this.dungeon.doorPos;
       const { x, z } = gridToWorld(gx, gz);
       this.gateRig = createLockedGate(horizontal, this.textures);
@@ -850,8 +860,8 @@ export const levelBuildMethods = {
       });
     }
 
-    // 7. Descending Illuminated Stone Stairwell
-    {
+    // 7. Descending Illuminated Stone Stairwell (skipped in Boss Test Arena)
+    if (!isBossArena) {
       const { x, z } = gridToWorld(this.dungeon.stairsPos.gx, this.dungeon.stairsPos.gz);
       const stairs = createStairwell(this.textures);
       stairs.root.position.set(x, 0, z);

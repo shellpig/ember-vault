@@ -196,6 +196,16 @@ export interface EnemyEntity {
   };
   /** Guest only: previous bossState so windup -> strike triggers burst VFX once. */
   prevBossState?: BossAttackState;
+  /** Queued follow-up strikes of `orbital_barrage` (shots 2 & 3 track live heroes independently). */
+  bossOrbitalQueue?: Array<{
+    x: number;
+    z: number;
+    delay: number;
+    windup: number;
+    spawnedTelegraph: boolean;
+    dmg: number;
+    rad: number;
+  }>;
   // Frost Mage debuffs
   /** Seconds of slow remaining. */
   slowTimer?: number;

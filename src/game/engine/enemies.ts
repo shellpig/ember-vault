@@ -10,6 +10,8 @@ import {
   BOSS_ENGAGE_RANGE,
   BOSS_ENRAGE,
   BOSS_NOVA,
+  BOSS_ORBITAL,
+  BOSS_PRISM,
   BOSS_RECOVER,
   BOSS_SKILLS,
   BOSS_VOLLEY,
@@ -213,8 +215,8 @@ export const enemiesMethods = {
     let tz = e.z;
     const tRad = spec.radius ?? cfg.telegraphRadius;
 
-    if (chosen === 'targeted_blast') {
-      // Lock the blast circle directly under the hero's current spot
+    if (chosen === 'targeted_blast' || chosen === 'orbital_barrage') {
+      // Lock the blast/orbital circle directly under the hero's current spot
       tx = this.hero.x;
       tz = this.hero.z;
     } else if (chosen === 'charge_slam') {
@@ -419,6 +421,45 @@ export const enemiesMethods = {
       }
     }
 
+    // orbital_barrage: queued follow-up sky pillars (shots 2 & 3)
+    if (e.bossOrbitalQueue && e.bossOrbitalQueue.length > 0) {
+      const isTech = e.kind === 'boss_mothership_ai' || e.kind === 'boss_xeno_commander';
+      for (let i = e.bossOrbitalQueue.length - 1; i >= 0; i--) {
+        const s = e.bossOrbitalQueue[i];
+        if (!s.spawnedTelegraph) {
+          s.delay -= dt;
+          if (s.delay <= 0) {
+            // Lock onto a live hero's current position
+            const liveHeroes = this.heroes.filter((h) => !h.isDead && !h.inTown);
+            const pick = liveHeroes.length > 0 ? liveHeroes[Math.floor(Math.random() * liveHeroes.length)] : this.hero;
+            s.x = pick.x;
+            s.z = pick.z;
+            s.spawnedTelegraph = true;
+            this.audio.playBossTelegraph();
+            this.spawnBossOrbitalTelegraphVfx(s.x, s.z, s.rad, s.windup, cfg.telegraphColor, isTech);
+          }
+          continue;
+        }
+        s.windup -= dt;
+        if (s.windup <= 0) {
+          e.bossOrbitalQueue.splice(i, 1);
+          this.audio.playBossOrbitalStrike();
+          this.forEachLiveHero(() => this.addScreenShake(0.42, 0.22));
+          this.spawnBossOrbitalPillarVfx(s.x, s.z, s.rad, cfg.telegraphColor);
+          const label = this.getEnemyLabel(e);
+          this.forEachLiveHero(() => {
+            const d = Math.hypot(this.hero.x - s.x, this.hero.z - s.z);
+            if (d <= s.rad) {
+              this.damageHero(s.dmg, s.x, s.z, label);
+            } else if (d <= s.rad + 2.8) {
+              this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
+            }
+          });
+          this.damagePetsInRadius(s.x, s.z, s.rad, s.dmg);
+        }
+      }
+    }
+
     let moveX = 0;
     let moveZ = 0;
 
@@ -444,9 +485,13 @@ export const enemiesMethods = {
       const isBasic = e.bossAction === 'basic';
       const skill = e.bossSkill ?? 'slam';
 
-      // Volley: smoothly track the hero for the first part of the windup, then lock aim so the player can sidestep.
+      // Volley & Prism Cone: smoothly track the hero for the first part of the windup, then lock aim.
       // Basic attacks face the hero the whole windup (short and untelegraphed).
-      if (isBasic || (skill === 'ranged_volley' && progress < BOSS_VOLLEY.aimTrackFraction)) {
+      if (
+        isBasic ||
+        (skill === 'ranged_volley' && progress < BOSS_VOLLEY.aimTrackFraction) ||
+        (skill === 'prism_cone' && progress < BOSS_PRISM.aimTrackFraction)
+      ) {
         e.facing = Math.atan2(dx, dz);
       }
 
@@ -606,13 +651,14 @@ export const enemiesMethods = {
             );
           }
         } else if (skill === 'nova_ring') {
-          // Bright-white radial laser beams (stop at walls, single hit across centre circle + beams)
+          // Bright-white radial laser beams (Omega Core AI uses sci-fi blue; Archlich uses arcane violet)
           const dmg = this.bossDamage(e, BOSS_SKILLS.nova_ring.damage);
           const baseAng = e.bossNovaAngle ?? e.facing;
           const beams = this.computeNovaBeams(tx, tz, baseAng);
+          const laserColor = e.kind === 'boss_mothership_ai' ? 0x38c8ff : cfg.telegraphColor;
           this.audio.playBossLaser();
           this.forEachLiveHero(() => this.addScreenShake(0.55, 0.34));
-          this.spawnBossNovaLaserVfx(tx, tz, rad, beams, cfg.telegraphColor);
+          this.spawnBossNovaLaserVfx(tx, tz, rad, beams, laserColor);
 
           e.bossNovaActiveBeams = {
             ox: tx,
@@ -624,6 +670,72 @@ export const enemiesMethods = {
             hitIds: new Set<string>(),
           };
           this.checkBossNovaBeamHits(e);
+        } else if (skill === 'prism_cone') {
+          // 70-degree stained-glass crystal/bone/plasma fan eruption & shatter
+          const dmg = this.bossDamage(e, BOSS_SKILLS.prism_cone.damage);
+          const baseAng = e.facing;
+          const coneRange = BOSS_PRISM.range;
+          const halfAng = BOSS_PRISM.halfAngle;
+          this.audio.playBossPrismShatter();
+          this.forEachLiveHero(() => this.addScreenShake(0.48, 0.26));
+          this.spawnBossPrismConeVfx(e.x, e.z, baseAng, coneRange, halfAng, cfg.telegraphColor, e.kind);
+
+          const inCone = (px: number, pz: number): boolean => {
+            const rx = px - e.x;
+            const rz = pz - e.z;
+            const d = Math.hypot(rx, rz);
+            if (d > coneRange + 0.25) return false;
+            if (d < 0.5) return true;
+            let diff = Math.atan2(rx, rz) - baseAng;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            return Math.abs(diff) <= halfAng + 0.06;
+          };
+
+          const label = this.getEnemyLabel(e);
+          this.forEachLiveHero(() => {
+            if (inCone(this.hero.x, this.hero.z)) {
+              this.damageHero(dmg, e.x, e.z, label);
+            } else if (Math.hypot(this.hero.x - e.x, this.hero.z - e.z) <= coneRange + 2.8) {
+              this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
+            }
+          });
+          for (const pet of this.pets.values()) {
+            if (pet.hp <= 0) continue;
+            const owner = this.heroById(pet.ownerId);
+            if (!owner || owner.isDead || owner.inTown) continue;
+            if (inCone(pet.x, pet.z)) this.damagePet(pet, dmg, e.x, e.z);
+          }
+        } else if (skill === 'orbital_barrage') {
+          // 3 sequential sky-to-ground orbital energy pillars (shot 1 now, shots 2 & 3 queued)
+          const dmg = this.bossDamage(e, BOSS_SKILLS.orbital_barrage.damage);
+          this.audio.playBossOrbitalStrike();
+          this.forEachLiveHero(() => this.addScreenShake(0.44, 0.24));
+          this.spawnBossOrbitalPillarVfx(tx, tz, rad, cfg.telegraphColor);
+
+          const label = this.getEnemyLabel(e);
+          this.forEachLiveHero(() => {
+            const d = Math.hypot(this.hero.x - tx, this.hero.z - tz);
+            if (d <= rad) {
+              this.damageHero(dmg, tx, tz, label);
+            } else if (d <= rad + 2.8) {
+              this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
+            }
+          });
+          this.damagePetsInRadius(tx, tz, rad, dmg);
+
+          e.bossOrbitalQueue = e.bossOrbitalQueue ?? [];
+          for (let q = 1; q < BOSS_ORBITAL.shots; q++) {
+            e.bossOrbitalQueue.push({
+              x: tx,
+              z: tz,
+              delay: q * BOSS_ORBITAL.shotInterval,
+              windup: BOSS_ORBITAL.windup,
+              spawnedTelegraph: false,
+              dmg,
+              rad: BOSS_ORBITAL.radius,
+            });
+          }
         } else if (skill === 'targeted_blast') {
           // Void Black Hole detonation at locked target position
           const dmg = this.bossDamage(e, BOSS_SKILLS.targeted_blast.damage);

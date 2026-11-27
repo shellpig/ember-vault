@@ -2,7 +2,7 @@ import { EmbervaultEngine } from '../../engine';
 import type { DoorSnap, EnemyStatic, GameEvent, InputPayload, LevelPayload, PrivatePayload, SnapshotPayload, WorldSnap } from '../../../../shared/game';
 import { EF_BOSS_SHIFT, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
 import { HeroClassId, PetSpecies } from '../../classes';
-import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_SKILL_LIST, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
+import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_PRISM, BOSS_SKILL_LIST, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
 import { BreakableEntity, EnemyEntity, HeroProjectileEntity, LootEntity, MpGuestState, MpSample, ProjectileEntity } from '../entities';
 import { Hero } from '../../hero';
 import { BossTelegraphRig, applyEliteVisuals, createBossTelegraph, createEnemyModel, createHunterArrowMesh, createHunterPetModel, createIceSpikeMesh, createLootMesh, createProjectileMesh, createRelicLootMesh } from '../../models';
@@ -895,7 +895,12 @@ export const guestMpMethods = {
             this.spawnBossChargeDashVfx(e.x, e.z, tx, tz, 0.3, cfg.telegraphColor);
           } else if (skill === 'nova_ring') {
             const beams = this.computeNovaBeams(tx, tz, e.facing);
-            this.spawnBossNovaLaserVfx(tx, tz, rad, beams, cfg.telegraphColor);
+            const laserColor = e.kind === 'boss_mothership_ai' ? 0x38c8ff : cfg.telegraphColor;
+            this.spawnBossNovaLaserVfx(tx, tz, rad, beams, laserColor);
+          } else if (skill === 'prism_cone') {
+            this.spawnBossPrismConeVfx(e.x, e.z, e.facing, BOSS_PRISM.range, BOSS_PRISM.halfAngle, cfg.telegraphColor, e.kind);
+          } else if (skill === 'orbital_barrage') {
+            this.spawnBossOrbitalPillarVfx(tx, tz, rad, cfg.telegraphColor);
           } else if (skill === 'targeted_blast') {
             this.spawnBossBlackHoleVfx(tx, tz, rad, cfg.telegraphColor);
           } else if (skill === 'ranged_volley') {
