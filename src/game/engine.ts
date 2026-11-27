@@ -4747,7 +4747,7 @@ export class EmbervaultEngine {
         ),
         row(
           'atk_speed',
-          'armor',
+          'atkSpeed',
           '+10% 攻速',
           '攻速已滿',
           `+${spdPct}% / +${maxSpdPct}% 射速`
@@ -7549,6 +7549,9 @@ export class EmbervaultEngine {
       maxHp: this.hero.maxHp,
       atkBonusPct: this.hero.atkUpgrades * 10,
       armorBonusPct: this.hero.armorUpgrades * 10,
+      atkSpeedBonusPct: this.hero.isHunter()
+        ? Math.round(this.hero.atkSpeedUpgrades * HUNTER.atkSpeedStep * 100)
+        : 0,
       critBonusPct: this.hero.critUpgrades * (this.hero.isHunter() ? HUNTER.critPerUpgradePct : 2),
       potionsUsed: this.hero.potionsUsed,
       potionsLeft: this.hero.potions,
@@ -7916,6 +7919,8 @@ export class EmbervaultEngine {
       atkBonusPct: lh.atkUpgrades * 10,
       armorBonusPct: lh.armorUpgrades * 10,
       armorMaxPct: lh.maxArmorUpgrades * 10,
+      atkSpeedBonusPct: lh.isHunter() ? Math.round(lh.atkSpeedUpgrades * HUNTER.atkSpeedStep * 100) : 0,
+      atkSpeedMaxPct: Math.round(HUNTER.maxAtkSpeedUpgrades * HUNTER.atkSpeedStep * 100),
       critBonusPct: lh.critUpgrades * (lh.isHunter() ? HUNTER.critPerUpgradePct : 2),
       critMaxPct: lh.getUpgradeMax('crit') * (lh.isHunter() ? HUNTER.critPerUpgradePct : 2),
       upgradeLevel: lh.getTotalUpgradeLevel(),

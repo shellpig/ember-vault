@@ -18,7 +18,7 @@ export type UpgradeKind =
   // Hunter
   | 'atk_speed';
 
-export type UpgradeAccent = 'hp' | 'atk' | 'armor' | 'crit' | 'shield';
+export type UpgradeAccent = 'hp' | 'atk' | 'armor' | 'atkSpeed' | 'crit' | 'shield';
 
 /** Pre-formatted altar upgrade row, produced by the engine and rendered as-is by the UI. */
 export interface UpgradeOptionView {

@@ -7,6 +7,7 @@ import {
   DoorOpen,
   Feather,
   FlaskConical,
+  Gauge,
   Gem,
   Heart,
   Home,
@@ -169,6 +170,8 @@ const INITIAL_HUD: HudState = {
   atkBonusPct: 0,
   armorBonusPct: 0,
   armorMaxPct: 50,
+  atkSpeedBonusPct: 0,
+  atkSpeedMaxPct: 0,
   critBonusPct: 0,
   critMaxPct: 20,
   upgradeLevel: 0,
@@ -242,6 +245,12 @@ const UPGRADE_ACCENT_STYLES: Record<
     text: 'text-[#8fd4ff]',
     icon: 'text-[#5ebcf5]',
     Icon: Shield,
+  },
+  atkSpeed: {
+    btn: 'border-[#395e7a] bg-[#101821] hover:border-[#6cc4ff] hover:bg-[#152230] disabled:hover:border-[#395e7a] disabled:hover:bg-[#101821]',
+    text: 'text-[#8fd4ff]',
+    icon: 'text-[#5ebcf5]',
+    Icon: Gauge,
   },
   crit: {
     btn: 'border-[#326b46] bg-[#101c15] hover:border-[#5ce88b] hover:bg-[#16291d] disabled:hover:border-[#326b46] disabled:hover:bg-[#101c15]',
@@ -1313,6 +1322,16 @@ export default function App() {
               </div>
             )}
 
+            {hud.atkSpeedBonusPct > 0 && (
+              <div
+                title={`攻速 +${hud.atkSpeedBonusPct}% / +${hud.atkSpeedMaxPct}%`}
+                className="flex items-center gap-1 px-2 py-1 border border-[#3a6380] bg-[#101820] text-[#8fd4ff] whitespace-nowrap"
+              >
+                <Gauge className="w-3.5 h-3.5 text-[#64bdf5]" />
+                <span>+{hud.atkSpeedBonusPct}%</span>
+              </div>
+            )}
+
             {hud.critBonusPct > 0 && (
               <div
                 title={`Crit Rate Bonus +${hud.critBonusPct}% / +${hud.critMaxPct}%`}
@@ -2240,11 +2259,18 @@ export default function App() {
 
                 <div>
                   <div className="text-[#8fd4ff] font-semibold">
-                    {hud.runSummary.heroClass === 'frost_mage' ? '護盾加速' : '護甲'} +{hud.runSummary.armorUpgrades}
+                    {hud.runSummary.heroClass === 'frost_mage'
+                      ? '護盾加速'
+                      : hud.runSummary.heroClass === 'hunter'
+                      ? '攻速'
+                      : '護甲'}{' '}
+                    +{hud.runSummary.armorUpgrades}
                   </div>
                   <div className="text-[11px] text-[#8d93a6] mt-0.5">
                     {hud.runSummary.heroClass === 'frost_mage'
                       ? `回充加快 ${Math.round(hud.runSummary.armorUpgrades * 12)}%`
+                      : hud.runSummary.heroClass === 'hunter'
+                      ? `射速 +${hud.runSummary.atkSpeedBonusPct}%`
                       : `減傷 +${hud.runSummary.armorBonusPct}%`}
                   </div>
                 </div>

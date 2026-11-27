@@ -228,6 +228,8 @@ export interface RunSummary {
   maxHp: number;
   atkBonusPct: number;
   armorBonusPct: number;
+  /** Hunter only: attack-speed bonus in percent (0 for other classes). */
+  atkSpeedBonusPct: number;
   critBonusPct: number;
   potionsUsed: number;
   potionsLeft: number;
@@ -262,6 +264,9 @@ export interface HudState {
   atkBonusPct: number;
   armorBonusPct: number;
   armorMaxPct: number;
+  /** Hunter only: attack-speed bonus in percent (0 for other classes). */
+  atkSpeedBonusPct: number;
+  atkSpeedMaxPct: number;
   critBonusPct: number;
   critMaxPct: number;
   upgradeLevel: number;
