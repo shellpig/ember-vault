@@ -83,6 +83,7 @@ import {
   StashChestRig,
   TownPortalRig,
   applyEliteVisuals,
+  createAmbientDecorProp,
   createAngelModel,
   createBossTelegraph,
   createBrazier,
@@ -113,6 +114,7 @@ import {
   createUpgradeAltar,
   createVillageLampPost,
   createVillageTree,
+  createWallCapGeometries,
   createWallTorch,
   createLockedGate,
   createSpikeTrap,
@@ -876,8 +878,8 @@ interface LevelCtx {
   gateOpenProgress: number;
   wallOpaqueMeshes: THREE.InstancedMesh[];
   wallFadeMeshes: THREE.InstancedMesh[];
-  capOpaqueMesh: THREE.InstancedMesh | null;
-  capFadeMesh: THREE.InstancedMesh | null;
+  capOpaqueMeshes: THREE.InstancedMesh[];
+  capFadeMeshes: THREE.InstancedMesh[];
   wallTiles: WallOcclusionTile[];
   wallOcclusionActive: boolean;
   textures: DungeonTextureSet | null;
@@ -894,8 +896,10 @@ interface WallOcclusionTile {
   wz: number;
   bucketIdx: number;
   wallInstIdx: number;
+  capBucketIdx: number;
   capInstIdx: number;
   rotY: number;
+  capRotY: number;
   occluded: boolean;
 }
 
@@ -1021,8 +1025,8 @@ export class EmbervaultEngine {
   private readonly wallHeight = 2.65;
   private wallOpaqueMeshes: THREE.InstancedMesh[] = [];
   private wallFadeMeshes: THREE.InstancedMesh[] = [];
-  private capOpaqueMesh: THREE.InstancedMesh | null = null;
-  private capFadeMesh: THREE.InstancedMesh | null = null;
+  private capOpaqueMeshes: THREE.InstancedMesh[] = [];
+  private capFadeMeshes: THREE.InstancedMesh[] = [];
   private wallTiles: WallOcclusionTile[] = [];
   private wallOcclusionActive = false;
 
@@ -1155,8 +1159,8 @@ export class EmbervaultEngine {
       gateOpenProgress: 0,
       wallOpaqueMeshes: [],
       wallFadeMeshes: [],
-      capOpaqueMesh: null,
-      capFadeMesh: null,
+      capOpaqueMeshes: [],
+      capFadeMeshes: [],
       wallTiles: [],
       wallOcclusionActive: false,
       textures: null,
@@ -1184,8 +1188,8 @@ export class EmbervaultEngine {
       gateOpenProgress: this.gateOpenProgress,
       wallOpaqueMeshes: this.wallOpaqueMeshes,
       wallFadeMeshes: this.wallFadeMeshes,
-      capOpaqueMesh: this.capOpaqueMesh,
-      capFadeMesh: this.capFadeMesh,
+      capOpaqueMeshes: this.capOpaqueMeshes,
+      capFadeMeshes: this.capFadeMeshes,
       wallTiles: this.wallTiles,
       wallOcclusionActive: this.wallOcclusionActive,
       textures: this.textures,
@@ -1212,8 +1216,8 @@ export class EmbervaultEngine {
     this.gateOpenProgress = c.gateOpenProgress;
     this.wallOpaqueMeshes = c.wallOpaqueMeshes;
     this.wallFadeMeshes = c.wallFadeMeshes;
-    this.capOpaqueMesh = c.capOpaqueMesh;
-    this.capFadeMesh = c.capFadeMesh;
+    this.capOpaqueMeshes = c.capOpaqueMeshes;
+    this.capFadeMeshes = c.capFadeMeshes;
     this.wallTiles = c.wallTiles;
     this.wallOcclusionActive = c.wallOcclusionActive;
     this.textures = c.textures;
@@ -1873,8 +1877,8 @@ export class EmbervaultEngine {
     this.heroPortalRigs = new Map();
     this.wallOpaqueMeshes = [];
     this.wallFadeMeshes = [];
-    this.capOpaqueMesh = null;
-    this.capFadeMesh = null;
+    this.capOpaqueMeshes = [];
+    this.capFadeMeshes = [];
     this.wallTiles = [];
     this.wallOcclusionActive = false;
     for (const h of this.heroes) {
@@ -2029,36 +2033,39 @@ export class EmbervaultEngine {
     const floorVariants = this.textures.floorVariants;
 
     if (floorVariants && floorVariants.length > 1) {
-      // Cavern: 6 deterministic buckets -> 2 clean rock (variant 0) + 4 multicolor crystal variants (1..4)
-      // Average ~1.33 crystals/tile (~1/5 of original 6) with Y-axis rotation for zero grid repetition
+      // Multi-variant floor (Cavern & Flesh: 6 distinct structural textures + 90-degree rotation + subtle tint)
       const buckets: Array<Array<[number, number]>> = floorVariants.map(() => []);
       for (const coord of floorCoords) {
         const [gx, gz] = coord;
-        const hash = Math.abs((gx * 73856093) ^ (gz * 19349663)) % 6;
-        const variantIdx = hash < 2 ? 0 : hash - 1; // 0..4
+        const hash = Math.abs((gx * 73856093) ^ (gz * 19349663) ^ (gx * gz * 83492791));
+        const variantIdx = hash % floorVariants.length;
         buckets[variantIdx].push(coord);
       }
       const floorBumpMap = this.textures.floorBump;
+      const varBumpScale = theme === 'flesh' ? 0.055 : 0.06;
+      const varRoughness = theme === 'flesh' ? 0.56 : 0.94;
+      const varMetalness = theme === 'flesh' ? 0.08 : 0.06;
+
       buckets.forEach((coords, vIdx) => {
         if (coords.length === 0) return;
         const mat = new THREE.MeshStandardMaterial({
           map: floorVariants[vIdx],
           bumpMap: floorBumpMap,
-          bumpScale: 0.06,
-          roughness: 0.94,
-          metalness: 0.06,
+          bumpScale: varBumpScale,
+          roughness: varRoughness,
+          metalness: varMetalness,
         });
         const mesh = new THREE.InstancedMesh(floorGeo, mat, coords.length);
         mesh.receiveShadow = true;
         mesh.frustumCulled = false;
         coords.forEach(([gx, gz], i) => {
           _pos.set(gx * TILE_SIZE, -0.15, gz * TILE_SIZE);
-          const rotSteps = Math.abs(gx * 3 + gz * 5) & 3;
+          const rotSteps = Math.abs(gx * 3 + gz * 5 + vIdx) & 3;
           _quat.setFromAxisAngle(upAxis, rotSteps * (Math.PI / 2));
           _scale.set(1, 1, 1);
           _mat4.compose(_pos, _quat, _scale);
           mesh.setMatrixAt(i, _mat4);
-          const tint = 0.92 + ((gx * 17 + gz * 31) % 13) * 0.012;
+          const tint = 0.9 + ((gx * 17 + gz * 31 + vIdx * 7) % 15) * 0.013;
           _color.setRGB(tint, tint, tint);
           mesh.setColorAt(i, _color);
         });
@@ -2098,68 +2105,164 @@ export class EmbervaultEngine {
       this.levelGroup.add(floorMesh);
     }
 
-    // 2. Instanced Thick Walls (+ 50% translucent foreground occlusion layer)
+    // 1b. Clean Cross-Tile Floor Decals (Cavern cracks/moss/pebbles; Flesh folds/stains/veins)
+    const floorDecalMaps = this.textures.floorDecalMaps;
+    if (floorDecalMaps && floorDecalMaps.length > 0 && (theme === 'cavern' || theme === 'flesh')) {
+      let ds = ((depth * 4099 + (this.dungeon.genSeed ?? 0) * 131) >>> 0) || 1;
+      const drand = () => {
+        ds = (ds * 1664525 + 1013904223) >>> 0;
+        return ds / 4294967296;
+      };
+      const runeKeys = new Set<string>();
+      for (const p of this.dungeon.props) {
+        if (p.type === 'rune_well' || p.type === 'spike') runeKeys.add(`${p.gx},${p.gz}`);
+      }
+      const decalBuckets: Array<Array<{ x: number; z: number; rot: number; sc: number }>> =
+        floorDecalMaps.map(() => []);
+
+      for (let gz = 2; gz < height - 2; gz++) {
+        for (let gx = 2; gx < width - 2; gx++) {
+          if (tiles[gz][gx] !== 1 || runeKeys.has(`${gx},${gz}`)) continue;
+          if (drand() > 0.16) continue;
+          const dIdx = Math.floor(drand() * floorDecalMaps.length);
+          // Slight seam-straddling offset only toward neighboring open floor so decals never clip walls
+          const canPosX = tiles[gz][gx + 1] === 1;
+          const canNegX = tiles[gz][gx - 1] === 1;
+          const canPosZ = tiles[gz + 1][gx] === 1;
+          const canNegZ = tiles[gz - 1][gx] === 1;
+          const ox = (canPosX && canNegX ? (drand() - 0.5) * 0.95 : canPosX ? drand() * 0.45 : canNegX ? -drand() * 0.45 : 0);
+          const oz = (canPosZ && canNegZ ? (drand() - 0.5) * 0.95 : canPosZ ? drand() * 0.45 : canNegZ ? -drand() * 0.45 : 0);
+          decalBuckets[dIdx].push({
+            x: gx * TILE_SIZE + ox,
+            z: gz * TILE_SIZE + oz,
+            rot: Math.floor(drand() * 8) * (Math.PI / 4),
+            sc: 0.88 + drand() * 0.48,
+          });
+        }
+      }
+
+      const decalGeo = new THREE.PlaneGeometry(1.55, 1.55);
+      decalGeo.rotateX(-Math.PI / 2);
+      decalBuckets.forEach((entries, dIdx) => {
+        if (entries.length === 0) return;
+        const decalMat = new THREE.MeshStandardMaterial({
+          map: floorDecalMaps[dIdx],
+          transparent: true,
+          depthWrite: false,
+          roughness: theme === 'flesh' ? 0.62 : 0.95,
+          metalness: 0.02,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+          polygonOffsetUnits: -1,
+        });
+        const inst = new THREE.InstancedMesh(decalGeo, decalMat, entries.length);
+        inst.receiveShadow = true;
+        inst.frustumCulled = false;
+        entries.forEach((e, i) => {
+          _pos.set(e.x, 0.015, e.z);
+          _quat.setFromAxisAngle(upAxis, e.rot);
+          _scale.set(e.sc, 1, e.sc);
+          _mat4.compose(_pos, _quat, _scale);
+          inst.setMatrixAt(i, _mat4);
+        });
+        inst.instanceMatrix.needsUpdate = true;
+        this.levelGroup.add(inst);
+      });
+    }
+
+    // 2. Instanced Thick Walls (+ Natural Sculpted Wall Tops for Cavern/Flesh + 50% translucent occlusion layer)
     const wallHeight = this.wallHeight;
     const wallGeo = new THREE.BoxGeometry(TILE_SIZE, wallHeight, TILE_SIZE);
     const wallVariants = this.textures.wallVariants;
     const maxFadeWalls = 48;
 
-    // Cap top on walls for clean miniature cutaway silhouette
-    const capGeo = new THREE.BoxGeometry(TILE_SIZE + 0.02, 0.14, TILE_SIZE + 0.02);
-    const capMat = new THREE.MeshStandardMaterial({
+    const capGeos = createWallCapGeometries(theme, TILE_SIZE);
+    const capBaseMat = new THREE.MeshStandardMaterial({
       color:
         theme === 'alien'
           ? 0x223b59
           : theme === 'flesh'
-          ? 0x260c21
+          ? 0x3b1233
           : theme === 'cavern'
-          ? 0x161412
+          ? 0x26221e
           : 0x13151d,
-      roughness: theme === 'alien' ? 0.34 : theme === 'flesh' ? 0.62 : 0.95,
+      roughness: theme === 'alien' ? 0.34 : theme === 'flesh' ? 0.64 : 0.95,
       metalness: theme === 'alien' ? 0.72 : 0.05,
     });
-    const capMesh = new THREE.InstancedMesh(capGeo, capMat, wallCoords.length);
-    capMesh.frustumCulled = false;
 
-    const capFadeMat = capMat.clone();
-    capFadeMat.transparent = true;
-    capFadeMat.opacity = 0.5;
-    capFadeMat.depthWrite = true;
-    const capFadeMesh = new THREE.InstancedMesh(capGeo, capFadeMat, maxFadeWalls);
-    capFadeMesh.count = 0;
-    capFadeMesh.frustumCulled = false;
-    capFadeMesh.renderOrder = 5;
-
-    this.capOpaqueMesh = capMesh;
-    this.capFadeMesh = capFadeMesh;
+    this.capOpaqueMeshes = [];
+    this.capFadeMeshes = [];
     this.wallOpaqueMeshes = [];
     this.wallFadeMeshes = [];
     this.wallTiles = [];
 
-    if (wallVariants && wallVariants.length > 1) {
-      const wallBuckets: Array<Array<{ gx: number; gz: number; capIdx: number }>> =
-        wallVariants.map(() => []);
-      wallCoords.forEach((coord, i) => {
-        const [gx, gz] = coord;
-        const vIdx = Math.abs((gx * 37 + gz * 91) ^ (gx * gz)) % wallVariants.length;
-        wallBuckets[vIdx].push({ gx, gz, capIdx: i });
+    // Pre-assign each wall coordinate to a cap bucket (1 flat cap for Stone/Alien; 3 sculpted variants for Cavern/Flesh)
+    const capBuckets: Array<Array<{ gx: number; gz: number; rotY: number }>> = capGeos.map(() => []);
+    const capAssignment: Array<{ capBucketIdx: number; capInstIdx: number; capRotY: number }> = [];
+    wallCoords.forEach(([gx, gz]) => {
+      const capBucketIdx =
+        capGeos.length > 1 ? Math.abs((gx * 53 + gz * 79) ^ (gx * 13 + gz * 29)) % capGeos.length : 0;
+      const capRotY =
+        capGeos.length > 1 ? (Math.abs(gx * 5 + gz * 9) & 3) * (Math.PI / 2) : 0;
+      const capInstIdx = capBuckets[capBucketIdx].length;
+      capBuckets[capBucketIdx].push({ gx, gz, rotY: capRotY });
+      capAssignment.push({ capBucketIdx, capInstIdx, capRotY });
+    });
 
-        _pos.set(gx * TILE_SIZE, wallHeight + 0.07, gz * TILE_SIZE);
-        _quat.identity();
+    capBuckets.forEach((entries, cIdx) => {
+      const cMat = cIdx === 0 ? capBaseMat : capBaseMat.clone();
+      const cMesh = new THREE.InstancedMesh(capGeos[cIdx], cMat, Math.max(1, entries.length));
+      cMesh.count = entries.length;
+      cMesh.receiveShadow = true;
+      if (capGeos.length > 1) cMesh.castShadow = true;
+      cMesh.frustumCulled = false;
+
+      const cFadeMat = cMat.clone();
+      cFadeMat.transparent = true;
+      cFadeMat.opacity = 0.5;
+      cFadeMat.depthWrite = true;
+      const cFadeMesh = new THREE.InstancedMesh(capGeos[cIdx], cFadeMat, maxFadeWalls);
+      cFadeMesh.count = 0;
+      cFadeMesh.frustumCulled = false;
+      cFadeMesh.renderOrder = 5;
+
+      entries.forEach(({ gx, gz, rotY }, i) => {
+        _pos.set(gx * TILE_SIZE, wallHeight, gz * TILE_SIZE);
+        _quat.setFromAxisAngle(upAxis, rotY);
         _scale.set(1, 1, 1);
         _mat4.compose(_pos, _quat, _scale);
-        capMesh.setMatrixAt(i, _mat4);
+        cMesh.setMatrixAt(i, _mat4);
+      });
+      cMesh.instanceMatrix.needsUpdate = true;
+      this.capOpaqueMeshes.push(cMesh);
+      this.capFadeMeshes.push(cFadeMesh);
+      this.levelGroup.add(cMesh, cFadeMesh);
+    });
+
+    if (wallVariants && wallVariants.length > 1) {
+      const wallBuckets: Array<
+        Array<{ gx: number; gz: number; capBucketIdx: number; capInstIdx: number; capRotY: number }>
+      > = wallVariants.map(() => []);
+      wallCoords.forEach((coord, i) => {
+        const [gx, gz] = coord;
+        const vIdx = Math.abs((gx * 37 + gz * 91) ^ (gx * gz * 17)) % wallVariants.length;
+        const ca = capAssignment[i];
+        wallBuckets[vIdx].push({ gx, gz, ...ca });
       });
       const wallBumpMap = this.textures.wallBump;
+      const wBumpScale = theme === 'flesh' ? 0.06 : 0.065;
+      const wRoughness = theme === 'flesh' ? 0.54 : 0.96;
+      const wMetalness = theme === 'flesh' ? 0.08 : 0.04;
+
       wallBuckets.forEach((entries, vIdx) => {
         if (entries.length === 0) return;
         const bucketIdx = this.wallOpaqueMeshes.length;
         const mat = new THREE.MeshStandardMaterial({
           map: wallVariants[vIdx],
           bumpMap: wallBumpMap,
-          bumpScale: 0.065,
-          roughness: 0.96,
-          metalness: 0.04,
+          bumpScale: wBumpScale,
+          roughness: wRoughness,
+          metalness: wMetalness,
         });
         const mesh = new THREE.InstancedMesh(wallGeo, mat, entries.length);
         mesh.castShadow = true;
@@ -2176,7 +2279,7 @@ export class EmbervaultEngine {
         fadeMesh.frustumCulled = false;
         fadeMesh.renderOrder = 6;
 
-        entries.forEach(({ gx, gz, capIdx }, i) => {
+        entries.forEach(({ gx, gz, capBucketIdx, capInstIdx, capRotY }, i) => {
           const wx = gx * TILE_SIZE;
           const wz = gz * TILE_SIZE;
           const rotSteps = Math.abs(gx * 7 + gz * 11) & 3;
@@ -2194,8 +2297,10 @@ export class EmbervaultEngine {
             wz,
             bucketIdx,
             wallInstIdx: i,
-            capInstIdx: capIdx,
+            capBucketIdx,
+            capInstIdx,
             rotY,
+            capRotY,
             occluded: false,
           });
         });
@@ -2204,8 +2309,6 @@ export class EmbervaultEngine {
         this.wallFadeMeshes.push(fadeMesh);
         this.levelGroup.add(mesh, fadeMesh);
       });
-      capMesh.instanceMatrix.needsUpdate = true;
-      this.levelGroup.add(capMesh, capFadeMesh);
     } else {
       const wallMat = new THREE.MeshStandardMaterial({
         map: this.textures.wallMap,
@@ -2234,15 +2337,12 @@ export class EmbervaultEngine {
       wallCoords.forEach(([gx, gz], i) => {
         const wx = gx * TILE_SIZE;
         const wz = gz * TILE_SIZE;
+        const ca = capAssignment[i];
         _pos.set(wx, wallHeight / 2, wz);
         _quat.identity();
         _scale.set(1, 1, 1);
         _mat4.compose(_pos, _quat, _scale);
         wallMesh.setMatrixAt(i, _mat4);
-
-        _pos.set(wx, wallHeight + 0.07, wz);
-        _mat4.compose(_pos, _quat, _scale);
-        capMesh.setMatrixAt(i, _mat4);
 
         this.wallTiles.push({
           gx,
@@ -2251,32 +2351,33 @@ export class EmbervaultEngine {
           wz,
           bucketIdx: 0,
           wallInstIdx: i,
-          capInstIdx: i,
+          capBucketIdx: ca.capBucketIdx,
+          capInstIdx: ca.capInstIdx,
           rotY: 0,
+          capRotY: ca.capRotY,
           occluded: false,
         });
       });
       wallMesh.instanceMatrix.needsUpdate = true;
-      capMesh.instanceMatrix.needsUpdate = true;
       this.wallOpaqueMeshes.push(wallMesh);
       this.wallFadeMeshes.push(wallFadeMesh);
-      this.levelGroup.add(wallMesh, wallFadeMesh, capMesh, capFadeMesh);
+      this.levelGroup.add(wallMesh, wallFadeMesh);
     }
 
     // 3. Instanced Pillars (Stone Columns / Cavern Stalagmites / Organic Bone-Sinew Ribs / Sci-Fi Reactor Columns)
     if (pillarCoords.length > 0) {
       const shaftGeo =
         theme === 'cavern'
-          ? new THREE.CylinderGeometry(0.32, 0.56, 2.5, 6)
+          ? new THREE.CylinderGeometry(0.32, 0.58, 2.45, 6)
           : theme === 'flesh'
-          ? new THREE.CylinderGeometry(0.42, 0.5, 2.5, 10)
+          ? new THREE.CylinderGeometry(0.4, 0.52, 2.45, 7)
           : theme === 'alien'
           ? new THREE.CylinderGeometry(0.44, 0.44, 2.5, 10)
           : new THREE.CylinderGeometry(0.46, 0.52, 2.5, 8);
       const pillarMat = new THREE.MeshStandardMaterial({
         map: this.textures.pillarMap,
         roughness:
-          theme === 'alien' ? 0.22 : theme === 'flesh' ? 0.46 : theme === 'cavern' ? 0.92 : 0.82,
+          theme === 'alien' ? 0.22 : theme === 'flesh' ? 0.48 : theme === 'cavern' ? 0.92 : 0.82,
         metalness: theme === 'alien' ? 0.72 : theme === 'flesh' ? 0.08 : 0.12,
       });
       const shaftInst = new THREE.InstancedMesh(shaftGeo, pillarMat, pillarCoords.length);
@@ -2284,44 +2385,92 @@ export class EmbervaultEngine {
       shaftInst.receiveShadow = true;
       shaftInst.frustumCulled = false;
 
-      const plinthGeo = new THREE.BoxGeometry(1.18, 0.28, 1.18);
-      const plinthMat = new THREE.MeshStandardMaterial({
-        color:
-          theme === 'alien'
-            ? 0x2b496b
-            : theme === 'flesh'
-            ? 0x451a3d
-            : theme === 'cavern'
-            ? 0x35312c
-            : 0x2c303a,
-        roughness: theme === 'alien' ? 0.28 : theme === 'flesh' ? 0.52 : 0.85,
-        metalness: theme === 'alien' ? 0.78 : theme === 'flesh' ? 0.08 : 0.15,
-      });
-      const plinthInst = new THREE.InstancedMesh(plinthGeo, plinthMat, pillarCoords.length * 2);
-      plinthInst.castShadow = true;
-      plinthInst.receiveShadow = true;
-      plinthInst.frustumCulled = false;
+      if (theme === 'cavern' || theme === 'flesh') {
+        // Organic stepped rock / sinew base & crown instead of medieval square plinths
+        const baseGeo =
+          theme === 'cavern'
+            ? new THREE.CylinderGeometry(0.64, 0.84, 0.34, 6)
+            : new THREE.CylinderGeometry(0.6, 0.82, 0.32, 7);
+        const topGeo =
+          theme === 'cavern'
+            ? new THREE.CylinderGeometry(0.48, 0.36, 0.28, 6)
+            : new THREE.CylinderGeometry(0.54, 0.42, 0.26, 7);
+        const baseMat = new THREE.MeshStandardMaterial({
+          color: theme === 'flesh' ? 0x45133a : 0x35312c,
+          roughness: theme === 'flesh' ? 0.58 : 0.94,
+          metalness: 0.05,
+        });
+        const topMat = new THREE.MeshStandardMaterial({
+          color: theme === 'flesh' ? 0xd4bec8 : 0x453f38,
+          roughness: theme === 'flesh' ? 0.54 : 0.92,
+          metalness: 0.06,
+        });
+        const baseInst = new THREE.InstancedMesh(baseGeo, baseMat, pillarCoords.length);
+        baseInst.castShadow = true;
+        baseInst.receiveShadow = true;
+        baseInst.frustumCulled = false;
 
-      pillarCoords.forEach(([gx, gz], i) => {
-        const wx = gx * TILE_SIZE;
-        const wz = gz * TILE_SIZE;
-        _pos.set(wx, 1.25, wz);
-        _quat.identity();
-        _scale.set(1, 1, 1);
-        _mat4.compose(_pos, _quat, _scale);
-        shaftInst.setMatrixAt(i, _mat4);
+        const topInst = new THREE.InstancedMesh(topGeo, topMat, pillarCoords.length);
+        topInst.castShadow = true;
+        topInst.receiveShadow = true;
+        topInst.frustumCulled = false;
 
-        _pos.set(wx, 0.14, wz);
-        _mat4.compose(_pos, _quat, _scale);
-        plinthInst.setMatrixAt(i * 2, _mat4);
+        pillarCoords.forEach(([gx, gz], i) => {
+          const wx = gx * TILE_SIZE;
+          const wz = gz * TILE_SIZE;
+          const rot = ((gx * 3 + gz * 7) & 7) * (Math.PI / 4);
+          _quat.setFromAxisAngle(upAxis, rot);
+          _scale.set(1, 1, 1);
 
-        _pos.set(wx, 2.52, wz);
-        _mat4.compose(_pos, _quat, _scale);
-        plinthInst.setMatrixAt(i * 2 + 1, _mat4);
-      });
-      shaftInst.instanceMatrix.needsUpdate = true;
-      plinthInst.instanceMatrix.needsUpdate = true;
-      this.levelGroup.add(shaftInst, plinthInst);
+          _pos.set(wx, 1.24, wz);
+          _mat4.compose(_pos, _quat, _scale);
+          shaftInst.setMatrixAt(i, _mat4);
+
+          _pos.set(wx, 0.17, wz);
+          _mat4.compose(_pos, _quat, _scale);
+          baseInst.setMatrixAt(i, _mat4);
+
+          _pos.set(wx, 2.52, wz);
+          _mat4.compose(_pos, _quat, _scale);
+          topInst.setMatrixAt(i, _mat4);
+        });
+        shaftInst.instanceMatrix.needsUpdate = true;
+        baseInst.instanceMatrix.needsUpdate = true;
+        topInst.instanceMatrix.needsUpdate = true;
+        this.levelGroup.add(shaftInst, baseInst, topInst);
+      } else {
+        const plinthGeo = new THREE.BoxGeometry(1.18, 0.28, 1.18);
+        const plinthMat = new THREE.MeshStandardMaterial({
+          color: theme === 'alien' ? 0x2b496b : 0x2c303a,
+          roughness: theme === 'alien' ? 0.28 : 0.85,
+          metalness: theme === 'alien' ? 0.78 : 0.15,
+        });
+        const plinthInst = new THREE.InstancedMesh(plinthGeo, plinthMat, pillarCoords.length * 2);
+        plinthInst.castShadow = true;
+        plinthInst.receiveShadow = true;
+        plinthInst.frustumCulled = false;
+
+        pillarCoords.forEach(([gx, gz], i) => {
+          const wx = gx * TILE_SIZE;
+          const wz = gz * TILE_SIZE;
+          _pos.set(wx, 1.25, wz);
+          _quat.identity();
+          _scale.set(1, 1, 1);
+          _mat4.compose(_pos, _quat, _scale);
+          shaftInst.setMatrixAt(i, _mat4);
+
+          _pos.set(wx, 0.14, wz);
+          _mat4.compose(_pos, _quat, _scale);
+          plinthInst.setMatrixAt(i * 2, _mat4);
+
+          _pos.set(wx, 2.52, wz);
+          _mat4.compose(_pos, _quat, _scale);
+          plinthInst.setMatrixAt(i * 2 + 1, _mat4);
+        });
+        shaftInst.instanceMatrix.needsUpdate = true;
+        plinthInst.instanceMatrix.needsUpdate = true;
+        this.levelGroup.add(shaftInst, plinthInst);
+      }
     }
 
     // 4. Props (Torches, Braziers, Rune Wells, Crates, Urns, Banners, Spike Traps)
@@ -2416,7 +2565,7 @@ export class EmbervaultEngine {
         if (snap?.brokenBreakableKeys.has(`${prop.gx},${prop.gz}`)) {
           continue;
         }
-        const mesh = createCrateProp(prop.type, this.textures);
+        const mesh = createCrateProp(prop.type, this.textures, theme);
         mesh.position.set(x, 0, z);
         mesh.rotation.y = (Math.random() - 0.5) * 0.35;
         this.dynamicGroup.add(mesh);
@@ -2439,6 +2588,76 @@ export class EmbervaultEngine {
           phaseOffset: this.mp ? this.mpSpikePhase(prop.gx, prop.gz) : Math.random() * 4,
           extended: false,
         });
+      }
+    }
+
+    // 4b. Sparse, Non-Blocking Ambient Micro-Decorations (Cavern & Flesh only, deterministic per seed)
+    if (theme === 'cavern' || theme === 'flesh') {
+      let as = ((depth * 6151 + (this.dungeon.genSeed ?? 0) * 257) >>> 0) || 1;
+      const arand = () => {
+        as = (as * 1664525 + 1013904223) >>> 0;
+        return as / 4294967296;
+      };
+      const blocked = new Set<string>([
+        `${this.dungeon.spawn.gx},${this.dungeon.spawn.gz}`,
+        `${this.dungeon.keyPos.gx},${this.dungeon.keyPos.gz}`,
+        `${this.dungeon.doorPos.gx},${this.dungeon.doorPos.gz}`,
+        `${this.dungeon.stairsPos.gx},${this.dungeon.stairsPos.gz}`,
+      ]);
+      if (this.dungeon.altarPos) blocked.add(`${this.dungeon.altarPos.gx},${this.dungeon.altarPos.gz}`);
+      if (this.dungeon.shopPos) blocked.add(`${this.dungeon.shopPos.gx},${this.dungeon.shopPos.gz}`);
+      for (const p of this.dungeon.props) blocked.add(`${p.gx},${p.gz}`);
+
+      let rareMinerCount = 0;
+      for (const r of this.dungeon.rooms) {
+        const candidates: Array<{ gx: number; gz: number; ox: number; oz: number }> = [];
+        // Collect perimeter floor cells hugging a wall (strictly avoiding doorways & corridor openings)
+        for (let gz = r.z; gz < r.z + r.h; gz++) {
+          for (let gx = r.x; gx < r.x + r.w; gx++) {
+            const onEdge = gx === r.x || gx === r.x + r.w - 1 || gz === r.z || gz === r.z + r.h - 1;
+            if (!onEdge || tiles[gz]?.[gx] !== 1 || blocked.has(`${gx},${gz}`)) continue;
+            const nWall = tiles[gz - 1]?.[gx] === 2;
+            const sWall = tiles[gz + 1]?.[gx] === 2;
+            const wWall = tiles[gz]?.[gx - 1] === 2;
+            const eWall = tiles[gz]?.[gx + 1] === 2;
+            if (!nWall && !sWall && !wWall && !eWall) continue;
+            // Push micro-decor right up against the wall base so walkable floor stays clear
+            const ox = wWall ? -0.58 : eWall ? 0.58 : (arand() - 0.5) * 0.35;
+            const oz = nWall ? -0.58 : sWall ? 0.58 : (arand() - 0.5) * 0.35;
+            candidates.push({ gx, gz, ox, oz });
+          }
+        }
+        const targetCount = Math.min(candidates.length, 2 + Math.floor(arand() * 2));
+        for (let c = 0; c < targetCount; c++) {
+          const pickIdx = Math.floor(arand() * candidates.length);
+          const spot = candidates.splice(pickIdx, 1)[0];
+          if (!spot) break;
+          blocked.add(`${spot.gx},${spot.gz}`);
+
+          let kind: number;
+          if (theme === 'cavern') {
+            const roll = arand();
+            if (rareMinerCount < 2 && roll > 0.9) {
+              kind = 3; // Sparse miner's pickaxe prop
+              rareMinerCount++;
+            } else if (biome.id === 'cavern_fungal') {
+              kind = roll < 0.45 ? 1 : roll < 0.78 ? 0 : 2;
+            } else {
+              kind = roll < 0.42 ? 2 : roll < 0.78 ? 0 : 1;
+            }
+          } else {
+            const roll = arand();
+            kind = roll < 0.3 ? 0 : roll < 0.62 ? 1 : roll < 0.84 ? 2 : 3;
+          }
+
+          const decor = createAmbientDecorProp(theme, biome.id, kind, biome.runeColor);
+          const { x: wx, z: wz } = gridToWorld(spot.gx, spot.gz);
+          decor.position.set(wx + spot.ox, 0, wz + spot.oz);
+          decor.rotation.y = arand() * Math.PI * 2;
+          const s = 0.85 + arand() * 0.28;
+          decor.scale.set(s, s, s);
+          this.levelGroup.add(decor);
+        }
       }
     }
 
@@ -6722,12 +6941,7 @@ export class EmbervaultEngine {
       this.emitFloatingText(br.x, 1.75, br.z, '真香！泡麵魂!', 'relicOrange');
     }
 
-    const color =
-      this.dungeon.biome.terrainTheme === 'alien'
-        ? 0x70d8ff
-        : br.kind === 'crate'
-        ? 0x7c502d
-        : 0xb38252;
+    const color = this.getBreakableDebrisColor(br.kind);
     for (let i = 0; i < 10; i++) {
       this.spawnParticle(
         br.x + (Math.random() - 0.5) * 0.4,
@@ -11533,8 +11747,16 @@ export class EmbervaultEngine {
     }
   }
 
+  private getBreakableDebrisColor(kind: 'crate' | 'urn'): number {
+    const theme = this.dungeon.biome.terrainTheme;
+    if (theme === 'alien') return 0x70d8ff;
+    if (theme === 'cavern') return kind === 'crate' ? 0x5e4d3c : 0x62cc94;
+    if (theme === 'flesh') return kind === 'crate' ? 0xb5448c : 0xd9bfd0;
+    return kind === 'crate' ? 0x7c502d : 0xb38252;
+  }
+
   private updateWallOcclusion(): void {
-    if (this.wallTiles.length === 0 || !this.capOpaqueMesh || !this.capFadeMesh) return;
+    if (this.wallTiles.length === 0 || this.capOpaqueMeshes.length === 0 || this.capFadeMeshes.length === 0) return;
 
     // 1. Check with slight hysteresis whether any foreground wall is currently blocking the hero
     let hasBlocker = false;
@@ -11588,13 +11810,14 @@ export class EmbervaultEngine {
         changed = true;
 
         const opaqueWall = this.wallOpaqueMeshes[t.bucketIdx];
+        const opaqueCap = this.capOpaqueMeshes[t.capBucketIdx];
         if (shouldOcclude) {
           _pos.set(t.wx, -100, t.wz);
           _quat.identity();
           _scale.set(0, 0, 0);
           _mat4.compose(_pos, _quat, _scale);
           opaqueWall.setMatrixAt(t.wallInstIdx, _mat4);
-          this.capOpaqueMesh.setMatrixAt(t.capInstIdx, _mat4);
+          opaqueCap.setMatrixAt(t.capInstIdx, _mat4);
         } else {
           _pos.set(t.wx, this.wallHeight / 2, t.wz);
           _quat.setFromAxisAngle(_upAxis, t.rotY);
@@ -11602,13 +11825,13 @@ export class EmbervaultEngine {
           _mat4.compose(_pos, _quat, _scale);
           opaqueWall.setMatrixAt(t.wallInstIdx, _mat4);
 
-          _pos.set(t.wx, this.wallHeight + 0.07, t.wz);
-          _quat.identity();
+          _pos.set(t.wx, this.wallHeight, t.wz);
+          _quat.setFromAxisAngle(_upAxis, t.capRotY);
           _mat4.compose(_pos, _quat, _scale);
-          this.capOpaqueMesh.setMatrixAt(t.capInstIdx, _mat4);
+          opaqueCap.setMatrixAt(t.capInstIdx, _mat4);
         }
         opaqueWall.instanceMatrix.needsUpdate = true;
-        this.capOpaqueMesh.instanceMatrix.needsUpdate = true;
+        opaqueCap.instanceMatrix.needsUpdate = true;
       }
     }
 
@@ -11622,8 +11845,7 @@ export class EmbervaultEngine {
     occludedList.sort((a, b) => b.gx + b.gz - (a.gx + a.gz));
 
     const bucketCounts = new Array<number>(this.wallFadeMeshes.length).fill(0);
-    let capCount = 0;
-    const maxCap = this.capFadeMesh.instanceMatrix.count;
+    const capBucketCounts = new Array<number>(this.capFadeMeshes.length).fill(0);
 
     for (let i = 0; i < occludedList.length; i++) {
       const t = occludedList[i];
@@ -11638,17 +11860,21 @@ export class EmbervaultEngine {
         fadeWall.setMatrixAt(bucketCounts[t.bucketIdx]++, _mat4);
       }
 
-      if (capCount < maxCap) {
-        _pos.set(t.wx, this.wallHeight + 0.07, t.wz);
-        _quat.identity();
+      const fadeCap = this.capFadeMeshes[t.capBucketIdx];
+      const maxCap = fadeCap.instanceMatrix.count;
+      if (capBucketCounts[t.capBucketIdx] < maxCap) {
+        _pos.set(t.wx, this.wallHeight, t.wz);
+        _quat.setFromAxisAngle(_upAxis, t.capRotY);
         _scale.set(1, 1, 1);
         _mat4.compose(_pos, _quat, _scale);
-        this.capFadeMesh.setMatrixAt(capCount++, _mat4);
+        fadeCap.setMatrixAt(capBucketCounts[t.capBucketIdx]++, _mat4);
       }
     }
 
-    this.capFadeMesh.count = capCount;
-    this.capFadeMesh.instanceMatrix.needsUpdate = true;
+    for (let c = 0; c < this.capFadeMeshes.length; c++) {
+      this.capFadeMeshes[c].count = capBucketCounts[c];
+      this.capFadeMeshes[c].instanceMatrix.needsUpdate = true;
+    }
 
     for (let b = 0; b < this.wallFadeMeshes.length; b++) {
       this.wallFadeMeshes[b].count = bucketCounts[b];
@@ -13502,7 +13728,7 @@ export class EmbervaultEngine {
   }
 
   private mpBreakBurst(br: BreakableEntity): void {
-    const color = this.dungeon.biome.terrainTheme === 'alien' ? 0x70d8ff : br.kind === 'crate' ? 0x7c502d : 0xb38252;
+    const color = this.getBreakableDebrisColor(br.kind);
     for (let i = 0; i < 10; i++) {
       this.spawnParticle(
         br.x + (Math.random() - 0.5) * 0.4,
@@ -13570,7 +13796,7 @@ export class EmbervaultEngine {
           (Math.random() - 0.5) * 4,
           2 + Math.random() * 2.4,
           (Math.random() - 0.5) * 4,
-          br.kind === 'crate' ? 0x7c502d : 0xb38252,
+          this.getBreakableDebrisColor(br.kind),
           1.2,
           0.5,
           9.5

@@ -2761,6 +2761,150 @@ export function createBrazier(
     return { root, flame };
   }
 
+  if (theme === 'cavern') {
+    // Natural stacked slate rock cairn topped with a glowing raw mineral crystal cluster
+    const rockDark = new THREE.MeshStandardMaterial({ color: 0x302c28, roughness: 0.94, metalness: 0.05 });
+    const rockMid = new THREE.MeshStandardMaterial({ color: 0x4a443d, roughness: 0.9, metalness: 0.06 });
+    const crystalMat = new THREE.MeshStandardMaterial({
+      color: accentColor,
+      emissive: accentColor,
+      emissiveIntensity: 0.65,
+      roughness: 0.24,
+      metalness: 0.18,
+      flatShading: true,
+    });
+    const coreTint = new THREE.Color(accentColor).lerp(new THREE.Color(0xffffff), 0.55);
+
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.52, 0.28, 6), rockDark);
+    base.position.y = 0.14;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    root.add(base);
+
+    const midRock = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.4, 0.32, 6), rockMid);
+    midRock.position.y = 0.42;
+    midRock.rotation.y = 0.4;
+    midRock.castShadow = true;
+    root.add(midRock);
+
+    // Side rock buttresses
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.3;
+      const chunk = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.26, 0.22), i % 2 === 0 ? rockDark : rockMid);
+      chunk.position.set(Math.cos(a) * 0.28, 0.22, Math.sin(a) * 0.28);
+      chunk.rotation.y = a;
+      chunk.castShadow = true;
+      root.add(chunk);
+    }
+
+    const cradle = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.28, 0.18, 6), rockDark);
+    cradle.position.y = 0.66;
+    cradle.castShadow = true;
+    root.add(cradle);
+
+    const flame = new THREE.Group();
+    flame.position.y = 0.78;
+    const mainSpire = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.64, 5), crystalMat);
+    mainSpire.position.y = 0.26;
+    const sideA = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.42, 5), crystalMat);
+    sideA.position.set(0.16, 0.16, 0.08);
+    sideA.rotation.z = -0.38;
+    const sideB = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.36, 5), crystalMat);
+    sideB.position.set(-0.15, 0.14, -0.09);
+    sideB.rotation.z = 0.42;
+    sideB.rotation.x = -0.25;
+    const innerCore = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.14, 0),
+      new THREE.MeshBasicMaterial({ color: coreTint })
+    );
+    innerCore.position.y = 0.24;
+    flame.add(mainSpire, sideA, sideB, innerCore);
+    root.add(flame);
+
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowMap,
+        color: accentColor,
+        transparent: true,
+        opacity: 0.68,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    halo.scale.set(2.4, 2.4, 1);
+    halo.position.y = 1.12;
+    root.add(halo);
+
+    return { root, flame };
+  }
+
+  if (theme === 'flesh') {
+    // Organic bone-ribbed chalice pillar cradling a pulsing bioluminescent organ core
+    const fleshDark = new THREE.MeshStandardMaterial({ color: 0x451238, roughness: 0.62, metalness: 0.06 });
+    const fleshMid = new THREE.MeshStandardMaterial({ color: 0x7d2563, roughness: 0.48, metalness: 0.08 });
+    const boneMat = new THREE.MeshStandardMaterial({ color: 0xd6c2cc, roughness: 0.56, metalness: 0.05 });
+    const coreTint = new THREE.Color(accentColor).lerp(new THREE.Color(0xffffff), 0.52);
+
+    const rootPad = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.52, 0.22, 7), fleshDark);
+    rootPad.position.y = 0.11;
+    rootPad.castShadow = true;
+    rootPad.receiveShadow = true;
+    root.add(rootPad);
+
+    const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 0.56, 7), fleshMid);
+    stalk.position.y = 0.46;
+    stalk.castShadow = true;
+    root.add(stalk);
+
+    // 4 curved bone ribs hugging the stalk and flaring into a top cradle
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.66, 0.11), boneMat);
+      rib.position.set(Math.cos(a) * 0.27, 0.56, Math.sin(a) * 0.27);
+      rib.rotation.y = -a;
+      rib.rotation.z = -0.24;
+      rib.castShadow = true;
+      root.add(rib);
+    }
+
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.22, 0.22, 7), fleshDark);
+    cup.position.y = 0.78;
+    cup.castShadow = true;
+    root.add(cup);
+
+    const flame = new THREE.Group();
+    flame.position.y = 0.96;
+    const bioOrb = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.24, 0),
+      new THREE.MeshBasicMaterial({ color: coreTint })
+    );
+    bioOrb.position.y = 0.12;
+    const veinRing = new THREE.Mesh(
+      new THREE.TorusGeometry(0.28, 0.036, 5, 10),
+      new THREE.MeshBasicMaterial({ color: accentColor })
+    );
+    veinRing.rotation.x = Math.PI / 2;
+    veinRing.position.y = 0.02;
+    flame.add(bioOrb, veinRing);
+    root.add(flame);
+
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowMap,
+        color: accentColor,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    halo.scale.set(2.5, 2.5, 1);
+    halo.position.y = 1.15;
+    root.add(halo);
+
+    return { root, flame };
+  }
+
   const ironMat = new THREE.MeshStandardMaterial({ color: 0x262930, roughness: 0.45, metalness: 0.78 });
 
   // Tripod legs
@@ -2855,6 +2999,101 @@ export function createWallTorch(
     );
     halo.scale.set(2.2, 2.2, 1);
     halo.position.set(0, 1.66, 0.22);
+    root.add(halo);
+
+    return { root, flame };
+  }
+
+  if (theme === 'cavern') {
+    // Rough stone cliff sconce + miner's iron clamp holding a glowing raw crystal lantern shard
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x3d3833, roughness: 0.92, metalness: 0.05 });
+    const ironMat = new THREE.MeshStandardMaterial({ color: 0x262a30, metalness: 0.7, roughness: 0.48 });
+    const coreTint = new THREE.Color(accentColor).lerp(new THREE.Color(0xffffff), 0.48);
+
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.24, 0.26), rockMat);
+    shelf.position.set(0, 1.56, 0.08);
+    root.add(shelf);
+
+    const clamp = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.1, 0.22), ironMat);
+    clamp.position.set(0, 1.7, 0.16);
+    root.add(clamp);
+
+    const flame = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.17, 0),
+      new THREE.MeshBasicMaterial({ color: coreTint })
+    );
+    flame.scale.set(0.85, 1.45, 0.85);
+    flame.position.set(0, 1.9, 0.19);
+    root.add(flame);
+
+    const sideShard = new THREE.Mesh(
+      new THREE.ConeGeometry(0.07, 0.22, 4),
+      new THREE.MeshBasicMaterial({ color: accentColor })
+    );
+    sideShard.position.set(0.11, 1.82, 0.17);
+    sideShard.rotation.z = -0.35;
+    root.add(sideShard);
+
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowMap,
+        color: accentColor,
+        transparent: true,
+        opacity: 0.66,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    halo.scale.set(2.1, 2.1, 1);
+    halo.position.set(0, 1.92, 0.28);
+    root.add(halo);
+
+    return { root, flame };
+  }
+
+  if (theme === 'flesh') {
+    // Organic dark-plum tendon stalk growing out of the wall cradling a pulsing bioluminescent cyst
+    const tendonMat = new THREE.MeshStandardMaterial({ color: 0x4a143e, roughness: 0.56, metalness: 0.06 });
+    const lipMat = new THREE.MeshStandardMaterial({ color: 0x8a2c6e, roughness: 0.42, metalness: 0.08 });
+    const coreTint = new THREE.Color(accentColor).lerp(new THREE.Color(0xffffff), 0.46);
+
+    const rootBulb = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.34, 0.14), tendonMat);
+    rootBulb.position.set(0, 1.62, 0.04);
+    root.add(rootBulb);
+
+    const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.34, 6), lipMat);
+    stalk.position.set(0, 1.68, 0.18);
+    stalk.rotation.x = 0.65;
+    root.add(stalk);
+
+    // 3 short grasping sinew prongs around the glowing organ bulb
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2;
+      const prong = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.18, 0.06), tendonMat);
+      prong.position.set(Math.cos(a) * 0.1, 1.84, 0.24 + Math.sin(a) * 0.08);
+      root.add(prong);
+    }
+
+    const flame = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.15, 0),
+      new THREE.MeshBasicMaterial({ color: coreTint })
+    );
+    flame.scale.set(1.0, 1.15, 1.0);
+    flame.position.set(0, 1.9, 0.25);
+    root.add(flame);
+
+    const halo = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowMap,
+        color: accentColor,
+        transparent: true,
+        opacity: 0.66,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    halo.scale.set(2.15, 2.15, 1);
+    halo.position.set(0, 1.92, 0.32);
     root.add(halo);
 
     return { root, flame };
@@ -2975,9 +3214,173 @@ export function createRuneWell(
 
 export function createCrateProp(
   kind: 'crate' | 'urn',
-  textures: DungeonTextureSet
+  textures: DungeonTextureSet,
+  theme: TerrainTheme = 'dungeon'
 ): THREE.Group {
   const root = new THREE.Group();
+
+  if (theme === 'cavern') {
+    if (kind === 'crate') {
+      // Miner's reinforced timber-and-ore supply crate (multi-part 3D silhouette)
+      const crateMat = new THREE.MeshStandardMaterial({
+        map: textures.crateMap,
+        roughness: 0.88,
+        metalness: 0.08,
+      });
+      const frameMat = new THREE.MeshStandardMaterial({ color: 0x3b3127, roughness: 0.92, metalness: 0.06 });
+      const ironMat = new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.48, metalness: 0.72 });
+      const oreMat = new THREE.MeshStandardMaterial({
+        color: 0x45d6e6,
+        emissive: 0x165e6b,
+        emissiveIntensity: 0.4,
+        roughness: 0.28,
+        metalness: 0.2,
+      });
+
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.68, 0.76), crateMat);
+      body.position.y = 0.36;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      root.add(body);
+
+      const topRim = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.1, 0.86), frameMat);
+      topRim.position.y = 0.72;
+      topRim.castShadow = true;
+      const botRim = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.08, 0.84), frameMat);
+      botRim.position.y = 0.04;
+      root.add(topRim, botRim);
+
+      // 4 iron corner clasps
+      for (const sx of [-0.41, 0.41]) {
+        for (const sz of [-0.41, 0.41]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.74, 0.09), ironMat);
+          post.position.set(sx, 0.37, sz);
+          root.add(post);
+        }
+      }
+      // Raw ore chunks resting on top
+      const oreA = new THREE.Mesh(new THREE.OctahedronGeometry(0.14, 0), oreMat);
+      oreA.position.set(-0.12, 0.83, 0.08);
+      oreA.rotation.set(0.3, 0.5, 0.2);
+      const oreB = new THREE.Mesh(new THREE.OctahedronGeometry(0.11, 0), oreMat);
+      oreB.position.set(0.15, 0.81, -0.1);
+      oreB.rotation.set(-0.2, 0.8, 0.4);
+      root.add(oreA, oreB);
+    } else {
+      // Rough cave clay mining amphora encrusted with mineral crystal nubs
+      const clayMat = new THREE.MeshStandardMaterial({ color: 0x524840, roughness: 0.86, metalness: 0.06 });
+      const darkRimMat = new THREE.MeshStandardMaterial({ color: 0x322d28, roughness: 0.9, metalness: 0.08 });
+      const corkMat = new THREE.MeshStandardMaterial({ color: 0x735234, roughness: 0.92, metalness: 0.04 });
+      const crystalMat = new THREE.MeshStandardMaterial({
+        color: 0x62e89d,
+        emissive: 0x1e6b42,
+        emissiveIntensity: 0.38,
+        roughness: 0.26,
+      });
+
+      const belly = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.34, 0.52, 6), clayMat);
+      belly.position.y = 0.26;
+      belly.castShadow = true;
+      const shoulder = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.26, 0.16, 6), darkRimMat);
+      shoulder.position.y = 0.6;
+      shoulder.castShadow = true;
+      const lip = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.19, 0.08, 6), clayMat);
+      lip.position.y = 0.71;
+      const cork = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.13, 0.1, 5), corkMat);
+      cork.position.y = 0.78;
+      const shardA = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.24, 4), crystalMat);
+      shardA.position.set(0.28, 0.38, 0.1);
+      shardA.rotation.z = -0.68;
+      const shardB = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.18, 4), crystalMat);
+      shardB.position.set(-0.24, 0.24, -0.14);
+      shardB.rotation.z = 0.75;
+      root.add(belly, shoulder, lip, cork, shardA, shardB);
+    }
+    return root;
+  }
+
+  if (theme === 'flesh') {
+    if (kind === 'crate') {
+      // Clustered organic chitinous egg-sacs / bio-pods nestled in dark-plum membrane
+      const membraneMat = new THREE.MeshStandardMaterial({ color: 0x421238, roughness: 0.7, metalness: 0.05 });
+      const sacMat = new THREE.MeshStandardMaterial({
+        map: textures.crateMap,
+        roughness: 0.44,
+        metalness: 0.08,
+      });
+      const nodeMat = new THREE.MeshStandardMaterial({
+        color: 0xf08cd6,
+        emissive: 0x7d1e66,
+        emissiveIntensity: 0.35,
+        roughness: 0.3,
+      });
+
+      const basePad = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.54, 0.14, 7), membraneMat);
+      basePad.position.y = 0.07;
+      basePad.receiveShadow = true;
+      root.add(basePad);
+
+      const mainPod = new THREE.Mesh(new THREE.DodecahedronGeometry(0.36, 0), sacMat);
+      mainPod.scale.set(1.0, 1.24, 0.96);
+      mainPod.position.set(-0.04, 0.46, 0.02);
+      mainPod.castShadow = true;
+      root.add(mainPod);
+
+      const sidePodA = new THREE.Mesh(new THREE.DodecahedronGeometry(0.24, 0), sacMat);
+      sidePodA.scale.set(0.95, 1.15, 0.95);
+      sidePodA.position.set(0.3, 0.3, 0.14);
+      sidePodA.rotation.z = -0.28;
+      sidePodA.castShadow = true;
+      const sidePodB = new THREE.Mesh(new THREE.DodecahedronGeometry(0.21, 0), sacMat);
+      sidePodB.scale.set(1.0, 1.1, 0.9);
+      sidePodB.position.set(-0.26, 0.26, -0.2);
+      sidePodB.rotation.z = 0.32;
+      sidePodB.castShadow = true;
+
+      const capNode = new THREE.Mesh(new THREE.OctahedronGeometry(0.12, 0), nodeMat);
+      capNode.position.set(-0.04, 0.88, 0.02);
+      root.add(sidePodA, sidePodB, capNode);
+    } else {
+      // Bone-caged visceral gland cyst (replaces medieval clay pot)
+      const baseMat = new THREE.MeshStandardMaterial({ color: 0x45133a, roughness: 0.64, metalness: 0.06 });
+      const boneMat = new THREE.MeshStandardMaterial({ color: 0xd9c6cf, roughness: 0.56, metalness: 0.05 });
+      const glandMat = new THREE.MeshStandardMaterial({
+        color: 0xd94cb3,
+        emissive: 0x70165c,
+        emissiveIntensity: 0.45,
+        roughness: 0.32,
+        metalness: 0.08,
+      });
+
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 0.16, 7), baseMat);
+      base.position.y = 0.08;
+      base.castShadow = true;
+      root.add(base);
+
+      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.28, 0), glandMat);
+      core.scale.set(0.95, 1.4, 0.95);
+      core.position.y = 0.48;
+      core.castShadow = true;
+      root.add(core);
+
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2;
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.66, 0.09), boneMat);
+        rib.position.set(Math.cos(a) * 0.28, 0.44, Math.sin(a) * 0.28);
+        rib.rotation.y = -a;
+        rib.rotation.z = 0.14;
+        rib.castShadow = true;
+        root.add(rib);
+      }
+
+      const crown = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.05, 5, 8), boneMat);
+      crown.rotation.x = Math.PI / 2;
+      crown.position.y = 0.76;
+      root.add(crown);
+    }
+    return root;
+  }
+
   if (kind === 'crate') {
     const mat = new THREE.MeshStandardMaterial({
       map: textures.crateMap,
@@ -3010,6 +3413,286 @@ export function createCrateProp(
     ring.position.y = 0.36;
     root.add(vessel, lip, ring);
   }
+  return root;
+}
+
+/** Merge simple geometries into a single non-indexed BufferGeometry (disposing input parts). */
+function mergeSimpleGeometries(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const nonIndexed = parts.map((g) => (g.index ? g.toNonIndexed() : g.clone()));
+  parts.forEach((g) => g.dispose());
+
+  let totalVerts = 0;
+  for (const g of nonIndexed) {
+    totalVerts += g.attributes.position.count;
+  }
+
+  const positions = new Float32Array(totalVerts * 3);
+  const normals = new Float32Array(totalVerts * 3);
+  let offset = 0;
+  for (const g of nonIndexed) {
+    if (!g.attributes.normal) g.computeVertexNormals();
+    const pos = g.attributes.position;
+    const norm = g.attributes.normal;
+    for (let i = 0; i < pos.count; i++) {
+      const dst = (offset + i) * 3;
+      positions[dst] = pos.getX(i);
+      positions[dst + 1] = pos.getY(i);
+      positions[dst + 2] = pos.getZ(i);
+      normals[dst] = norm.getX(i);
+      normals[dst + 1] = norm.getY(i);
+      normals[dst + 2] = norm.getZ(i);
+    }
+    offset += pos.count;
+    g.dispose();
+  }
+
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/**
+ * Returns wall-top cap geometries anchored with bottom at Y=0.
+ * Stone & Alien use 1 clean flat cutaway slab; Cavern & Flesh use 3 irregular blocky rock/organic ridges
+ * that rotate per tile and integrate seamlessly with 4-tile translucent wall occlusion fading.
+ */
+export function createWallCapGeometries(theme: TerrainTheme, tileSize: number): THREE.BufferGeometry[] {
+  const slabW = tileSize + 0.02;
+  if (theme !== 'cavern' && theme !== 'flesh') {
+    const flat = new THREE.BoxGeometry(slabW, 0.14, slabW);
+    flat.translate(0, 0.07, 0);
+    return [flat];
+  }
+
+  const addBox = (
+    list: THREE.BufferGeometry[],
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+    ry = 0
+  ) => {
+    const b = new THREE.BoxGeometry(w, h, d);
+    if (ry !== 0) b.rotateY(ry);
+    b.translate(x, y, z);
+    list.push(b);
+  };
+
+  if (theme === 'cavern') {
+    // Variant 0: Stepped jagged cliff crag along one corner + low shelf opposite
+    const v0: THREE.BufferGeometry[] = [];
+    addBox(v0, slabW, 0.14, slabW, 0, 0.07, 0);
+    addBox(v0, 1.24, 0.18, 1.12, -0.34, 0.21, -0.36, 0.08);
+    addBox(v0, 0.72, 0.22, 0.68, -0.46, 0.34, -0.44, -0.18);
+    addBox(v0, 0.86, 0.14, 0.94, 0.48, 0.19, 0.42, 0.12);
+
+    // Variant 1: Diagonal rocky spine ridge + faceted outcrop
+    const v1: THREE.BufferGeometry[] = [];
+    addBox(v1, slabW, 0.14, slabW, 0, 0.07, 0);
+    addBox(v1, 1.56, 0.16, 0.86, 0.06, 0.2, -0.1, 0.36);
+    addBox(v1, 0.64, 0.24, 0.56, 0.26, 0.32, -0.24, -0.25);
+    addBox(v1, 0.54, 0.16, 0.52, -0.52, 0.21, 0.46, 0.2);
+
+    // Variant 2: Twin stepped boulder caps with recessed trough
+    const v2: THREE.BufferGeometry[] = [];
+    addBox(v2, slabW, 0.14, slabW, 0, 0.07, 0);
+    addBox(v2, 0.94, 0.2, 0.92, -0.44, 0.22, 0.38, -0.1);
+    addBox(v2, 0.86, 0.17, 1.04, 0.48, 0.2, -0.34, 0.14);
+    addBox(v2, 0.46, 0.18, 0.44, 0.54, 0.32, -0.42, 0.45);
+
+    return [mergeSimpleGeometries(v0), mergeSimpleGeometries(v1), mergeSimpleGeometries(v2)];
+  }
+
+  // Flesh: 3 organic stepped sinew-lobe & muscular ridge wall tops
+  const f0: THREE.BufferGeometry[] = [];
+  addBox(f0, slabW, 0.14, slabW, 0, 0.07, 0);
+  addBox(f0, 1.32, 0.16, 1.06, -0.24, 0.2, -0.28, 0.16);
+  addBox(f0, 0.82, 0.16, 0.74, -0.34, 0.31, -0.34, -0.12);
+  addBox(f0, 0.78, 0.12, 0.86, 0.46, 0.18, 0.4, 0.22);
+
+  const f1: THREE.BufferGeometry[] = [];
+  addBox(f1, slabW, 0.14, slabW, 0, 0.07, 0);
+  addBox(f1, 1.64, 0.14, 0.76, 0, 0.19, 0.12, -0.28);
+  addBox(f1, 0.72, 0.18, 0.66, 0.34, 0.29, -0.18, 0.3);
+  addBox(f1, 0.62, 0.14, 0.58, -0.48, 0.22, -0.42, 0.15);
+
+  const f2: THREE.BufferGeometry[] = [];
+  addBox(f2, slabW, 0.14, slabW, 0, 0.07, 0);
+  addBox(f2, 1.04, 0.17, 0.96, 0.36, 0.2, 0.34, 0.18);
+  addBox(f2, 0.9, 0.15, 0.84, -0.42, 0.19, -0.36, -0.22);
+  addBox(f2, 0.52, 0.16, 0.52, 0.42, 0.3, 0.38, 0.42);
+
+  return [mergeSimpleGeometries(f0), mergeSimpleGeometries(f1), mergeSimpleGeometries(f2)];
+}
+
+/**
+ * Low-profile, purely visual environmental micro-decorations placed sparingly near room wall edges
+ * in Cavern (11-20) and Flesh (21-30). Grounded at Y=0, height <= 0.52 so combat readability stays crisp.
+ */
+export function createAmbientDecorProp(
+  theme: 'cavern' | 'flesh',
+  biomeId: BiomeConfig['id'],
+  kind: number,
+  accentColor: number
+): THREE.Group {
+  const root = new THREE.Group();
+
+  if (theme === 'cavern') {
+    const rockDark = new THREE.MeshStandardMaterial({ color: 0x342f2a, roughness: 0.94, metalness: 0.05 });
+    const rockMid = new THREE.MeshStandardMaterial({ color: 0x524a42, roughness: 0.9, metalness: 0.05 });
+    const isFungal = biomeId === 'cavern_fungal';
+
+    if (kind === 0) {
+      // Small jagged rock & pebble cairn
+      const r1 = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.24, 0.28), rockDark);
+      r1.position.set(0, 0.12, 0);
+      r1.rotation.y = 0.35;
+      const r2 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.2), rockMid);
+      r2.position.set(0.2, 0.08, 0.14);
+      r2.rotation.y = -0.4;
+      const r3 = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.16), rockMid);
+      r3.position.set(-0.18, 0.06, 0.16);
+      r3.rotation.y = 0.7;
+      root.add(r1, r2, r3);
+    } else if (kind === 1) {
+      // Low-res blocky cave glow-mushroom cluster
+      const stemMat = new THREE.MeshStandardMaterial({ color: 0xbab2a0, roughness: 0.85 });
+      const capColor = isFungal ? 0x4de68a : 0x4ccce0;
+      const capMat = new THREE.MeshStandardMaterial({
+        color: capColor,
+        emissive: capColor,
+        emissiveIntensity: 0.42,
+        roughness: 0.42,
+      });
+      const specs: Array<[number, number, number, number]> = [
+        [0, 0, 0.28, 0.22],
+        [0.19, 0.11, 0.19, 0.16],
+        [-0.16, 0.12, 0.15, 0.13],
+      ];
+      for (const [mx, mz, h, capW] of specs) {
+        const stem = new THREE.Mesh(new THREE.BoxGeometry(0.06, h, 0.06), stemMat);
+        stem.position.set(mx, h * 0.5, mz);
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(capW, 0.09, capW), capMat);
+        cap.position.set(mx, h + 0.03, mz);
+        cap.rotation.y = mx * 3.1;
+        root.add(stem, cap);
+      }
+    } else if (kind === 2) {
+      // Tiny ground mineral crystal sprout on stone base
+      const crysMat = new THREE.MeshStandardMaterial({
+        color: accentColor,
+        emissive: accentColor,
+        emissiveIntensity: 0.35,
+        roughness: 0.24,
+        metalness: 0.15,
+        flatShading: true,
+      });
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.09, 0.28), rockDark);
+      pad.position.y = 0.045;
+      const s1 = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.38, 4), crysMat);
+      s1.position.set(0, 0.22, 0);
+      s1.rotation.z = 0.14;
+      const s2 = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.26, 4), crysMat);
+      s2.position.set(0.11, 0.15, 0.07);
+      s2.rotation.z = -0.38;
+      const s3 = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.22, 4), crysMat);
+      s3.position.set(-0.1, 0.13, -0.06);
+      s3.rotation.z = 0.42;
+      root.add(pad, s1, s2, s3);
+    } else {
+      // Abandoned miner's pickaxe resting against a small boulder (sparse storytelling prop)
+      const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b472b, roughness: 0.9 });
+      const ironMat = new THREE.MeshStandardMaterial({ color: 0x454c57, roughness: 0.52, metalness: 0.68 });
+      const stone = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.2, 0.24), rockDark);
+      stone.position.set(-0.08, 0.1, 0);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.52, 0.055), woodMat);
+      handle.position.set(0.06, 0.22, 0.06);
+      handle.rotation.z = -0.58;
+      handle.rotation.x = 0.22;
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.07, 0.07), ironMat);
+      head.position.set(0.21, 0.36, 0.1);
+      head.rotation.z = -0.58;
+      head.rotation.x = 0.22;
+      root.add(stone, handle, head);
+    }
+    return root;
+  }
+
+  // Flesh ambient micro-decorations
+  const fleshDark = new THREE.MeshStandardMaterial({ color: 0x3d1033, roughness: 0.66, metalness: 0.05 });
+  const fleshMid = new THREE.MeshStandardMaterial({ color: 0x822866, roughness: 0.46, metalness: 0.06 });
+  const boneMat = new THREE.MeshStandardMaterial({ color: 0xd9c6cf, roughness: 0.55, metalness: 0.05 });
+  const polypMat = new THREE.MeshStandardMaterial({
+    color: 0xd15ca8,
+    emissive: 0x691852,
+    emissiveIntensity: 0.32,
+    roughness: 0.3,
+  });
+
+  if (kind === 0) {
+    // Half-buried ivory rib / bone fragments poking from dark tissue mound
+    const mound = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.1, 0.32), fleshDark);
+    mound.position.y = 0.05;
+    root.add(mound);
+    for (let i = 0; i < 3; i++) {
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.32 - i * 0.05, 0.065), boneMat);
+      rib.position.set(-0.11 + i * 0.11, 0.17, (i - 1) * 0.06);
+      rib.rotation.z = -0.32 + i * 0.12;
+      rib.rotation.x = 0.22;
+      root.add(rib);
+    }
+  } else if (kind === 1) {
+    // Clustered mini dark-plum & magenta bio-egg nodules (low-profile nod to reference image 2)
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 0.08, 6), fleshDark);
+    pad.position.y = 0.04;
+    root.add(pad);
+    const eggs: Array<[number, number, number, number]> = [
+      [0, 0, 0.13, 0.16],
+      [0.16, 0.08, 0.1, 0.12],
+      [-0.14, 0.11, 0.09, 0.11],
+      [0.04, -0.15, 0.08, 0.1],
+    ];
+    for (let i = 0; i < eggs.length; i++) {
+      const [ex, ez, r, h] = eggs[i];
+      const egg = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), i % 2 === 0 ? polypMat : fleshMid);
+      egg.scale.set(1, h / r, 1);
+      egg.position.set(ex, h * 0.78, ez);
+      root.add(egg);
+    }
+  } else if (kind === 2) {
+    // Low sinew tendril tuft softening wall-to-floor corner
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.12, 0.26), fleshDark);
+    base.position.y = 0.06;
+    root.add(base);
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.4;
+      const tendril = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.34, 0.06), i === 0 ? polypMat : fleshMid);
+      tendril.position.set(Math.cos(a) * 0.09, 0.18, Math.sin(a) * 0.09);
+      tendril.rotation.z = Math.cos(a) * 0.45;
+      tendril.rotation.x = Math.sin(a) * 0.45;
+      root.add(tendril);
+    }
+  } else {
+    // Embedded cartilage fangs poking from floor edge
+    const gum = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.09, 0.22), fleshMid);
+    gum.position.y = 0.045;
+    root.add(gum);
+    for (const [fx, h] of [
+      [-0.11, 0.26],
+      [0.01, 0.34],
+      [0.12, 0.22],
+    ] as Array<[number, number]>) {
+      const fang = new THREE.Mesh(new THREE.ConeGeometry(0.055, h, 4), boneMat);
+      fang.position.set(fx, 0.06 + h * 0.45, 0);
+      fang.rotation.x = 0.18;
+      root.add(fang);
+    }
+  }
+
   return root;
 }
 

@@ -5,6 +5,7 @@ export interface DungeonTextureSet {
   floorMap: THREE.CanvasTexture;
   floorBump: THREE.CanvasTexture;
   floorVariants?: THREE.CanvasTexture[];
+  floorDecalMaps?: THREE.CanvasTexture[];
   wallMap: THREE.CanvasTexture;
   wallBump: THREE.CanvasTexture;
   wallVariants?: THREE.CanvasTexture[];
@@ -95,126 +96,297 @@ export function createDungeonTextures(
   fbctx.fillStyle = '#202020';
   fbctx.fillRect(0, 0, 64, 64);
 
-  if (theme === 'cavern') {
-    // Subterranean Cavern Floor: rough packed cave earth, irregular rock slabs, pebbles & mineral flecks
-    fctx.fillStyle = shiftColor(baseRgb, -16);
-    fctx.fillRect(0, 0, 64, 64);
-    fbctx.fillStyle = '#7a7a7a';
-    fbctx.fillRect(0, 0, 64, 64);
+  const drawCavernFloorVariant = (
+    ctx: CanvasRenderingContext2D,
+    bctx: CanvasRenderingContext2D | null,
+    variantIdx: number,
+    vSeed: number
+  ) => {
+    const vrand = seededRand(vSeed);
+    const isFungal = biome.id === 'cavern_fungal';
+    const mossDark = isFungal ? '#234231' : '#263f47';
+    const mossMid = isFungal ? '#36694a' : '#355c66';
+    const mossBright = isFungal ? '#529968' : '#4d828f';
 
-    // Coarse gritty cave soil noise
+    ctx.fillStyle = shiftColor(baseRgb, -18 + (variantIdx % 3) * 3);
+    ctx.fillRect(0, 0, 64, 64);
+    if (bctx) {
+      bctx.fillStyle = '#787878';
+      bctx.fillRect(0, 0, 64, 64);
+    }
+
+    // Coarse gritty cave earth base
     for (let y = 0; y < 64; y += 2) {
       for (let x = 0; x < 64; x += 2) {
-        const d = Math.floor((rand() - 0.5) * 30);
-        fctx.fillStyle = shiftColor(rand() < 0.35 ? accentRgb : baseRgb, d - 8);
-        fctx.fillRect(x, y, 2, 2);
-        const bv = 95 + Math.floor(rand() * 55);
-        fbctx.fillStyle = `rgb(${bv},${bv},${bv})`;
-        fbctx.fillRect(x, y, 2, 2);
+        const d = Math.floor((vrand() - 0.5) * 28);
+        const useAcc = vrand() < (variantIdx === 1 ? 0.45 : 0.32);
+        ctx.fillStyle = shiftColor(useAcc ? accentRgb : baseRgb, d - 9);
+        ctx.fillRect(x, y, 2, 2);
+        if (bctx) {
+          const bv = 92 + Math.floor(vrand() * 54);
+          bctx.fillStyle = `rgb(${bv},${bv},${bv})`;
+          bctx.fillRect(x, y, 2, 2);
+        }
       }
     }
 
-    // Irregular rough cave rock flagstones & rounded pebbles
-    for (let i = 0; i < 16; i++) {
-      const rx = Math.floor(rand() * 56);
-      const ry = Math.floor(rand() * 56);
-      const rw = 6 + Math.floor(rand() * 10);
-      const rh = 5 + Math.floor(rand() * 9);
-      const rgb = rand() < 0.42 ? accentRgb : baseRgb;
-      const shade = Math.floor((rand() - 0.5) * 24) + 8;
+    // Variant-specific rock flagstone geometry
+    const slabCount = variantIdx === 1 ? 9 : variantIdx === 4 ? 11 : 15;
+    for (let i = 0; i < slabCount; i++) {
+      const rw = variantIdx === 1 ? 12 + Math.floor(vrand() * 14) : 6 + Math.floor(vrand() * 10);
+      const rh = variantIdx === 1 ? 10 + Math.floor(vrand() * 12) : 5 + Math.floor(vrand() * 9);
+      const rx = Math.floor(vrand() * (64 - rw));
+      const ry = Math.floor(vrand() * (64 - rh));
+      const rgb = vrand() < 0.44 ? accentRgb : baseRgb;
+      const shade = Math.floor((vrand() - 0.5) * 24) + (variantIdx === 1 ? 10 : 6);
 
-      fctx.fillStyle = biome.floorMortar;
-      fctx.fillRect(rx, ry, rw, rh);
-      fctx.fillStyle = shiftColor(rgb, shade);
-      fctx.fillRect(rx + 1, ry + 1, rw - 2, rh - 2);
-      fctx.fillStyle = shiftColor(rgb, shade + 18);
-      fctx.fillRect(rx + 1, ry + 1, rw - 3, 1);
-      fctx.fillStyle = shiftColor(rgb, shade - 18);
-      fctx.fillRect(rx + 2, ry + rh - 2, rw - 3, 1);
+      ctx.fillStyle = biome.floorMortar;
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.fillStyle = shiftColor(rgb, shade);
+      ctx.fillRect(rx + 1, ry + 1, rw - 2, rh - 2);
+      ctx.fillStyle = shiftColor(rgb, shade + 17);
+      ctx.fillRect(rx + 1, ry + 1, Math.max(1, rw - 3), 1);
+      ctx.fillStyle = shiftColor(rgb, shade - 18);
+      ctx.fillRect(rx + 2, ry + rh - 2, Math.max(1, rw - 3), 1);
 
-      fbctx.fillStyle = '#d8d8d8';
-      fbctx.fillRect(rx + 1, ry + 1, rw - 2, rh - 2);
-      fbctx.fillStyle = '#ffffff';
-      fbctx.fillRect(rx + 1, ry + 1, rw - 3, 1);
-    }
-
-    // Dark rocky fissures
-    fctx.fillStyle = biome.floorMortar;
-    for (let c = 0; c < 4; c++) {
-      let cx = Math.floor(rand() * 54) + 4;
-      let cy = Math.floor(rand() * 54) + 4;
-      for (let s = 0; s < 7; s++) {
-        fctx.fillRect(cx, cy, 2, 1);
-        fbctx.fillStyle = '#181818';
-        fbctx.fillRect(cx, cy, 2, 1);
-        cx = (cx + (rand() < 0.5 ? 2 : 1)) & 63;
-        cy = (cy + (rand() < 0.5 ? 1 : -1) + 64) & 63;
+      if (bctx) {
+        bctx.fillStyle = '#d6d6d6';
+        bctx.fillRect(rx + 1, ry + 1, rw - 2, rh - 2);
+        bctx.fillStyle = '#ffffff';
+        bctx.fillRect(rx + 1, ry + 1, Math.max(1, rw - 3), 1);
       }
     }
 
-    // Base cavern floor stays clean rock; multicolor crystal flecks (~1/5 density) are added in floorVariants below
+    if (variantIdx === 2) {
+      // Diagonal rugged cave fracture line + fine gravel
+      let fx = 6 + Math.floor(vrand() * 14);
+      let fy = 4 + Math.floor(vrand() * 12);
+      for (let s = 0; s < 22; s++) {
+        ctx.fillStyle = biome.floorMortar;
+        ctx.fillRect(fx & 63, fy & 63, 2, 2);
+        ctx.fillStyle = shiftColor(baseRgb, 20);
+        ctx.fillRect((fx + 2) & 63, fy & 63, 1, 1);
+        if (bctx) {
+          bctx.fillStyle = '#181818';
+          bctx.fillRect(fx & 63, fy & 63, 2, 2);
+        }
+        fx += vrand() < 0.72 ? 2 : 1;
+        fy += vrand() < 0.72 ? 2 : 1;
+      }
+    } else if (variantIdx === 3) {
+      // Crevice moss / lichen patches hugging stone joints
+      for (let m = 0; m < 5; m++) {
+        const mx = 6 + Math.floor(vrand() * 48);
+        const my = 6 + Math.floor(vrand() * 48);
+        const mw = 6 + Math.floor(vrand() * 8);
+        const mh = 4 + Math.floor(vrand() * 6);
+        ctx.fillStyle = mossDark;
+        ctx.fillRect(mx, my, mw, mh);
+        ctx.fillStyle = mossMid;
+        ctx.fillRect(mx + 1, my + 1, mw - 2, mh - 2);
+        ctx.fillStyle = mossBright;
+        ctx.fillRect(mx + 2, my + 1, Math.max(1, Math.floor(mw * 0.4)), 1);
+      }
+    } else if (variantIdx === 4) {
+      // Shallow stratified stone depression + mineral dust streak
+      const px = 14 + Math.floor(vrand() * 18);
+      const py = 14 + Math.floor(vrand() * 18);
+      ctx.fillStyle = biome.floorMortar;
+      ctx.fillRect(px, py, 20, 16);
+      ctx.fillStyle = shiftColor(accentRgb, -16);
+      ctx.fillRect(px + 2, py + 2, 16, 12);
+      ctx.fillStyle = shiftColor(baseRgb, -24);
+      ctx.fillRect(px + 4, py + 4, 12, 8);
+      ctx.fillStyle = shiftColor(baseRgb, 16);
+      ctx.fillRect(px + 2, py + 15, 16, 1);
+    } else if (variantIdx === 5) {
+      // Subtle embedded mineral flecks (low density, non-distracting)
+      for (let g = 0; g < 2; g++) {
+        const pal = CAVERN_CRYSTAL_PALETTE[(g * 2 + Math.floor(vrand() * 4)) % CAVERN_CRYSTAL_PALETTE.length];
+        const gx = 8 + Math.floor(vrand() * 46);
+        const gy = 8 + Math.floor(vrand() * 46);
+        ctx.fillStyle = pal.rim;
+        ctx.fillRect(gx - 1, gy - 1, 4, 4);
+        ctx.fillStyle = pal.main;
+        ctx.fillRect(gx, gy, 2, 2);
+        ctx.fillStyle = pal.core;
+        ctx.fillRect(gx, gy, 1, 1);
+      }
+    }
+
+    // Small scattered pebbles for tactile scale
+    for (let p = 0; p < 7; p++) {
+      const px = 3 + Math.floor(vrand() * 58);
+      const py = 3 + Math.floor(vrand() * 58);
+      ctx.fillStyle = biome.floorMortar;
+      ctx.fillRect(px, py + 1, 3, 2);
+      ctx.fillStyle = shiftColor(baseRgb, 14 + Math.floor(vrand() * 12));
+      ctx.fillRect(px, py, 2, 2);
+    }
+  };
+
+  const drawFleshFloorVariant = (
+    ctx: CanvasRenderingContext2D,
+    bctx: CanvasRenderingContext2D | null,
+    variantIdx: number,
+    vSeed: number
+  ) => {
+    const vrand = seededRand(vSeed);
+    ctx.fillStyle = shiftColor(accentRgb, -18 + (variantIdx % 2) * 4);
+    ctx.fillRect(0, 0, 64, 64);
+    if (bctx) {
+      bctx.fillStyle = '#4c4c4c';
+      bctx.fillRect(0, 0, 64, 64);
+    }
+
+    // Subtle organic pixel grain
+    for (let y = 0; y < 64; y += 2) {
+      for (let x = 0; x < 64; x += 2) {
+        const d = Math.floor((vrand() - 0.5) * 18);
+        ctx.fillStyle = shiftColor(vrand() < 0.45 ? accentRgb : baseRgb, d - 12);
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+
+    if (variantIdx === 0 || variantIdx === 1) {
+      // Organic cellular tissue cobblestones (distinct layout & sizes per variant)
+      const cells = variantIdx === 0 ? 18 : 13;
+      for (let i = 0; i < cells; i++) {
+        const cx = Math.floor(vrand() * 64);
+        const cy = Math.floor(vrand() * 64);
+        const rad = variantIdx === 0 ? 4 + Math.floor(vrand() * 6) : 6 + Math.floor(vrand() * 7);
+        const rgb = i % 3 === 0 ? accentRgb : baseRgb;
+        const shade = Math.floor((vrand() - 0.5) * 24) - 4;
+        for (const ox of [-64, 0, 64]) {
+          for (const oy of [-64, 0, 64]) {
+            const px = cx + ox;
+            const py = cy + oy;
+            if (px + rad < 0 || px - rad > 64 || py + rad < 0 || py - rad > 64) continue;
+            ctx.fillStyle = biome.floorMortar;
+            ctx.fillRect(px - rad, py - rad + 1, rad * 2, rad * 2 - 2);
+            ctx.fillRect(px - rad + 1, py - rad, rad * 2 - 2, rad * 2);
+
+            ctx.fillStyle = shiftColor(rgb, shade);
+            ctx.fillRect(px - rad + 1, py - rad + 1, rad * 2 - 2, rad * 2 - 2);
+            ctx.fillStyle = shiftColor(rgb, shade + 22);
+            ctx.fillRect(px - Math.floor(rad * 0.45), py - Math.floor(rad * 0.45), 3, 2);
+
+            if (bctx) {
+              bctx.fillStyle = '#cfcfcf';
+              bctx.fillRect(px - rad + 1, py - rad + 1, rad * 2 - 2, rad * 2 - 2);
+              bctx.fillStyle = '#f5f5f5';
+              bctx.fillRect(px - 2, py - 2, 3, 3);
+            }
+          }
+        }
+      }
+    } else if (variantIdx === 2) {
+      // Cross-woven dark-plum & crimson muscular fiber bands
+      for (let y = 0; y < 64; y += 2) {
+        for (let x = 0; x < 64; x += 2) {
+          const wave = Math.sin(x * 0.25 + y * 0.18) + Math.sin(y * 0.34 - x * 0.08) * 0.5;
+          const rgb = wave > 0.2 ? baseRgb : accentRgb;
+          const shade = Math.round(wave * 18) - 4;
+          ctx.fillStyle = shiftColor(rgb, shade);
+          ctx.fillRect(x, y, 2, 2);
+          if (bctx) {
+            const bv = Math.max(40, Math.min(235, 130 + Math.round(wave * 55)));
+            bctx.fillStyle = `rgb(${bv},${bv},${bv})`;
+            bctx.fillRect(x, y, 2, 2);
+          }
+        }
+      }
+      // Deep dark sinew trenches
+      for (let t = 0; t < 3; t++) {
+        let tx = 4 + t * 20;
+        for (let ty = 0; ty < 64; ty += 2) {
+          const off = Math.round(Math.sin(ty * 0.16 + t * 2.3) * 3);
+          ctx.fillStyle = biome.floorMortar;
+          ctx.fillRect((tx + off) & 63, ty, 2, 2);
+          ctx.fillStyle = shiftColor(baseRgb, 20);
+          ctx.fillRect((tx + off + 2) & 63, ty, 1, 2);
+        }
+      }
+    } else if (variantIdx === 3) {
+      // Matte tissue pads with branching muted capillary veins
+      for (let i = 0; i < 10; i++) {
+        const rx = Math.floor(vrand() * 52);
+        const ry = Math.floor(vrand() * 52);
+        const rw = 8 + Math.floor(vrand() * 10);
+        const rh = 7 + Math.floor(vrand() * 9);
+        ctx.fillStyle = biome.floorMortar;
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.fillStyle = shiftColor(baseRgb, -6 + Math.floor(vrand() * 14));
+        ctx.fillRect(rx + 1, ry + 1, rw - 2, rh - 2);
+      }
+      for (let v = 0; v < 4; v++) {
+        let vx = Math.floor(vrand() * 64);
+        let vy = Math.floor(vrand() * 64);
+        const col = v % 2 === 0 ? '#c94c9c' : '#8e45b8';
+        for (let s = 0; s < 16; s++) {
+          ctx.fillStyle = col;
+          ctx.fillRect(vx & 63, vy & 63, 2, 2);
+          if (s % 5 === 0) {
+            ctx.fillStyle = '#eb9cd8';
+            ctx.fillRect(vx & 63, vy & 63, 1, 1);
+          }
+          vx += vrand() < 0.65 ? 2 : 1;
+          vy += vrand() < 0.5 ? 1 : -1;
+        }
+      }
+    } else if (variantIdx === 4) {
+      // Flesh membrane with embedded pale cartilage / bone splinters
+      for (let i = 0; i < 12; i++) {
+        const rx = Math.floor(vrand() * 54);
+        const ry = Math.floor(vrand() * 54);
+        const rw = 7 + Math.floor(vrand() * 8);
+        const rh = 6 + Math.floor(vrand() * 7);
+        ctx.fillStyle = biome.floorMortar;
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.fillStyle = shiftColor(accentRgb, Math.floor((vrand() - 0.5) * 18));
+        ctx.fillRect(rx + 1, ry + 1, rw - 2, rh - 2);
+      }
+      // Embedded pale ivory bone fragments
+      for (let b = 0; b < 3; b++) {
+        const bx = 8 + Math.floor(vrand() * 44);
+        const by = 8 + Math.floor(vrand() * 44);
+        const horiz = b % 2 === 0;
+        ctx.fillStyle = biome.floorMortar;
+        ctx.fillRect(bx - 1, by - 1, horiz ? 10 : 5, horiz ? 5 : 10);
+        ctx.fillStyle = '#c4b0b8';
+        ctx.fillRect(bx, by, horiz ? 8 : 3, horiz ? 3 : 8);
+        ctx.fillStyle = '#e8dde0';
+        ctx.fillRect(bx + 1, by, horiz ? 5 : 1, horiz ? 1 : 5);
+      }
+    } else {
+      // Dimpled organic floor with recessed pores and soft highlight rims
+      for (let i = 0; i < 14; i++) {
+        const rx = Math.floor(vrand() * 54);
+        const ry = Math.floor(vrand() * 54);
+        const rw = 6 + Math.floor(vrand() * 9);
+        const rh = 6 + Math.floor(vrand() * 8);
+        ctx.fillStyle = biome.floorMortar;
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.fillStyle = shiftColor(baseRgb, -4 + Math.floor(vrand() * 16));
+        ctx.fillRect(rx + 1, ry + 1, rw - 2, rh - 2);
+      }
+      for (let p = 0; p < 5; p++) {
+        const px = 6 + Math.floor(vrand() * 50);
+        const py = 6 + Math.floor(vrand() * 50);
+        ctx.fillStyle = '#330d2b';
+        ctx.fillRect(px, py, 5, 5);
+        ctx.fillStyle = '#521844';
+        ctx.fillRect(px + 1, py + 1, 3, 3);
+        ctx.fillStyle = '#cf6db5';
+        ctx.fillRect(px, py, 2, 1);
+      }
+    }
+  };
+
+  if (theme === 'cavern') {
+    drawCavernFloorVariant(fctx, fbctx, 0, seed * 17 + 101);
   } else if (theme === 'flesh') {
-    // Monster Interior Floor: pink & purple organic cellular flesh, pulsing veins & moist tissue blisters
-    fctx.fillStyle = shiftColor(accentRgb, -14);
-    fctx.fillRect(0, 0, 64, 64);
-    fbctx.fillStyle = '#484848';
-    fbctx.fillRect(0, 0, 64, 64);
-
-    // Organic cellular membrane lobes
-    const cells = 18;
-    for (let i = 0; i < cells; i++) {
-      const cx = Math.floor(rand() * 64);
-      const cy = Math.floor(rand() * 64);
-      const rad = 5 + Math.floor(rand() * 7);
-      const rgb = i % 3 === 0 ? accentRgb : baseRgb;
-      const shade = Math.floor((rand() - 0.5) * 24);
-
-      // Wrap around tile edges so texture tiles seamlessly
-      for (const ox of [-64, 0, 64]) {
-        for (const oy of [-64, 0, 64]) {
-          const px = cx + ox;
-          const py = cy + oy;
-          if (px + rad < 0 || px - rad > 64 || py + rad < 0 || py - rad > 64) continue;
-          fctx.fillStyle = biome.floorMortar;
-          fctx.beginPath();
-          fctx.arc(px, py, rad + 1, 0, Math.PI * 2);
-          fctx.fill();
-
-          fctx.fillStyle = shiftColor(rgb, shade);
-          fctx.beginPath();
-          fctx.arc(px, py, rad, 0, Math.PI * 2);
-          fctx.fill();
-
-          // Moist inner highlight blister
-          fctx.fillStyle = shiftColor(rgb, shade + 28);
-          fctx.fillRect(px - Math.floor(rad * 0.4), py - Math.floor(rad * 0.4), 3, 2);
-
-          fbctx.fillStyle = '#d4d4d4';
-          fbctx.beginPath();
-          fbctx.arc(px, py, rad - 1, 0, Math.PI * 2);
-          fbctx.fill();
-          fbctx.fillStyle = '#ffffff';
-          fbctx.fillRect(px - 2, py - 2, 3, 3);
-        }
-      }
-    }
-
-    // Branching pulsing pink-magenta capillary veins
-    for (let v = 0; v < 5; v++) {
-      let vx = Math.floor(rand() * 64);
-      let vy = Math.floor(rand() * 64);
-      const col = v % 2 === 0 ? '#e364b8' : '#b25cff';
-      for (let s = 0; s < 14; s++) {
-        fctx.fillStyle = col;
-        fctx.fillRect(vx & 63, vy & 63, 2, 2);
-        if (s % 4 === 0) {
-          fctx.fillStyle = '#ffb8ec';
-          fctx.fillRect(vx & 63, vy & 63, 1, 1);
-        }
-        vx += rand() < 0.65 ? 2 : 1;
-        vy += rand() < 0.5 ? 1 : -1;
-      }
-    }
+    drawFleshFloorVariant(fctx, fbctx, 0, seed * 19 + 203);
   } else if (theme === 'alien') {
     // Bright Blue-Silver Sci-Fi Starship Deck Plating with recessed grip treads, rivets & glowing cyan conduits
     fctx.fillStyle = '#1b3554';
@@ -362,75 +534,183 @@ export function createDungeonTextures(
   wbctx.fillStyle = '#181818';
   wbctx.fillRect(0, 0, 64, 64);
 
-  if (theme === 'cavern') {
-    // Stratified natural cavern cliff rock with jagged strata & glowing ore crystal seams
+  const drawCavernWallVariant = (
+    ctx: CanvasRenderingContext2D,
+    bctx: CanvasRenderingContext2D | null,
+    variantIdx: number,
+    vSeed: number
+  ) => {
+    const vrand = seededRand(vSeed);
+    const isFungal = biome.id === 'cavern_fungal';
+    const mossCol = isFungal ? '#2e5e40' : '#2c535e';
+    const mossHi = isFungal ? '#49875c' : '#457682';
+    const slope = variantIdx === 2 ? 0.22 : variantIdx === 1 ? -0.14 : 0.08;
+    const bandFreq = 0.22 + (variantIdx % 3) * 0.06;
+
     for (let y = 0; y < 64; y += 2) {
-      const bandShade = Math.round(Math.sin(y * 0.28) * 14);
-      const useAcc = y % 14 >= 8;
+      const bandShade = Math.round(Math.sin(y * bandFreq + variantIdx * 1.7) * 14);
+      const useAcc = ((y + variantIdx * 5) % 16) >= 9;
       const rgb = useAcc ? wallAccRgb : wallRgb;
       for (let x = 0; x < 64; x += 2) {
-        const wave = Math.round(Math.sin(x * 0.22 + y * 0.14) * 10);
-        const grain = Math.floor((rand() - 0.5) * 18);
-        const shade = bandShade + wave + grain - (y > 54 ? 18 : 0);
-        wctx.fillStyle = shiftColor(rgb, shade);
-        wctx.fillRect(x, y, 2, 2);
-        const bv = Math.max(40, Math.min(240, 145 + shade * 2));
-        wbctx.fillStyle = `rgb(${bv},${bv},${bv})`;
-        wbctx.fillRect(x, y, 2, 2);
+        const wave = Math.round(Math.sin(x * 0.2 + y * slope + variantIdx) * 11);
+        const grain = Math.floor((vrand() - 0.5) * 18);
+        const bottomAo = y > 54 ? -18 : y < 6 ? 10 : 0;
+        const shade = bandShade + wave + grain + bottomAo;
+        ctx.fillStyle = shiftColor(rgb, shade);
+        ctx.fillRect(x, y, 2, 2);
+        if (bctx) {
+          const bv = Math.max(36, Math.min(242, 145 + shade * 2));
+          bctx.fillStyle = `rgb(${bv},${bv},${bv})`;
+          bctx.fillRect(x, y, 2, 2);
+        }
       }
     }
-    // Deep irregular cave rock ledges & vertical fractures
-    for (let l = 0; l < 6; l++) {
-      const ly = 6 + l * 10 + Math.floor(rand() * 3);
+
+    // Distinct rock ledges, fractured blocks, or recessed pockets per variant
+    const ledgeCount = variantIdx === 1 ? 4 : 5;
+    for (let l = 0; l < ledgeCount; l++) {
+      const ly = 7 + l * (variantIdx === 1 ? 13 : 11) + Math.floor(vrand() * 4);
       for (let x = 0; x < 64; x += 2) {
-        const jitter = Math.round(Math.sin(x * 0.35 + l * 2.1) * 1.5);
-        wctx.fillStyle = biome.floorMortar;
-        wctx.fillRect(x, ly + jitter, 2, 2);
-        wctx.fillStyle = shiftColor(wallRgb, 22);
-        wctx.fillRect(x, ly + jitter + 2, 2, 1);
-        wbctx.fillStyle = '#151515';
-        wbctx.fillRect(x, ly + jitter, 2, 2);
+        const jitter = Math.round(Math.sin(x * 0.28 + l * 2.3 + variantIdx) * 2.0 + x * slope * 0.35);
+        const yy = Math.max(2, Math.min(60, ly + jitter));
+        ctx.fillStyle = biome.floorMortar;
+        ctx.fillRect(x, yy, 2, 2);
+        ctx.fillStyle = shiftColor(wallRgb, 20);
+        ctx.fillRect(x, Math.min(62, yy + 2), 2, 1);
+        if (bctx) {
+          bctx.fillStyle = '#141414';
+          bctx.fillRect(x, yy, 2, 2);
+        }
       }
     }
-    // Multicolor crystal ore pockets (1/2 density across 4 wall variants) are drawn onto wallVariants below
-  } else if (theme === 'flesh') {
-    // Organic ribbed pink-and-purple sinew chamber walls with muscular striations & bio-nodules
+
+    if (variantIdx === 1 || variantIdx === 3) {
+      // Vertical cliff fracture & mossy hanging edge (pure natural cave rock, no bright crystals)
+      const vx = 14 + Math.floor(vrand() * 36);
+      for (let y = 4; y < 58; y += 2) {
+        const jx = vx + Math.round(Math.sin(y * 0.24 + variantIdx) * 2.5);
+        ctx.fillStyle = biome.floorMortar;
+        ctx.fillRect(jx & 63, y, 2, 2);
+        ctx.fillStyle = shiftColor(wallRgb, 18);
+        ctx.fillRect((jx + 2) & 63, y, 1, 2);
+      }
+      // Subtle top-edge cave moss drips
+      for (let m = 0; m < 6; m++) {
+        const mx = 4 + Math.floor(vrand() * 54);
+        const mh = 5 + Math.floor(vrand() * 11);
+        ctx.fillStyle = mossCol;
+        ctx.fillRect(mx, 0, 4, mh);
+        ctx.fillStyle = mossHi;
+        ctx.fillRect(mx + 1, 1, 2, Math.max(2, mh - 4));
+      }
+    }
+    if (variantIdx === 3) {
+      // Deep shadowed rock recess pocket
+      const rx = 18 + Math.floor(vrand() * 22);
+      const ry = 22 + Math.floor(vrand() * 16);
+      ctx.fillStyle = biome.floorMortar;
+      ctx.fillRect(rx, ry, 14, 10);
+      ctx.fillStyle = shiftColor(wallRgb, -24);
+      ctx.fillRect(rx + 2, ry + 2, 10, 6);
+      ctx.fillStyle = shiftColor(wallRgb, 22);
+      ctx.fillRect(rx, ry + 10, 14, 1);
+    }
+  };
+
+  const drawFleshWallVariant = (
+    ctx: CanvasRenderingContext2D,
+    bctx: CanvasRenderingContext2D | null,
+    variantIdx: number,
+    vSeed: number
+  ) => {
+    const vrand = seededRand(vSeed);
     for (let y = 0; y < 64; y += 2) {
       for (let x = 0; x < 64; x += 2) {
-        const rib = Math.sin(x * 0.32 + Math.sin(y * 0.15) * 1.8);
-        const strand = Math.sin(y * 0.45 + x * 0.12);
-        const rgb = rib > 0.15 ? wallAccRgb : wallRgb;
-        const shade = Math.round(rib * 22 + strand * 10 + (rand() - 0.5) * 10) - (y > 54 ? 18 : 0);
-        wctx.fillStyle = shiftColor(rgb, shade);
-        wctx.fillRect(x, y, 2, 2);
-        const bv = Math.max(30, Math.min(245, 140 + Math.round(rib * 75)));
-        wbctx.fillStyle = `rgb(${bv},${bv},${bv})`;
-        wbctx.fillRect(x, y, 2, 2);
+        const diag = variantIdx === 1 ? x * 0.26 + y * 0.14 : x * 0.24;
+        const rib = Math.sin(diag + Math.sin(y * 0.16 + variantIdx) * 1.9);
+        const strand = Math.sin(y * 0.36 - x * 0.12 + variantIdx * 1.3);
+        const rgb = rib > 0.12 ? wallAccRgb : wallRgb;
+        const bottomAo = y > 54 ? -20 : y < 5 ? -10 : 0;
+        const shade = Math.round(rib * 20 + strand * 10 + (vrand() - 0.5) * 10) + bottomAo;
+        ctx.fillStyle = shiftColor(rgb, shade);
+        ctx.fillRect(x, y, 2, 2);
+        if (bctx) {
+          const bv = Math.max(30, Math.min(245, 138 + Math.round(rib * 72)));
+          bctx.fillStyle = `rgb(${bv},${bv},${bv})`;
+          bctx.fillRect(x, y, 2, 2);
+        }
       }
     }
-    // Curved dark-plum sinew grooves + glistening lavender highlights
-    for (let gx = 4; gx < 64; gx += 16) {
-      for (let y = 0; y < 64; y += 2) {
-        const off = Math.round(Math.sin(y * 0.16 + gx) * 2.5);
-        wctx.fillStyle = biome.floorMortar;
-        wctx.fillRect((gx + off) & 63, y, 2, 2);
-        wctx.fillStyle = '#e88ac9';
-        wctx.fillRect((gx + off + 3) & 63, y, 1, 2);
-        wbctx.fillStyle = '#141414';
-        wbctx.fillRect((gx + off) & 63, y, 2, 2);
+
+    if (variantIdx === 0) {
+      // Organic cellular webbing + dark-plum vein network (inspired by reference image 2)
+      for (let i = 0; i < 12; i++) {
+        const cx = Math.floor(vrand() * 58) + 3;
+        const cy = Math.floor(vrand() * 50) + 6;
+        const cw = 8 + Math.floor(vrand() * 8);
+        const ch = 7 + Math.floor(vrand() * 8);
+        ctx.fillStyle = biome.floorMortar;
+        ctx.fillRect(cx, cy, cw, ch);
+        ctx.fillStyle = shiftColor(i % 2 === 0 ? wallRgb : wallAccRgb, -8 + Math.floor(vrand() * 16));
+        ctx.fillRect(cx + 1, cy + 1, cw - 2, ch - 2);
+        ctx.fillStyle = '#cf6db5';
+        ctx.fillRect(cx + 1, cy + 1, Math.max(2, cw - 4), 1);
+      }
+    } else if (variantIdx === 1) {
+      // Curved diagonal sinew trenches
+      for (let gx = 6; gx < 64; gx += 16) {
+        for (let y = 0; y < 64; y += 2) {
+          const off = Math.round(Math.sin(y * 0.15 + gx) * 3.5 + y * 0.18);
+          ctx.fillStyle = biome.floorMortar;
+          ctx.fillRect((gx + off) & 63, y, 2, 2);
+          ctx.fillStyle = '#d97aba';
+          ctx.fillRect((gx + off + 2) & 63, y, 1, 2);
+          if (bctx) {
+            bctx.fillStyle = '#141414';
+            bctx.fillRect((gx + off) & 63, y, 2, 2);
+          }
+        }
+      }
+    } else if (variantIdx === 2) {
+      // Embedded curved ivory bone ribs peeking through torn purple tissue
+      for (let r = 0; r < 3; r++) {
+        const rx = 8 + r * 20 + Math.floor(vrand() * 4);
+        for (let y = 6; y < 56; y += 2) {
+          const bend = Math.round(Math.sin((y / 64) * Math.PI) * 4);
+          ctx.fillStyle = biome.floorMortar;
+          ctx.fillRect((rx + bend - 1) & 63, y, 6, 2);
+          ctx.fillStyle = '#c4acb8';
+          ctx.fillRect((rx + bend) & 63, y, 4, 2);
+          ctx.fillStyle = '#ebe0e4';
+          ctx.fillRect((rx + bend) & 63, y, 2, 2);
+        }
+      }
+    } else {
+      // Knotted sinew with 2-3 muted bioluminescent organ nodules
+      for (let gx = 10; gx < 64; gx += 22) {
+        for (let y = 0; y < 64; y += 2) {
+          const off = Math.round(Math.sin(y * 0.18 + gx) * 2.5);
+          ctx.fillStyle = biome.floorMortar;
+          ctx.fillRect((gx + off) & 63, y, 2, 2);
+        }
+      }
+      for (let n = 0; n < 3; n++) {
+        const nx = 8 + Math.floor(vrand() * 46);
+        const ny = 12 + Math.floor(vrand() * 38);
+        ctx.fillStyle = '#471240';
+        ctx.fillRect(nx - 1, ny - 1, 6, 6);
+        ctx.fillStyle = biome.runeCss;
+        ctx.fillRect(nx, ny, 4, 4);
+        ctx.fillStyle = '#ffd9fa';
+        ctx.fillRect(nx + 1, ny + 1, 2, 2);
       }
     }
-    // Glowing magenta/violet bioluminescent organ nodules
-    for (let n = 0; n < 5; n++) {
-      const nx = 6 + Math.floor(rand() * 52);
-      const ny = 10 + Math.floor(rand() * 42);
-      wctx.fillStyle = '#5c1854';
-      wctx.fillRect(nx - 1, ny - 1, 6, 6);
-      wctx.fillStyle = biome.runeCss;
-      wctx.fillRect(nx, ny, 4, 4);
-      wctx.fillStyle = '#ffd9fa';
-      wctx.fillRect(nx + 1, ny + 1, 2, 2);
-    }
+  };
+
+  if (theme === 'cavern') {
+    drawCavernWallVariant(wctx, wbctx, 0, seed * 23 + 307);
+  } else if (theme === 'flesh') {
+    drawFleshWallVariant(wctx, wbctx, 0, seed * 29 + 409);
   } else if (theme === 'alien') {
     // Bright Silver-Blue Starship Bulkhead Wall with chrome trim, air vents & glowing cyan LED strips
     wctx.fillStyle = '#233f5e';
@@ -534,19 +814,31 @@ export function createDungeonTextures(
   pillarCanvas.height = 64;
   const pctx = pillarCanvas.getContext('2d')!;
   if (theme === 'cavern') {
-    // Natural rocky stalagmite column with crystal flecks
-    pctx.fillStyle = shiftColor(wallRgb, -8);
+    // Natural rocky stalagmite column with stratified ledges, dripstone ribs & moss base
+    pctx.fillStyle = shiftColor(wallRgb, -10);
     pctx.fillRect(0, 0, 32, 64);
     for (let fy = 0; fy < 64; fy += 4) {
-      pctx.fillStyle = shiftColor(fy % 8 === 0 ? wallAccRgb : wallRgb, Math.floor((rand() - 0.5) * 24));
+      const shade = Math.floor((rand() - 0.5) * 22) + (fy > 48 ? -14 : 0);
+      pctx.fillStyle = shiftColor(fy % 12 === 0 ? wallAccRgb : wallRgb, shade);
       pctx.fillRect(0, fy, 32, 4);
       pctx.fillStyle = biome.floorMortar;
       pctx.fillRect(0, fy + 3, 32, 1);
     }
-    for (let c = 0; c < 3; c++) {
+    // Vertical rough dripstone ridges
+    for (let fx = 3; fx < 30; fx += 7) {
+      pctx.fillStyle = shiftColor(wallRgb, 16);
+      pctx.fillRect(fx, 4, 2, 54);
+      pctx.fillStyle = biome.floorMortar;
+      pctx.fillRect(fx + 2, 4, 1, 54);
+    }
+    // Mossy damp base accent
+    const mossCol = biome.id === 'cavern_fungal' ? '#336143' : '#2d525c';
+    pctx.fillStyle = mossCol;
+    pctx.fillRect(0, 56, 32, 8);
+    for (let c = 0; c < 2; c++) {
       const pal = CAVERN_CRYSTAL_PALETTE[(c + Math.floor(rand() * 4)) % CAVERN_CRYSTAL_PALETTE.length];
-      const px = 4 + Math.floor(rand() * 22);
-      const py = 8 + Math.floor(rand() * 48);
+      const px = 5 + Math.floor(rand() * 20);
+      const py = 10 + Math.floor(rand() * 38);
       pctx.fillStyle = pal.rim;
       pctx.fillRect(px - 1, py - 1, 5, 6);
       pctx.fillStyle = pal.main;
@@ -555,18 +847,22 @@ export function createDungeonTextures(
       pctx.fillRect(px + 1, py + 1, 1, 2);
     }
   } else if (theme === 'flesh') {
-    // Ivory bone-cartilage rib column wrapped in pulsing pink-purple sinew
-    pctx.fillStyle = '#c9a6ba';
+    // Ivory bone-cartilage rib column tightly wrapped in dark-plum & magenta sinew
+    pctx.fillStyle = '#bda0b0';
     pctx.fillRect(0, 0, 32, 64);
-    for (let fy = 0; fy < 64; fy += 8) {
-      pctx.fillStyle = '#8a356e';
-      pctx.fillRect(0, fy, 32, 3);
-      pctx.fillStyle = '#d96cb8';
-      pctx.fillRect(0, fy + 1, 32, 1);
+    for (let fx = 2; fx < 32; fx += 8) {
+      pctx.fillStyle = '#e3d0da';
+      pctx.fillRect(fx, 0, 3, 64);
+      pctx.fillStyle = '#5c1f4c';
+      pctx.fillRect(fx + 4, 0, 2, 64);
     }
-    for (let fx = 4; fx < 32; fx += 8) {
-      pctx.fillStyle = '#73285e';
-      pctx.fillRect(fx, 0, 2, 64);
+    for (let fy = 4; fy < 64; fy += 10) {
+      pctx.fillStyle = '#3b0f30';
+      pctx.fillRect(0, fy, 32, 4);
+      pctx.fillStyle = '#993473';
+      pctx.fillRect(0, fy + 1, 32, 2);
+      pctx.fillStyle = '#e07ac4';
+      pctx.fillRect(2, fy + 1, 24, 1);
     }
   } else if (theme === 'alien') {
     // Brushed chrome & silver-blue reactor support column with glowing cyan plasma bands
@@ -739,17 +1035,65 @@ export function createDungeonTextures(
   const bctx = bannerCanvas.getContext('2d')!;
   bctx.clearRect(0, 0, 32, 48);
   if (theme === 'flesh') {
-    // Organic magenta/violet hanging tendril membrane
+    // Organic dark-plum sinew web & torn hanging fleshy tendrils with bone anchor hooks
+    bctx.fillStyle = '#401136';
+    bctx.fillRect(2, 0, 28, 12);
+    bctx.fillStyle = '#ccb6c0';
+    bctx.fillRect(5, 1, 4, 5);
+    bctx.fillRect(23, 1, 4, 5);
     bctx.fillStyle = '#7d286b';
-    bctx.fillRect(4, 0, 24, 24);
+    bctx.fillRect(4, 6, 24, 16);
     bctx.fillStyle = biome.bannerColor;
-    bctx.fillRect(6, 2, 20, 22);
-    bctx.fillRect(4, 22, 6, 18);
-    bctx.fillRect(13, 22, 6, 24);
-    bctx.fillRect(22, 22, 6, 15);
-    bctx.fillStyle = '#ff8de6';
-    bctx.fillRect(14, 10, 4, 14);
-    bctx.fillRect(15, 28, 2, 12);
+    bctx.fillRect(5, 8, 6, 28);
+    bctx.fillRect(13, 8, 6, 36);
+    bctx.fillRect(22, 8, 5, 24);
+    bctx.fillStyle = '#4f1542';
+    bctx.fillRect(10, 14, 4, 4);
+    bctx.fillRect(18, 18, 5, 3);
+    bctx.fillStyle = '#f28ce0';
+    bctx.fillRect(7, 14, 2, 14);
+    bctx.fillRect(15, 12, 2, 22);
+    bctx.fillRect(24, 14, 1, 10);
+    bctx.fillStyle = '#ffd9fa';
+    bctx.fillRect(15, 26, 2, 2);
+  } else if (theme === 'cavern') {
+    // Natural hanging cave moss vines & slender mineral icicle clusters (replaces medieval flag)
+    const isFungal = biome.id === 'cavern_fungal';
+    const vineDark = isFungal ? '#1c3b29' : '#1d363e';
+    const vineMid = isFungal ? '#2f6142' : '#2d5763';
+    const vineBright = isFungal ? '#529c6a' : '#4fa3b8';
+    const crystalCol = biome.runeCss;
+
+    // Rocky top ledge overhang
+    bctx.fillStyle = biome.floorMortar;
+    bctx.fillRect(2, 0, 28, 6);
+    bctx.fillStyle = shiftColor(wallRgb, 12);
+    bctx.fillRect(4, 1, 24, 4);
+
+    // Asymmetric hanging moss curtains
+    const strands: Array<[number, number, number]> = [
+      [4, 4, 24],
+      [9, 5, 34],
+      [15, 4, 41],
+      [20, 5, 28],
+      [25, 3, 20],
+    ];
+    for (const [sx, sw, sh] of strands) {
+      bctx.fillStyle = vineDark;
+      bctx.fillRect(sx, 4, sw, sh);
+      bctx.fillStyle = vineMid;
+      bctx.fillRect(sx + 1, 5, Math.max(1, sw - 2), sh - 3);
+      bctx.fillStyle = vineBright;
+      bctx.fillRect(sx + 1, 8, 1, Math.max(4, Math.floor(sh * 0.45)));
+    }
+    // Small hanging mineral / glowcap flecks
+    bctx.fillStyle = crystalCol;
+    bctx.fillRect(10, 18, 2, 4);
+    bctx.fillRect(16, 26, 2, 5);
+    bctx.fillRect(21, 14, 2, 3);
+    bctx.fillStyle = '#e6ffff';
+    bctx.fillRect(10, 19, 1, 2);
+    bctx.fillRect(16, 28, 1, 2);
   } else if (theme === 'alien') {
     // Glowing cyan holographic starship telemetry display screen
     bctx.fillStyle = '#1a3c63';
@@ -780,11 +1124,11 @@ export function createDungeonTextures(
     bctx.fillRect(19, 40, 11, 6);
     bctx.fillRect(2, 44, 6, 3);
     bctx.fillRect(24, 44, 6, 3);
-    bctx.fillStyle = theme === 'cavern' ? biome.runeCss : '#d4af5a';
+    bctx.fillStyle = '#d4af5a';
     bctx.fillRect(4, 4, 24, 2);
     bctx.fillRect(4, 4, 2, 34);
     bctx.fillRect(26, 4, 2, 34);
-    bctx.fillStyle = theme === 'cavern' ? '#d8ffff' : '#f2d382';
+    bctx.fillStyle = '#f2d382';
     bctx.fillRect(15, 13, 2, 16);
     bctx.fillRect(11, 18, 10, 6);
     bctx.fillStyle = biome.bannerColor;
@@ -905,42 +1249,23 @@ export function createDungeonTextures(
   const floorBump = finalizePixelTexture(floorBumpCanvas, false, aniso, true);
 
   let floorVariants: THREE.CanvasTexture[] | undefined;
+  let floorDecalMaps: THREE.CanvasTexture[] | undefined;
   let wallVariants: THREE.CanvasTexture[] | undefined;
   let wallMap: THREE.CanvasTexture;
 
   if (theme === 'cavern') {
-    // 5 cavern floor textures: variant 0 is clean cave rock (floorMap), variants 1..4 each have 2 crystals
-    // from Green/Yellow/Purple/Blue. With 6 tile buckets (2 clean + 4 crystal), avg = 8/6 = 1.33 vs 6 (~1/5).
-    const floorColorPairs: Array<[number, number]> = [
-      [0, 1], // Green + Yellow
-      [1, 2], // Yellow + Purple
-      [2, 3], // Purple + Blue
-      [3, 0], // Blue + Green
-    ];
+    // 6 genuinely distinct cavern floor variants (independent rock slab layouts, cracks, moss, shallow pits, sparse flecks)
     floorVariants = [floorMap];
-    for (let v = 0; v < floorColorPairs.length; v++) {
+    for (let v = 1; v < 6; v++) {
       const vc = document.createElement('canvas');
       vc.width = 64;
       vc.height = 64;
       const vctx = vc.getContext('2d')!;
-      vctx.drawImage(floorCanvas, 0, 0);
-      const pair = floorColorPairs[v];
-      for (let g = 0; g < 2; g++) {
-        const pal = CAVERN_CRYSTAL_PALETTE[pair[g]];
-        const gx = 5 + ((v * 17 + g * 29 + Math.floor(rand() * 14)) % 52);
-        const gy = 5 + ((v * 23 + g * 31 + Math.floor(rand() * 14)) % 52);
-        vctx.fillStyle = pal.rim;
-        vctx.fillRect(gx - 1, gy - 1, 4, 4);
-        vctx.fillStyle = pal.main;
-        vctx.fillRect(gx, gy, 2, 2);
-        vctx.fillStyle = pal.core;
-        vctx.fillRect(gx, gy, 1, 1);
-      }
+      drawCavernFloorVariant(vctx, null, v, seed * 31 + v * 997 + 17);
       floorVariants.push(finalizePixelTexture(vc, true, aniso, true));
     }
 
-    // 4 cavern wall textures: varied large/medium/small crystals in Green/Yellow/Purple/Blue,
-    // kept sparse (1-2 per tile) so natural cave cliff rock remains clearly dominant
+    // 4 genuinely distinct cavern wall variants; only variants 0 & 2 include sparse mineral crystals
     const drawWallCrystal = (
       ctx: CanvasRenderingContext2D,
       cx: number,
@@ -951,43 +1276,31 @@ export function createDungeonTextures(
     ) => {
       const dir = flip ? -1 : 1;
       if (size === 'large') {
-        // Large clustered crystal spire (~8x12 px) with dark mineral recess & side shard
         ctx.fillStyle = pal.rim;
         ctx.fillRect(cx - 2, cy - 5, 6, 11);
         ctx.fillRect(cx - 3, cy - 2, 8, 7);
         ctx.fillRect(cx + dir * 3, cy - 1, 4, 6);
-
         ctx.fillStyle = pal.main;
         ctx.fillRect(cx - 1, cy - 4, 4, 9);
         ctx.fillRect(cx - 2, cy - 1, 6, 5);
         ctx.fillRect(cx, cy - 6, 2, 2);
-        // Side crystal prong
         ctx.fillRect(cx + dir * 3, cy, 2, 4);
         ctx.fillRect(cx + dir * 4, cy - 1, 1, 3);
-
         ctx.fillStyle = pal.core;
         ctx.fillRect(cx, cy - 4, 2, 4);
         ctx.fillRect(cx - 1, cy - 1, 2, 2);
         ctx.fillRect(cx + dir * 3, cy + 1, 1, 2);
       } else if (size === 'medium') {
-        // Medium faceted crystal (~5x8 px)
         ctx.fillStyle = pal.rim;
         ctx.fillRect(cx - 2, cy - 3, 6, 7);
         ctx.fillRect(cx - 1, cy - 4, 4, 9);
-
         ctx.fillStyle = pal.main;
         ctx.fillRect(cx - 1, cy - 2, 4, 5);
         ctx.fillRect(cx, cy - 3, 2, 7);
-        if (flip) {
-          ctx.fillRect(cx - 2, cy, 2, 3);
-        } else {
-          ctx.fillRect(cx + 2, cy, 2, 3);
-        }
-
+        ctx.fillRect(flip ? cx - 2 : cx + 2, cy, 2, 3);
         ctx.fillStyle = pal.core;
         ctx.fillRect(cx, cy - 2, 2, 3);
       } else {
-        // Small mineral crystal gleam (~3x4 px)
         ctx.fillStyle = pal.rim;
         ctx.fillRect(cx - 1, cy - 1, 5, 6);
         ctx.fillStyle = pal.main;
@@ -997,43 +1310,153 @@ export function createDungeonTextures(
       }
     };
 
-    const wallSpecs: Array<Array<{ colorIdx: number; size: 'large' | 'medium' | 'small' }>> = [
-      [
-        { colorIdx: 3, size: 'large' },  // Large Blue
-        { colorIdx: 1, size: 'small' },  // Small Yellow
-      ],
-      [
-        { colorIdx: 0, size: 'medium' }, // Medium Green
-        { colorIdx: 2, size: 'medium' }, // Medium Purple
-      ],
-      [
-        { colorIdx: 1, size: 'large' },  // Large Yellow (mostly bare rock)
-      ],
-      [
-        { colorIdx: 2, size: 'small' },  // Small Purple
-        { colorIdx: 0, size: 'medium' }, // Medium Green
-        { colorIdx: 3, size: 'small' },  // Small Blue
-      ],
-    ];
     wallVariants = [];
-    for (let v = 0; v < wallSpecs.length; v++) {
+    for (let v = 0; v < 4; v++) {
       const wc = document.createElement('canvas');
       wc.width = 64;
       wc.height = 64;
       const wvctx = wc.getContext('2d')!;
-      wvctx.drawImage(wallCanvas, 0, 0);
-      const specs = wallSpecs[v];
-      for (let k = 0; k < specs.length; k++) {
-        const spec = specs[k];
-        const pal = CAVERN_CRYSTAL_PALETTE[spec.colorIdx];
-        const sectorW = Math.floor(48 / specs.length);
-        const kx = 10 + k * sectorW + Math.floor(rand() * Math.max(4, sectorW - 10));
-        const ky = 14 + Math.floor(rand() * 32);
-        drawWallCrystal(wvctx, kx, ky, spec.size, pal, (v + k) % 2 === 1);
+      if (v === 0) {
+        wvctx.drawImage(wallCanvas, 0, 0);
+        drawWallCrystal(wvctx, 20, 26, 'large', CAVERN_CRYSTAL_PALETTE[3], false);
+        drawWallCrystal(wvctx, 46, 38, 'small', CAVERN_CRYSTAL_PALETTE[1], true);
+      } else {
+        drawCavernWallVariant(wvctx, null, v, seed * 37 + v * 613 + 53);
+        if (v === 2) {
+          drawWallCrystal(wvctx, 24, 30, 'medium', CAVERN_CRYSTAL_PALETTE[0], false);
+          drawWallCrystal(wvctx, 44, 22, 'small', CAVERN_CRYSTAL_PALETTE[2], true);
+        }
       }
       wallVariants.push(finalizePixelTexture(wc, true, aniso, true));
     }
     wallMap = wallVariants[0];
+
+    // 3 clean, crisp low-res floor decals (rock crack, moss tuft, pebble scatter) for cross-tile seam breakup
+    const isFungal = biome.id === 'cavern_fungal';
+    floorDecalMaps = [0, 1, 2].map((dIdx) => {
+      const dc = document.createElement('canvas');
+      dc.width = 32;
+      dc.height = 32;
+      const dctx = dc.getContext('2d')!;
+      dctx.clearRect(0, 0, 32, 32);
+      if (dIdx === 0) {
+        // Branching dark floor crack with subtle pale stone lip
+        const pts: Array<[number, number]> = [
+          [4, 15], [7, 14], [10, 16], [13, 15], [16, 17], [20, 16], [24, 18], [27, 17],
+          [13, 15], [15, 11], [17, 8], [16, 17], [18, 21], [21, 24],
+        ];
+        for (const [px, py] of pts) {
+          dctx.fillStyle = 'rgba(18, 16, 14, 0.85)';
+          dctx.fillRect(px, py, 2, 2);
+          dctx.fillStyle = 'rgba(150, 142, 128, 0.35)';
+          dctx.fillRect(px, py - 1, 2, 1);
+        }
+      } else if (dIdx === 1) {
+        // Clustered mossy / lichen pixel patch
+        const dark = isFungal ? 'rgba(28, 60, 40, 0.78)' : 'rgba(30, 56, 64, 0.72)';
+        const mid = isFungal ? 'rgba(54, 108, 70, 0.82)' : 'rgba(52, 92, 104, 0.78)';
+        const hi = isFungal ? 'rgba(92, 166, 110, 0.85)' : 'rgba(84, 138, 152, 0.8)';
+        const blobs: Array<[number, number, number, number]> = [
+          [7, 10, 10, 8], [15, 13, 11, 9], [10, 18, 8, 6], [20, 9, 6, 5],
+        ];
+        for (const [bx, by, bw, bh] of blobs) {
+          dctx.fillStyle = dark;
+          dctx.fillRect(bx, by, bw, bh);
+          dctx.fillStyle = mid;
+          dctx.fillRect(bx + 1, by + 1, bw - 2, bh - 2);
+          dctx.fillStyle = hi;
+          dctx.fillRect(bx + 2, by + 1, Math.max(1, bw - 5), 2);
+        }
+      } else {
+        // Scattered pebbles & mineral dust
+        const stones: Array<[number, number, number, number]> = [
+          [6, 10, 4, 3], [14, 7, 5, 4], [22, 14, 4, 3], [10, 20, 5, 3], [19, 22, 3, 3], [14, 15, 3, 2],
+        ];
+        for (const [sx, sy, sw, sh] of stones) {
+          dctx.fillStyle = 'rgba(16, 14, 12, 0.7)';
+          dctx.fillRect(sx, sy + 1, sw, sh);
+          dctx.fillStyle = shiftColor(baseRgb, 12);
+          dctx.fillRect(sx, sy, sw - 1, sh - 1);
+          dctx.fillStyle = shiftColor(baseRgb, 28);
+          dctx.fillRect(sx, sy, Math.max(1, sw - 2), 1);
+        }
+      }
+      return finalizePixelTexture(dc, true, aniso, false);
+    });
+  } else if (theme === 'flesh') {
+    // 6 genuinely distinct monster interior floor variants (cellular, muscle fibers, veins, bone splinters, dimples)
+    floorVariants = [floorMap];
+    for (let v = 1; v < 6; v++) {
+      const vc = document.createElement('canvas');
+      vc.width = 64;
+      vc.height = 64;
+      const vctx = vc.getContext('2d')!;
+      drawFleshFloorVariant(vctx, null, v, seed * 41 + v * 881 + 29);
+      floorVariants.push(finalizePixelTexture(vc, true, aniso, true));
+    }
+
+    // 4 genuinely distinct monster interior wall variants (cellular web, diagonal sinew, embedded ribs, bio-nodules)
+    wallVariants = [];
+    for (let v = 0; v < 4; v++) {
+      const wc = document.createElement('canvas');
+      wc.width = 64;
+      wc.height = 64;
+      const wvctx = wc.getContext('2d')!;
+      if (v === 0) {
+        wvctx.drawImage(wallCanvas, 0, 0);
+      } else {
+        drawFleshWallVariant(wvctx, null, v, seed * 43 + v * 733 + 61);
+      }
+      wallVariants.push(finalizePixelTexture(wc, true, aniso, true));
+    }
+    wallMap = wallVariants[0];
+
+    // 3 clean, readable flesh floor decals (membrane crease, subtle muted bile/moss-like stain, dark vein tuft)
+    floorDecalMaps = [0, 1, 2].map((dIdx) => {
+      const dc = document.createElement('canvas');
+      dc.width = 32;
+      dc.height = 32;
+      const dctx = dc.getContext('2d')!;
+      dctx.clearRect(0, 0, 32, 32);
+      if (dIdx === 0) {
+        // Dark-plum organic membrane fold / crease
+        const pts: Array<[number, number]> = [
+          [4, 14], [7, 13], [11, 15], [15, 16], [19, 15], [23, 17], [27, 16],
+          [15, 16], [17, 20], [19, 24], [11, 15], [10, 10],
+        ];
+        for (const [px, py] of pts) {
+          dctx.fillStyle = 'rgba(34, 8, 30, 0.82)';
+          dctx.fillRect(px, py, 2, 2);
+          dctx.fillStyle = 'rgba(220, 120, 190, 0.34)';
+          dctx.fillRect(px, py - 1, 2, 1);
+        }
+      } else if (dIdx === 1) {
+        // Muted dusky-olive / plum organic stain (subtle nod to reference image 2 without glaring reflections)
+        const blobs: Array<[number, number, number, number]> = [
+          [6, 9, 12, 9], [14, 12, 12, 10], [9, 18, 11, 7], [18, 8, 7, 6],
+        ];
+        for (const [bx, by, bw, bh] of blobs) {
+          dctx.fillStyle = 'rgba(54, 72, 62, 0.42)';
+          dctx.fillRect(bx, by, bw, bh);
+          dctx.fillStyle = 'rgba(84, 108, 88, 0.45)';
+          dctx.fillRect(bx + 2, by + 2, Math.max(2, bw - 4), Math.max(2, bh - 4));
+        }
+      } else {
+        // Branching capillary vein + tiny pale cartilage flecks
+        const pts: Array<[number, number]> = [
+          [5, 16], [8, 15], [11, 14], [14, 16], [18, 17], [22, 15], [26, 14],
+          [14, 16], [16, 12], [18, 9], [18, 17], [20, 21],
+        ];
+        for (const [px, py] of pts) {
+          dctx.fillStyle = 'rgba(195, 72, 158, 0.65)';
+          dctx.fillRect(px, py, 2, 2);
+        }
+        dctx.fillStyle = 'rgba(224, 206, 214, 0.72)';
+        dctx.fillRect(10, 21, 3, 2);
+        dctx.fillRect(21, 10, 2, 3);
+      }
+      return finalizePixelTexture(dc, true, aniso, false);
+    });
   } else {
     wallMap = finalizePixelTexture(wallCanvas, true, aniso, true);
   }
@@ -1057,6 +1480,7 @@ export function createDungeonTextures(
     floorMap,
     floorBump,
     floorVariants,
+    floorDecalMaps,
     wallMap,
     wallBump,
     wallVariants,
@@ -1073,6 +1497,11 @@ export function createDungeonTextures(
       if (floorVariants) {
         for (let i = 1; i < floorVariants.length; i++) {
           floorVariants[i].dispose();
+        }
+      }
+      if (floorDecalMaps) {
+        for (const d of floorDecalMaps) {
+          d.dispose();
         }
       }
       wallMap.dispose();
