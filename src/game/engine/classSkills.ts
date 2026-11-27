@@ -422,6 +422,7 @@ export const classSkillsMethods = {
           }
           if (ed <= strikeDist && pet.attackCooldown <= 0) {
             pet.attackCooldown = HUNTER.petAttackCooldown / (buffed ? HUNTER.petBuffAtkSpeedMult : 1);
+            pet.attackAnim = 0.26;
             const rawBase =
               HUNTER.petDamageMin +
               Math.floor(Math.random() * (HUNTER.petDamageMax - HUNTER.petDamageMin + 1));
@@ -438,6 +439,53 @@ export const classSkillsMethods = {
             owner.totalDamageDealt += dmg;
             this.emitFloatingText(target.x, 1.5, target.z, `${dmg}`, buffed ? 'crit' : 'damage');
             this.audio.playHit(false);
+
+            // Claw / bite / peck slash arc & impact sparks
+            if (!this.bgSim) {
+              const slashColor = buffed ? 0xffa638 : pet.species === 'wolf' ? 0xd8f0ff : pet.species === 'chocobo' ? 0xffe46b : 0xffd2a6;
+              const arcGeo = new THREE.RingGeometry(0.32, 0.72, 16, 1, -Math.PI * 0.42, Math.PI * 0.84);
+              const arcMat = new THREE.MeshBasicMaterial({
+                color: slashColor,
+                transparent: true,
+                opacity: 0.92,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+              });
+              const arcMesh = new THREE.Mesh(arcGeo, arcMat);
+              arcMesh.position.set(
+                (pet.x + target.x) * 0.5,
+                0.78,
+                (pet.z + target.z) * 0.5
+              );
+              arcMesh.rotation.order = 'YXZ';
+              arcMesh.rotation.y = pet.facing;
+              arcMesh.rotation.x = Math.PI / 2 - (pet.species === 'bear' ? 0.45 : 0.2);
+              this.scene.add(arcMesh);
+              this.slashArcs.push({
+                mesh: arcMesh,
+                life: 0,
+                maxLife: 0.18,
+                isCleave: false,
+              });
+              for (let s = 0; s < 6; s++) {
+                const a = pet.facing + (Math.random() - 0.5) * 1.6;
+                const spd = 2.2 + Math.random() * 2.8;
+                this.spawnParticle(
+                  target.x,
+                  0.75,
+                  target.z,
+                  Math.sin(a) * spd,
+                  1.2 + Math.random() * 1.8,
+                  Math.cos(a) * spd,
+                  s % 2 === 0 ? 0xffffff : slashColor,
+                  0.8,
+                  0.28,
+                  5.5
+                );
+              }
+            }
+
             if (target.hp <= 0) {
               this.killEnemy(target);
             }
@@ -474,13 +522,61 @@ export const classSkillsMethods = {
     const moving = moveSpeed > 0.25;
     pet.walkPhase += dt * (moving ? 14 : 3.5);
     const swing = moving ? Math.sin(pet.walkPhase) * 0.65 : 0;
+
+    pet.attackAnim = Math.max(0, (pet.attackAnim ?? 0) - dt);
+    const atkDur = 0.26;
+    const atkFrac = pet.attackAnim > 0 ? 1 - pet.attackAnim / atkDur : 0; // 0 -> 1 over attack
+    let lunge = 0;
+    let jumpY = 0;
+    let pitch = 0;
+
+    if (pet.attackAnim > 0) {
+      const wave = Math.sin(atkFrac * Math.PI);
+      if (pet.species === 'bear') {
+        // Rear up briefly, then heavy paw-slam forward
+        if (atkFrac < 0.35) {
+          const p = atkFrac / 0.35;
+          jumpY = p * 0.22;
+          pitch = -p * 0.36;
+          lunge = -p * 0.12;
+        } else {
+          const p = (atkFrac - 0.35) / 0.65;
+          const slam = Math.sin(p * Math.PI);
+          jumpY = Math.max(0, (1 - p) * 0.18);
+          pitch = slam * 0.42;
+          lunge = slam * 0.48;
+        }
+      } else if (pet.species === 'wolf') {
+        // Fast horizontal lunge bite
+        lunge = wave * 0.58;
+        jumpY = wave * 0.18;
+        pitch = wave * 0.26;
+      } else {
+        // Chocobo hop & forward beak peck
+        lunge = wave * 0.44;
+        jumpY = wave * 0.36;
+        pitch = wave * 0.48;
+      }
+    }
+
     pet.rig.legs.forEach((leg, idx) => {
-      leg.rotation.x = idx % 2 === 0 ? swing : -swing;
+      if (pet.attackAnim && pet.attackAnim > 0) {
+        const atkSwing = Math.sin(atkFrac * Math.PI) * (pet.species === 'bear' ? 1.1 : 0.85);
+        leg.rotation.x = idx < 2 ? -atkSwing : atkSwing * 0.5;
+      } else {
+        leg.rotation.x = idx % 2 === 0 ? swing : -swing;
+      }
     });
     if (pet.rig.tail) {
-      pet.rig.tail.rotation.y = Math.sin(pet.walkPhase * 1.2) * (moving ? 0.35 : 0.15);
+      pet.rig.tail.rotation.y = Math.sin(pet.walkPhase * 1.2) * (moving || (pet.attackAnim ?? 0) > 0 ? 0.4 : 0.15);
     }
-    pet.rig.body.position.y = moving ? Math.abs(Math.sin(pet.walkPhase)) * 0.08 : 0;
+    const baseBob = moving ? Math.abs(Math.sin(pet.walkPhase)) * 0.08 : 0;
+    pet.rig.body.position.set(
+      Math.sin(pet.facing) * lunge,
+      baseBob + jumpY,
+      Math.cos(pet.facing) * lunge
+    );
+    pet.rig.body.rotation.x = pitch;
 
     const buffed = pet.buffTimer > 0;
     pet.rig.buffRing.visible = buffed;

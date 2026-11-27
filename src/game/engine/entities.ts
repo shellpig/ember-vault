@@ -250,6 +250,8 @@ export interface PetEntity {
   hitFlash: number;
   invuln: number;
   walkPhase: number;
+  /** Remaining seconds of the pet's lunge / paw-slam / peck attack animation. */
+  attackAnim?: number;
   targetX?: number;
   targetZ?: number;
   targetFacing?: number;
