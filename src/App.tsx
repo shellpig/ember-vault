@@ -649,7 +649,7 @@ export default function App() {
     engineRef.current?.restartRun('warrior');
   }, []);
 
-  const startGame = useCallback(() => {
+  const startGame = useCallback((opts: { startDepth: number; bots: HeroClassId[] }) => {
     if (!activeSave) return;
     const mgr = new SaveManager(
       activeSave.id,
@@ -659,7 +659,8 @@ export default function App() {
     );
     saveMgrRef.current = mgr;
     setSaveStatus('idle');
-    engineRef.current?.restartRun(activeSave.class_id as HeroClassId, saveToLoadout(activeSave));
+    engineRef.current?.setBotClasses(opts.bots);
+    engineRef.current?.restartRun(activeSave.class_id as HeroClassId, saveToLoadout(activeSave), opts.startDepth);
     setScreen('playing');
   }, [activeSave]);
 
@@ -1064,6 +1065,7 @@ export default function App() {
           onNotice: showToast,
           sendTownPos: (p) => info.client.sendTownPos(p),
           late: info.late,
+          startDepth: info.isHost ? info.startDepth : undefined,
         },
         save.class_id as HeroClassId,
         saveToLoadout(save)
@@ -2347,9 +2349,9 @@ export default function App() {
         <LobbyScreen
           save={activeSave}
           notice={lobbyNotice}
-          onStart={() => {
+          onStart={(opts) => {
             setLobbyNotice(null);
-            startGame();
+            startGame(opts);
           }}
           onCreateRoom={() => {
             setLobbyNotice(null);

@@ -24,7 +24,7 @@
 | 登入 | Google（Google Identity Services ID token） |
 | 存檔 | Cloudflare D1；跨局保留 **金幣、遺物（裝備中＋背包＋倉庫）、金幣升級、最高到達層數** |
 | 角色 | 一帳號多角色（上限 8），職業隨角色固定 |
-| 起始層數 | = **房主角色的最高到達層數** |
+| 起始層數 | 預設 = **房主角色的最高到達層數**；房主 / 單人玩家可在大廳自選 1～`maxDepth` 的較淺起始層 |
 | 難度選擇 | 保留功能，UI 顯示為灰字「即將推出」 |
 | 房間後端 | `workers/room/` 獨立 Worker 內的 SQLite Durable Object，不公開；瀏覽器只經 Pages Functions 連線（§5.1.1） |
 
@@ -83,7 +83,7 @@
 登入 → 選角色 / 建角色 → 大廳（單人開始 / 建立房間 / 輸入房號加入）→ 城鎮 → 傳送門 → 地城
 ```
 
-- **起始層數** = 房主角色的 `maxDepth`（新角色 = 1）。
+- **起始層數**：預設 = 房主角色的 `maxDepth`（新角色 = 1）；`maxDepth > 1` 的角色可在大廳（單人）或房間大廳（房主）用滑桿自選 1～`maxDepth`。選擇只存在房主 / 單人客戶端（`restartRun(..., startDepth)`、`MpConfig.startDepth`），**不進協定、不進伺服器**，引擎再 clamp 一次到 [1, `maxDepth`]；起始較淺**不會**降低 `maxDepth`（存檔仍是 `MAX(max_depth, ?)`），到達更深層照舊更新。
 - 加入者的 `maxDepth` 比房主低也照樣進入房主的層數；到達更深層時，每個人各自更新自己的 `maxDepth`。
 - 大廳顯示「難度」選單，灰字＋「即將推出」，不可操作。
 - attract mode（自動模式背景）保留在登入 / 選角畫面後方。
@@ -191,7 +191,7 @@ Room DO 不懂遊戲內容，只做轉發（`relay`）＋把房間標記為「�
 
 #### 同步方式
 
-- **房主模擬一切**：`heroes[]` = 房主 + 每位隊友（id = 房間 playerId）；多人模式忽略 `?bots`。隊友的英雄在房主引擎裡是 `isRemote` 英雄，用 `in` 訊息當輸入（`controlMode = manual`），攻擊 / 技能 / 傷害 / 掉寶 / 擊殺都由房主算。難度 n = 英雄人數（起始層 = 房主的 `maxDepth`）。
+- **房主模擬一切**：`heroes[]` = 房主 + 每位隊友（id = 房間 playerId）；多人模式忽略 `?bots` 與單人 bot 設定。隊友的英雄在房主引擎裡是 `isRemote` 英雄，用 `in` 訊息當輸入（`controlMode = manual`），攻擊 / 技能 / 傷害 / 掉寶 / 擊殺都由房主算。難度 n = 英雄人數（起始層 = 房主在房間大廳選的層數，預設與上限為房主的 `maxDepth`）。
 - **隊友是「遠端模式」**：用 `seed` 產生同一張地圖與靜態場景（`generateDungeon` 自帶 RNG；彈簧陷阱的相位在多人模式改由格子座標決定），**不產生怪物**，畫房主快照裡的怪物 / 英雄 / 投射物 / 自己的遺物 / 所有門。自己的攻擊與技能動畫在本機播放，傷害由房主決定（隊友本機沒有怪物，不會誤傷）。
 - **插值**：其他英雄與怪物用房主時間戳畫在「現在 − 110 ms」，時鐘偏移取 `min(收到時間 − ts)`。
 - **預測與校正**：自己的英雄在本機直接跑原本的移動程式（牆壁碰撞等），同時記錄 2 秒的位置歷史；房主快照回傳 `echoT`（它處理到的最新輸入的時間）與 `echoAge`，隊友在歷史裡找出對應時刻的位置與房主位置比較：誤差 < 0.04 忽略、< 2.5 每個快照修正 30%（歷史一併位移）、≥ 2.5 直接傳送。倒地時一律以房主位置為準。
@@ -306,7 +306,12 @@ Room DO 不懂遊戲內容，只做轉發（`relay`）＋把房間標記為「�
 
 **P4-B 實作備註**
 - engine 持有 `heroes: Hero[]` + `localHeroId`；`engine.hero` 是「目前被處理的英雄（actor）」，在每位英雄的迴圈中以 `setActor()` 切換，迴圈外一律等於本地英雄。攝影機、HUD、小地圖、輸入、死亡畫面、存檔只綁本地英雄。
-- 網址參數 `?bots=N`（0–3，預設 0）加入本機 bot 隊友；bot 永遠不存檔、不打 API。
+- 網址參數 `?bots=N`（0–3）為開發用覆寫：強制加入 N 個本機 bot（職業取自 UI 設定、不足者隨機）；bot 永遠不存檔、不打 API。
+- **單人 bot 選項**：單人大廳可選 0～3 個 bot 並各自指定職業（`SELECTABLE_CLASS_IDS`），設定存 `localStorage`（`embervault.botSetup.v1`）。bot 強度規則：
+  - 等級 = 玩家的升級總數（`getTotalUpgradeLevel()`），以 `distributeUpgradePoints()`（`classes.ts`）依該職業祭壇選項輪流平均分配，選項滿上限就把餘額給其他選項。
+  - 遺物：複製玩家裝備中的遺物，所有**數值加成**（含套裝件數加成）乘 `BOT_RELIC_SCALE = 0.8`（`Hero.relicScale` → `scaleRelicSummary()`）；`maxHp`、`damageReduction`、`lifeOnKill`、`thorns` 四個固定值四捨五入為整數。**無法縮放的質性效果**（傳說遺物特效 `uniqueEffects`、四件套光環）照常生效。
+  - 同步：引擎每 0.5 秒比對玩家的升級總數與裝備遺物 id，變動（祭壇購買、換裝、進出城鎮）即重算所有 bot，最大血量增加的部分當作治療。
+  - bot 永遠不存檔、不打 API、不開房；怪物依人數縮放照舊把 bot 算進 n。
 
 **P4-C 實作備註**
 - 城鎮與地城是同一個 `THREE.Scene` 內的兩組 Group（`townGroup` vs `levelGroup`／`dynamicGroup`／`debrisGroup`），只有本地英雄所在那組 `visible`，另一組完全不渲染（共用燈光、粒子池、英雄模型與已編譯的 shader）。引擎的「目前關卡欄位」（`dungeon`、`enemies`、`lightProps`…）打包成 `LevelCtx`；本地英雄在城鎮時地城的那組欄位停放在 `dungeonCtx`，背景模擬時暫時換進來（`runDungeonBackground`），模擬期間 HUD、粒子、音效、浮動文字、鏡頭一律不動（`bgSim`）。城鎮每次進入時重建、離開時釋放（純本機）。
@@ -461,7 +466,7 @@ CREATE TABLE trades (
 ## 10. 待決 / 之後再說
 
 - 難度系統內容（目前只有灰字 UI）。
-- 房主是否可以選擇比 `maxDepth` 淺的起始層。
+- ~~房主是否可以選擇比 `maxDepth` 淺的起始層。~~ 已解決：可自選 1～`maxDepth`（§5.1 起始層數）。
 - 房主轉移。
 - 公開配對（目前只有房號）。
 - 伺服器端完整驗證物品來源（防作弊）。

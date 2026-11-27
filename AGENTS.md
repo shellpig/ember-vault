@@ -8,7 +8,7 @@
 - **一句話**：提燈深入 40 層程序化地城——隨時在自動巡航與手動操作間切換，單刷或最多 4 人協力開荒
 - **目標平台**：網頁版（PC 瀏覽器優先）
 - **當前技術棧**：TypeScript + Vite 8 + React 19 + Tailwind CSS 4 + Three.js + Web Audio；後端 Cloudflare Pages Functions + D1（SQLite）+ 獨立 Worker Durable Objects（SQLite + WebSocket Hibernation）
-- **目前階段**：多人連線與雲端存檔路線圖（`P1`～`P7`）進行中，已完成 `P1`～`P5-C`
+- **目前階段**：多人連線與雲端存檔路線圖（`P1`～`P7`）進行中，`P1`～`P7` 已合併（P6、P7 待雙瀏覽器驗收）
 - **目前進度**：以 `PROJECT_BRIEF.md` 為單一事實來源
 
 ## New Conversation Opening Check
