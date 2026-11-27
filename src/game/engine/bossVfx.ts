@@ -761,6 +761,37 @@ void main() {
 }
 `;
 
+/** Clean royal-blue spatial warp portal floor ring (distinct from damage AoE fill telegraphs!). */
+const WARP_PORTAL_FLOOR_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uProgress;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+void main() {
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  if (r > 1.0) discard;
+  float a = atan(p.y, p.x);
+
+  // Crisp outer royal-blue ring + inner white-blue ring (NO damage-fill disk!)
+  float outerRing = smoothstep(0.90, 0.945, r) * (1.0 - smoothstep(0.975, 1.0, r));
+  float innerRing = smoothstep(0.68, 0.71, r) * (1.0 - smoothstep(0.735, 0.76, r));
+  float ticks = step(0.45, fract((a + uTime * (1.6 + uProgress * 2.4)) * 16.0 / 6.2831853));
+  float tickBand = smoothstep(0.77, 0.79, r) * (1.0 - smoothstep(0.87, 0.89, r)) * ticks;
+
+  // Soft spatial shimmer halo in the center (non-threatening, clearly a teleport portal)
+  float portalGlow = exp(-r * r * 3.8) * (0.28 + 0.14 * sin(a * 4.0 - uTime * 8.0));
+  float pulse = 0.85 + 0.15 * sin(uTime * 16.0);
+  float hot = smoothstep(0.65, 1.0, uProgress);
+
+  vec3 col = uColor * (outerRing * 1.7 * pulse + innerRing * 1.2 + tickBand * 0.95 + portalGlow * 1.1)
+           + vec3(0.92, 0.97, 1.0) * (innerRing * (0.65 + hot * 0.8) + outerRing * hot * 0.75);
+  float alpha = clamp(outerRing * 0.95 + innerRing * 0.82 + tickBand * 0.6 + portalGlow * 0.52, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
 // ---------------------------------------------------------------------------------------------------------------
 // Runtime VFX Tracking Structures
 // ---------------------------------------------------------------------------------------------------------------
@@ -873,6 +904,7 @@ export const bossVfxMethods = {
       TECH_RADAR_FRAG,
       ORBITAL_BEAM_FRAG,
       WARP_RING_FRAG,
+      WARP_PORTAL_FLOOR_FRAG,
     ];
     const warmGroup = new THREE.Group();
     warmGroup.position.set(0, -100, 0);
@@ -1134,6 +1166,8 @@ export const bossVfxMethods = {
           ? isTechBoss
             ? TECH_RADAR_FRAG
             : HEXAGRAM_FRAG
+          : skill === 'warp_ambush'
+          ? WARP_PORTAL_FLOOR_FRAG
           : SLAM_TELEGRAPH_FRAG;
 
       const groundMat = new THREE.ShaderMaterial({
@@ -1394,7 +1428,7 @@ export const bossVfxMethods = {
         group.add(chargeBossRing);
         rig.chargeBossRing = chargeBossRing;
       } else if (skill === 'warp_ambush') {
-        // 5 equally-spaced vertical royal-blue spatial rings descending from above to envelop the boss
+        // 5 equally-spaced vertical royal-blue spatial rings wrapping full boss height (y = 0.30..3.02) & width (scale 2.18)
         const warpRings: NonNullable<BossWindupRig['warpRings']> = [];
         const royalCol = new THREE.Color(BOSS_WARP.color);
         for (let i = 0; i < 5; i++) {
@@ -1413,9 +1447,9 @@ export const bossVfxMethods = {
           });
           const rMesh = new THREE.Mesh(_unitPlaneGeo, rMat);
           rMesh.rotation.x = -Math.PI / 2;
-          const targetY = 0.28 + i * 0.52;
-          rMesh.position.y = targetY + 3.4;
-          rMesh.scale.setScalar(1.62);
+          const targetY = 0.3 + i * 0.68;
+          rMesh.position.y = targetY + 4.0;
+          rMesh.scale.setScalar(2.18);
           group.add(rMesh);
           warpRings.push({ mesh: rMesh, mat: rMat, targetY });
         }
@@ -1572,15 +1606,15 @@ export const bossVfxMethods = {
         );
       }
     } else if (skill === 'warp_ambush' && rig.warpRings) {
-      // 5 equally-spaced royal-blue rings cascade smoothly down from above to lock around the boss body
+      // 5 equally-spaced royal-blue rings cascade smoothly down from above to wrap full boss silhouette without clipping
       const compress = progress > 0.82 ? (progress - 0.82) / 0.18 : 0;
       for (let i = 0; i < rig.warpRings.length; i++) {
         const wr = rig.warpRings[i];
         const delay = i * 0.065;
         const localP = THREE.MathUtils.clamp((progress - delay) / 0.52, 0, 1);
         const ease = 1 - Math.pow(1 - localP, 3.0);
-        wr.mesh.position.y = wr.targetY + (1 - ease) * 3.6;
-        const tighten = compress > 0 ? THREE.MathUtils.lerp(1.62, 1.32, compress * compress) : 1.72 - ease * 0.1;
+        wr.mesh.position.y = wr.targetY + (1 - ease) * 4.0;
+        const tighten = compress > 0 ? THREE.MathUtils.lerp(2.18, 1.94, compress * compress) : 2.3 - ease * 0.12;
         wr.mesh.scale.setScalar(tighten);
         wr.mesh.rotation.z = this.elapsed * (i % 2 === 0 ? 1.8 : -1.8) + i * 0.6;
         wr.mat.uniforms.uTime.value = this.elapsed;
@@ -1588,13 +1622,13 @@ export const bossVfxMethods = {
       }
       if (!this.isSoftwareGl && Math.random() < 0.6 + progress * 0.4) {
         const a = Math.random() * Math.PI * 2;
-        const r = 1.15 + Math.random() * 0.55;
+        const r = 1.45 + Math.random() * 0.55;
         this.spawnParticle(
           tx + Math.cos(a) * r,
-          0.2 + Math.random() * 0.5,
+          0.25 + Math.random() * 0.6,
           tz + Math.sin(a) * r,
           -Math.cos(a) * 0.7,
-          3.2 + Math.random() * 2.4,
+          3.4 + Math.random() * 2.4,
           -Math.sin(a) * 0.7,
           Math.random() < 0.4 ? 0xe8f4ff : BOSS_WARP.color,
           0.85,
@@ -4071,8 +4105,8 @@ export const bossVfxMethods = {
       });
       const mesh = new THREE.Mesh(_unitPlaneGeo, mat);
       mesh.rotation.x = -Math.PI / 2;
-      mesh.position.y = 0.28 + i * 0.52;
-      mesh.scale.setScalar(1.48);
+      mesh.position.y = 0.3 + i * 0.68;
+      mesh.scale.setScalar(1.94);
       group.add(mesh);
       rings.push({ mesh, mat, delay: i * 0.025 });
     }
@@ -4095,7 +4129,7 @@ export const bossVfxMethods = {
     const streaks: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; vy: number }> = [];
     for (let i = 0; i < streakCount; i++) {
       const a = (i / streakCount) * Math.PI * 2 + Math.random() * 0.3;
-      const r = 0.35 + Math.random() * 0.85;
+      const r = 0.45 + Math.random() * 1.1;
       const mat = new THREE.MeshBasicMaterial({
         color: i % 2 === 0 ? 0xffffff : BOSS_WARP.color,
         transparent: true,
@@ -4104,8 +4138,8 @@ export const bossVfxMethods = {
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(_unitCubeGeo, mat);
-      mesh.position.set(Math.cos(a) * r, 0.2 + Math.random() * 1.4, Math.sin(a) * r);
-      mesh.scale.set(0.06, 0.75 + Math.random() * 0.65, 0.06);
+      mesh.position.set(Math.cos(a) * r, 0.25 + Math.random() * 1.8, Math.sin(a) * r);
+      mesh.scale.set(0.06, 0.8 + Math.random() * 0.7, 0.06);
       group.add(mesh);
       streaks.push({ mesh, mat, vy: 11 + Math.random() * 8 });
     }
@@ -4125,7 +4159,7 @@ export const bossVfxMethods = {
           r.mesh.visible = rt < 1;
           if (rt < 1) {
             const ease = rt * rt;
-            r.mesh.scale.setScalar(THREE.MathUtils.lerp(1.48, 0.08, ease));
+            r.mesh.scale.setScalar(THREE.MathUtils.lerp(1.94, 0.12, ease));
             r.mesh.position.y += dt * 1.8;
             r.mesh.rotation.z = elapsed * (i % 2 === 0 ? 4.2 : -4.2);
             r.mat.uniforms.uTime.value = elapsed;
@@ -4169,10 +4203,10 @@ export const bossVfxMethods = {
     const group = new THREE.Group();
     group.position.set(lx, 0, lz);
 
-    // 1. Royal-blue landing ground seal (immediate visual warning for player)
+    // 1. Clean royal-blue landing portal double-ring (distinct from damage AoE fill telegraphs!)
     const sealMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT,
-      fragmentShader: SLAM_TELEGRAPH_FRAG,
+      fragmentShader: WARP_PORTAL_FLOOR_FRAG,
       uniforms: {
         uTime: { value: this.elapsed },
         uProgress: { value: 0 },
@@ -4192,7 +4226,7 @@ export const bossVfxMethods = {
     sealMesh.scale.setScalar(BOSS_WARP.telegraphRadius);
     group.add(sealMesh);
 
-    // 2. 5 equally-spaced royal-blue glowing rings descending from above
+    // 2. 5 equally-spaced royal-blue glowing rings descending from above (wrapping full boss height 0.30..3.02 & width 2.18)
     const rings: Array<{ mesh: THREE.Mesh; mat: THREE.ShaderMaterial; targetY: number }> = [];
     for (let i = 0; i < 5; i++) {
       const mat = new THREE.ShaderMaterial({
@@ -4210,9 +4244,9 @@ export const bossVfxMethods = {
       });
       const mesh = new THREE.Mesh(_unitPlaneGeo, mat);
       mesh.rotation.x = -Math.PI / 2;
-      const targetY = 0.28 + i * 0.52;
-      mesh.position.y = targetY + 3.8;
-      mesh.scale.setScalar(1.62);
+      const targetY = 0.3 + i * 0.68;
+      mesh.position.y = targetY + 4.2;
+      mesh.scale.setScalar(2.18);
       group.add(mesh);
       rings.push({ mesh, mat, targetY });
     }
@@ -4346,8 +4380,8 @@ export const bossVfxMethods = {
             const r = rings[i];
             const localP = THREE.MathUtils.clamp((descP - i * 0.04) / 0.84, 0, 1);
             const ease = 1 - Math.pow(1 - localP, 2.8);
-            r.mesh.position.y = r.targetY + (1 - ease) * 3.8;
-            r.mesh.scale.setScalar(1.66 - ease * 0.12);
+            r.mesh.position.y = r.targetY + (1 - ease) * 4.2;
+            r.mesh.scale.setScalar(2.26 - ease * 0.08);
             r.mesh.rotation.z = elapsed * (i % 2 === 0 ? 3.2 : -3.2);
             r.mat.uniforms.uTime.value = elapsed;
             r.mat.uniforms.uFade.value = THREE.MathUtils.clamp(localP * 2.5, 0, 1);
@@ -4385,7 +4419,7 @@ export const bossVfxMethods = {
             r.mesh.visible = ringFadeT < 1;
             if (ringFadeT < 1) {
               const ease = 1 - Math.pow(1 - ringFadeT, 2.0);
-              r.mesh.scale.setScalar(1.54 + ease * 0.9);
+              r.mesh.scale.setScalar(2.18 + ease * 0.95);
               r.mesh.rotation.z = elapsed * (i % 2 === 0 ? 4.0 : -4.0);
               r.mat.uniforms.uTime.value = elapsed;
               r.mat.uniforms.uFade.value = 1 - ringFadeT;

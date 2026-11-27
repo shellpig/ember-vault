@@ -628,15 +628,17 @@ export const enemiesMethods = {
             cfg.telegraphColor
           );
         } else if (!isBasic && skill === 'warp_ambush') {
-          // Phase 2: launch vertically & fade out (untargetable, no collision, shadow hidden)
+          // Phase 2: launch vertically & fade out (untargetable, no collision, shadow hidden immediately on frame 0)
           e.bossWarpPhase = 'ascend';
           e.bossWarpUntargetable = true;
           e.vx = 0;
           e.vz = 0;
           if (e.telegraph) e.telegraph.group.visible = false;
           this.hideBossWindupVfx(e.id);
+          this.setBossWarpVisual(e, 0.35, 1, true);
           this.audio.playBossWarpVanish();
-          this.spawnBossWarpTakeoffVfx(e.x, e.z, BOSS_WARP.ascendDur);
+          const slowDiv = (e.slowTimer ?? 0) > 0 ? Math.max(0.5, 1 - (e.slowPct ?? 0)) : 1;
+          this.spawnBossWarpTakeoffVfx(e.x, e.z, BOSS_WARP.ascendDur / slowDiv);
         }
       }
     } else if (state === 'strike') {
@@ -660,9 +662,9 @@ export const enemiesMethods = {
         e.vz = 0;
 
         if (elapsedStrike < BOSS_WARP.ascendDur) {
-          // Phase 2: rapid vertical launch & fade-out (opacity 1 -> 0)
+          // Phase 2: rapid vertical launch & fade-out continuing smoothly from Phase 1 levitation height (0.35)
           const pAsc = THREE.MathUtils.clamp(elapsedStrike / BOSS_WARP.ascendDur, 0, 1);
-          this.setBossWarpVisual(e, pAsc * pAsc * BOSS_WARP.liftHeight, 1 - pAsc, true);
+          this.setBossWarpVisual(e, 0.35 + pAsc * pAsc * BOSS_WARP.liftHeight, 1 - pAsc, true);
         } else {
           // Exact moment opacity reaches 0: lock onto chosen player's CURRENT position & descend!
           if (!e.bossHitApplied) {
@@ -682,7 +684,8 @@ export const enemiesMethods = {
             e.facing = Math.atan2(targetHero.x - land.x, targetHero.z - land.z);
             e.rig.root.position.set(e.x, 0, e.z);
             this.audio.playBossWarpArrive();
-            this.spawnBossWarpArriveVfx(land.x, land.z, BOSS_WARP.descendDur);
+            const slowDiv = (e.slowTimer ?? 0) > 0 ? Math.max(0.5, 1 - (e.slowPct ?? 0)) : 1;
+            this.spawnBossWarpArriveVfx(land.x, land.z, BOSS_WARP.descendDur / slowDiv);
           }
           // Phase 3: vertical drop & fade-in (opacity 0 -> 1)
           const pDesc = THREE.MathUtils.clamp(

@@ -868,6 +868,10 @@ export const guestMpMethods = {
         e.rig.stunStars.visible = e.stunTimer > 0;
         if (e.stunTimer > 0) e.rig.stunStars.rotation.y += dt * 5.8;
       }
+      const isGuestWarp =
+        e.isBoss &&
+        e.bossSkill === 'warp_ambush' &&
+        (e.bossState === 'windup' || e.bossState === 'strike');
       for (const m of e.rig.flashMaterials) {
         if (e.hitFlash > 0) {
           m.emissive.setHex(0xffffff);
@@ -875,6 +879,9 @@ export const guestMpMethods = {
         } else if (frozen) {
           m.emissive.setHex(0x7fdcff);
           m.emissiveIntensity = 0.45;
+        } else if (isGuestWarp) {
+          m.emissive.setHex(BOSS_WARP.color);
+          m.emissiveIntensity = 0.42 + Math.sin(this.elapsed * 26) * 0.2;
         } else if (e.isBoss && e.bossEnraged) {
           m.emissive.setHex(BOSS_ENRAGE.color);
           m.emissiveIntensity = 0.3 + Math.sin(this.elapsed * 6 + e.id) * 0.12;
@@ -920,6 +927,7 @@ export const guestMpMethods = {
             e.bossWarpGuestArrived = false;
             e.bossWarpOriginX = e.x;
             e.bossWarpOriginZ = e.z;
+            this.setBossWarpVisual(e, 0.35, 1, true);
             this.spawnBossWarpTakeoffVfx(e.x, e.z, BOSS_WARP.ascendDur);
           } else if (skill === 'nova_ring') {
             const beams = this.computeNovaBeams(tx, tz, e.facing);
@@ -945,7 +953,11 @@ export const guestMpMethods = {
           );
         }
 
-        // Sync warp_ambush Phase 2 (ascend fade-out) & Phase 3 (landing 5 rings + descend fade-in)
+        // Sync warp_ambush Phase 1 (levitation) + Phase 2 (ascend fade-out) & Phase 3 (landing 5 rings + descend fade-in)
+        if (e.bossState === 'windup' && skill === 'warp_ambush' && rad > 0) {
+          const prog = 1 - (e.bossStateTimer ?? 0);
+          e.rig.body.position.y = prog * 0.35;
+        }
         if (e.bossState === 'strike' && skill === 'warp_ambush') {
           e.bossWarpGuestTimer = (e.bossWarpGuestTimer ?? 0) + dt;
           const strikeProg = 1 - (e.bossStateTimer ?? 0);
@@ -962,7 +974,7 @@ export const guestMpMethods = {
           }
           if (!e.bossWarpGuestArrived) {
             const pAsc = THREE.MathUtils.clamp((e.bossWarpGuestTimer ?? 0) / BOSS_WARP.ascendDur, 0, 1);
-            this.setBossWarpVisual(e, pAsc * pAsc * BOSS_WARP.liftHeight, 1 - pAsc, true);
+            this.setBossWarpVisual(e, 0.35 + pAsc * pAsc * BOSS_WARP.liftHeight, 1 - pAsc, true);
           } else {
             e.bossWarpGuestDescTimer = (e.bossWarpGuestDescTimer ?? 0) + dt;
             const pDesc = THREE.MathUtils.clamp(e.bossWarpGuestDescTimer / BOSS_WARP.descendDur, 0, 1);
