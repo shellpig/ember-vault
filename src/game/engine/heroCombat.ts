@@ -2,7 +2,7 @@ import type { EmbervaultEngine } from '../engine';
 import { ACT_DASH, ACT_POMMEL, ACT_POTION } from '../../../shared/game';
 import { FROST_MAGE, HERO_CLASSES, HUNTER } from '../classes';
 import { hasLineOfSight } from '../dungeon';
-import { BOSS_CONFIGS, BOSS_MELEE_DAMAGE_TAKEN_MULT, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
+import { getBossDamageTakenMult, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
 import { EnemyEntity, HeroHitParams } from './entities';
 import { createFrozenShell, createSlowMarker, createStunStars } from '../models';
 import { FloatingLabelData } from '../types';
@@ -150,8 +150,8 @@ export const heroCombatMethods = {
    * floating text is built, so the number shown is the HP that was really removed.
    */
   scaleEnemyDamageTaken(this: EmbervaultEngine, enemy: EnemyEntity, dmg: number): number {
-    if (!enemy.isBoss || !isFloorBoss(enemy.kind) || BOSS_CONFIGS[enemy.kind].bossType !== 'melee') return dmg;
-    return Math.max(1, Math.round(dmg * BOSS_MELEE_DAMAGE_TAKEN_MULT));
+    if (!enemy.isBoss || !isFloorBoss(enemy.kind)) return dmg;
+    return Math.max(1, Math.round(dmg * getBossDamageTakenMult(enemy.kind, this.depth)));
   },
 
   applyBonusEnemyDamage(

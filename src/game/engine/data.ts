@@ -269,8 +269,39 @@ export const BOSS_HP = {
   individualClamp: 0.1,
 } as const;
 
-/** Section 2. */
-export const BOSS_MELEE_DAMAGE_TAKEN_MULT = 0.75;
+/** Section 2: melee-type bosses take 25% less damage (added to the depth tier's reduction below). */
+export const BOSS_MELEE_DAMAGE_REDUCTION = 0.25;
+
+/**
+ * Section 1b: depth tiers (user tuning after the first balance run). Every boss of the tier gets the extra damage
+ * reduction (additive with the melee 25%), an HP multiplier and extra escorts around it.
+ * `mobs` = extra regular escorts, `elites` = extra unnamed elites, `named` = extra named (special) elites.
+ */
+export interface BossDepthTier {
+  maxDepth: number;
+  damageReduction: number;
+  hpMult: number;
+  mobs: number;
+  elites: number;
+  named: number;
+}
+export const BOSS_DEPTH_TIERS: readonly BossDepthTier[] = [
+  { maxDepth: 10, damageReduction: 0.1, hpMult: 1.1, mobs: 1, elites: 0, named: 0 },
+  { maxDepth: 20, damageReduction: 0.15, hpMult: 1.25, mobs: 2, elites: 1, named: 0 },
+  { maxDepth: 30, damageReduction: 0.2, hpMult: 1.5, mobs: 3, elites: 0, named: 1 },
+  { maxDepth: Infinity, damageReduction: 0.3, hpMult: 2.0, mobs: 3, elites: 0, named: 2 },
+];
+
+/** Boss depth tier of a floor (floors past 40 keep the last tier). */
+export function getBossDepthTier(depth: number): BossDepthTier {
+  return BOSS_DEPTH_TIERS.find((t) => depth <= t.maxDepth) ?? BOSS_DEPTH_TIERS[BOSS_DEPTH_TIERS.length - 1];
+}
+
+/** Multiplier applied to every hit a boss takes: 1 - (melee 25%) - tier reduction. */
+export function getBossDamageTakenMult(kind: FloorBossKind, depth: number): number {
+  const melee = BOSS_CONFIGS[kind].bossType === 'melee' ? BOSS_MELEE_DAMAGE_REDUCTION : 0;
+  return Math.max(0.05, 1 - melee - getBossDepthTier(depth).damageReduction);
+}
 export const BOSS_CASTER_BASIC_SPEED_MULT = 1.25;
 
 /** Section 3: how the five skills behave. `damage` is a fraction of `cfg.damage x getDepthDamageScale()`. */
