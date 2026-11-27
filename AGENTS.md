@@ -30,6 +30,14 @@
 
 **Layer 3 — 按任務查閱實作檔案：**
 - `src/game/` — 3D 遊戲引擎（`engine.ts`）、英雄實體（`hero.ts`）、職業數值（`classes.ts`）、地城生成（`dungeon.ts`）、遺物（`relics.ts`）、模型／材質／音效（`models.ts`、`textures.ts`、`audio.ts`、`types.ts`）
+- `src/game/engine.ts` — 引擎本體：欄位、建構子、`update` 主迴圈、`tick`、`dispose`、組裝（`export interface EmbervaultEngine extends …Methods` + `Object.assign(EmbervaultEngine.prototype, …)`）。其餘方法分檔在 `src/game/engine/`：
+  - 純資料／型別：`data.ts`（Boss 設定與輪替、菁英名、怪物種類判斷、城鎮站點格座標）、`entities.ts`（Enemy／Projectile／Pet／Loot／`LevelCtx`／`Mp*State` 等 interface）、`scratch.ts`（共用暫存向量）
+  - 場景與建置：`scene.ts`（渲染器／場景初始化、粒子、環境、牆遮擋、`afterDraw`、鏡頭）、`levelBuild.ts`（`buildLevel`／`clearLevel`）、`town.ts`（`buildTown`／`clearTown`）、`spawn.ts`（`spawnEnemies`／`addEnemy`／深度縮放）
+  - 隊伍與流程：`party.ts`（actor 切換、`LevelCtx` 切換、bot、救援）、`travel.ts`（傳送門、回城／回地城、`restartRun`、存檔掛鉤）、`economy.ts`（祭壇、商店、倉庫、遺物裝備／販賣）、`input.ts`（事件綁定、手動控制、輸入鎖）
+  - 戰鬥：`heroCombat.ts`（喝藥、衝刺、普攻、劍柄重擊、命中、`damageHero`）、`classSkills.ts`（法師／獵人攻擊、冰霜新星、閃現、戰寵、英雄投射物）、`loot.ts`（`killEnemy`、掉寶、撿取、自動換裝、符文）、`enemies.ts`（怪物 AI、Boss、遠程怪、怪物投射物）
+  - 模擬與 UI：`movement.ts`（碰撞、滑動、尋路、脫困）、`ai.ts`（`runAI`、法師戰鬥 AI、bot 跟隨／歸隊）、`frame.ts`（`updateHeroFrame`、背景模擬、目標進度）、`hud.ts`（`emitHud`、小地圖、橫幅、飄字、結算）
+  - 多人：`mp/core.ts`（開局／結束、relay、成員、等待畫面）、`mp/host.ts`（房主模擬掛鉤、快照建構）、`mp/guest.ts`（隊友遠端模式、快照套用、預測）、`mp/town.ts`（城鎮位置同步、隊伍資訊、進出城交接）
+  - 其他：英雄實體（`hero.ts`）、職業數值（`classes.ts`）、地城生成（`dungeon.ts`）、遺物（`relics.ts`）、模型／材質／音效（`models.ts`、`textures.ts`、`audio.ts`、`types.ts`）
 - `src/components/`、`src/App.tsx`、`src/saveManager.ts`、`src/api.ts`、`src/net/roomClient.ts` — UI 畫面、存檔同步與房間 WebSocket 客戶端
 - `shared/` — 瀏覽器、Pages Functions 與 Room Worker 共用的型別、協定與上限（`character.ts`、`room.ts`、`game.ts`）
 - `functions/` — Cloudflare Pages Functions API（登入、角色 CRUD、存檔、房間開房與 WS 代理）
@@ -82,6 +90,7 @@ Report to user: current progress, and any issues with their scope of impact.
 | **`docs/mage-spec.md`** | 冰雪法師玩法規則與設計說明 | 冰尖彈循環、Frost Nova、護盾回充規則 |
 | **`docs/hunter-spec.md`** | 亞馬遜獵人玩法規則與設計說明 | 獵手箭矢、戰寵召喚／強化與生命週期 |
 | **`src/game/classes.ts`** | **所有職業遊戲數值的單一來源** | `HERO_CLASSES`、`FROST_MAGE` 係數與升級上限 |
+| **`src/game/engine.ts` + `src/game/engine/**`** | **引擎狀態（欄位）住 `engine.ts`，方法按領域住 `engine/<module>.ts`** | 傳送門／回城在 `travel.ts`、怪物 AI 在 `enemies.ts`、多人快照在 `mp/host.ts`／`mp/guest.ts` |
 | **`shared/character.ts`、`shared/room.ts`、`shared/game.ts`** | **前後端與 DO 共用型別、上限與訊息協定** | 角色／背包／倉庫上限、房間與遊戲同步訊息型別、速率／大小上限與錯誤碼 |
 | **`docs/p1-setup.md`、`docs/p5-setup.md`** | 雲端設定、部署順序與本機開發步驟 | D1 migration、`deploy:room`、`DEV_AUTH` |
 | **`wrangler.toml`、`workers/room/wrangler.toml`** | Cloudflare binding 與公開設定 | D1 `DB`、`ROOM` binding、`GOOGLE_CLIENT_ID` |
@@ -122,6 +131,7 @@ Report to user: current progress, and any issues with their scope of impact.
 5. **Cloudflare 免費方案流量預算**：Durable Object 傳入 WebSocket 訊息以 20:1 計費（送出與 auto-response 保活不計費）。多人同步須遵守：**成員輸入有變化才送（上限 20 Hz、靜止 1 Hz keepalive）、房主增量快照上限 15 Hz、城鎮 `townPos` 有移動才送（上限 5 Hz）並由 DO 直接扇出不經房主**（P5-B 實測 4 人房約 3,900 次請求／小時），避免超量。
 6. **部署相依提醒**：只要改動 `workers/room/**` 或 `shared/room.ts`，必須在部署 Pages 之前或同時執行 `npm run deploy:room` 更新 Room Worker，Pages 部署不會自動更新 Worker。
 7. **規格與實作同步**：數值、協定或行為若與 `docs/multiplayer-spec.md`、`docs/mage-spec.md`、`docs/hunter-spec.md` 出現變動，於同次交付同步更新對應段落與 `PROJECT_BRIEF.md`。
+8. **引擎方法放哪**：`EmbervaultEngine` 的方法住在 `src/game/engine/<module>.ts`（方法物件，第一個參數 `this: EmbervaultEngine`，只 `import type` 引擎；`engine.ts` 以宣告合併＋`Object.assign(EmbervaultEngine.prototype, …)` 掛回）。**新方法放進對應領域的模組**（不要塞回 `engine.ts`）；新模組要在 `engine.ts` 的組裝區塊補上 `import`、`type`、`interface extends` 與 `Object.assign` 四處。方法不可用「預設參數引用 `this`」（例如 `hero: Hero = this.hero`，會造成 TypeScript 循環推導），這類方法留在 `engine.ts`；新方法請補明確回傳型別。純搬移（不改邏輯）的重構以 `node scripts/verify-engine-split.mjs` 驗證（以 `origin/main` 為基準逐方法比對）。
 
 ---
 
