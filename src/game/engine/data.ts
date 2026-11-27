@@ -364,7 +364,12 @@ export const BOSS_BASIC = {
 } as const;
 
 /** Section 5: 50/50 between skill and basic, never this many of the same type in a row. */
-export const BOSS_ACTION = { skillChance: 0.5, maxSameInRow: 2 } as const;
+export const BOSS_ACTION = {
+  skillChance: 0.5,
+  maxSameInRow: 2,
+  /** If a melee boss wants a basic attack but cannot reach the hero for this long (s), fall back to a skill. */
+  meleeBasicChaseTimeout: 1.2,
+} as const;
 
 /** Section 6. */
 export const BOSS_ENRAGE = {

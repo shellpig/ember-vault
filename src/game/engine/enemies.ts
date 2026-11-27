@@ -126,7 +126,7 @@ export const enemiesMethods = {
    * Chase state, cooldown over: start the pre-rolled action type if it is possible right now, otherwise keep chasing
    * (docs/boss-spec.md section 5). A skill that cannot be cast falls back to a basic attack.
    */
-  bossTryStartAction(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig, dx: number, dz: number, dist: number): void {
+  bossTryStartAction(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig, dx: number, dz: number, dist: number, dt: number): void {
     const hasLOS = hasLineOfSight(this.dungeon, e.x, e.z, this.hero.x, this.hero.z, this.doorUnlocked, 0.35);
     const wantType = e.bossNextType ?? 'skill';
 
@@ -145,25 +145,37 @@ export const enemiesMethods = {
       return true;
     };
 
-    let skill: BossSkillKind | null = null;
-    let type: BossActionType | null = null;
-    if (wantType === 'skill') {
+    const pickSkill = (): BossSkillKind | null => {
       const skills = cfg.skills;
       const idx = (e.bossSkillIndex ?? 0) % skills.length;
       for (let offset = 0; offset < skills.length; offset++) {
         const cand = skills[(idx + offset) % skills.length];
         if (canCastSkill(cand)) {
-          skill = cand;
           e.bossSkillIndex = (idx + offset) % skills.length;
-          break;
+          return cand;
         }
       }
+      return null;
+    };
+
+    let skill: BossSkillKind | null = null;
+    let type: BossActionType | null = null;
+    if (wantType === 'skill') {
+      skill = pickSkill();
       if (skill) type = 'skill';
       else if (canBasic()) type = 'basic';
     } else if (canBasic()) {
       type = 'basic';
+    } else if (cfg.bossType === 'melee') {
+      // Melee boss kited out of basic reach: after a short chase timeout, switch to an in-range skill
+      e.bossBasicChaseTimer = (e.bossBasicChaseTimer ?? 0) + dt;
+      if (e.bossBasicChaseTimer >= BOSS_ACTION.meleeBasicChaseTimeout) {
+        skill = pickSkill();
+        if (skill) type = 'skill';
+      }
     }
     if (!type) return; // keep chasing
+    e.bossBasicChaseTimer = 0;
 
     e.bossAction = type;
     if (e.bossLastType === type) e.bossStreak = (e.bossStreak ?? 0) + 1;
@@ -423,7 +435,7 @@ export const enemiesMethods = {
       }
 
       if (e.attackCooldown <= 0 && dist < BOSS_ENGAGE_RANGE) {
-        this.bossTryStartAction(e, cfg, dx, dz, dist);
+        this.bossTryStartAction(e, cfg, dx, dz, dist, dt);
       }
     } else if (state === 'windup') {
       e.bossStateTimer = (e.bossStateTimer ?? 0) - dt;

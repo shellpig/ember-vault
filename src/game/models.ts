@@ -4437,6 +4437,28 @@ export interface RelicLootRig {
   ring: THREE.Mesh;
 }
 
+let sharedRelicBeamAlphaMap: THREE.CanvasTexture | null = null;
+function getRelicBeamAlphaMap(): THREE.CanvasTexture {
+  if (sharedRelicBeamAlphaMap) return sharedRelicBeamAlphaMap;
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 128;
+  const ctx = c.getContext('2d')!;
+  const grad = ctx.createLinearGradient(0, 128, 0, 0);
+  // Bottom (v=0) is bright; fades smoothly into thin air toward top (v=1)
+  grad.addColorStop(0.0, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(0.18, 'rgba(255,255,255,0.72)');
+  grad.addColorStop(0.55, 'rgba(255,255,255,0.28)');
+  grad.addColorStop(0.85, 'rgba(255,255,255,0.06)');
+  grad.addColorStop(1.0, 'rgba(255,255,255,0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.needsUpdate = true;
+  sharedRelicBeamAlphaMap = tex;
+  return tex;
+}
+
 export function createRelicLootMesh(
   rarity: RelicRarity,
   glowMap?: THREE.Texture
@@ -4532,17 +4554,19 @@ export function createRelicLootMesh(
 
   let beam: THREE.Group | undefined;
   if (pal.hasBeam) {
-    // Soaring Diablo-style vertical light pillar for Orange (Unique) and Green (Set) drops
+    // Soaring Diablo-style translucent vertical light pillar with soft vertical fade
     beam = new THREE.Group();
+    const beamAlpha = getRelicBeamAlphaMap();
 
-    const beamHeight = 7.2;
+    const beamHeight = 7.0;
     const outerBeam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.11, 0.36, beamHeight, 12, 1, true),
+      new THREE.CylinderGeometry(0.16, 0.42, beamHeight, 14, 1, true),
       new THREE.MeshBasicMaterial({
         color: pal.main,
+        alphaMap: beamAlpha,
         transparent: true,
-        opacity: 0.34,
-        side: THREE.DoubleSide,
+        opacity: 0.24,
+        side: THREE.FrontSide,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       })
@@ -4550,17 +4574,18 @@ export function createRelicLootMesh(
     outerBeam.position.y = beamHeight * 0.5;
 
     const innerBeam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.035, 0.14, beamHeight * 0.92, 10, 1, true),
+      new THREE.CylinderGeometry(0.05, 0.16, beamHeight * 0.88, 12, 1, true),
       new THREE.MeshBasicMaterial({
         color: pal.bright,
+        alphaMap: beamAlpha,
         transparent: true,
-        opacity: 0.62,
-        side: THREE.DoubleSide,
+        opacity: 0.3,
+        side: THREE.FrontSide,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       })
     );
-    innerBeam.position.y = beamHeight * 0.46;
+    innerBeam.position.y = beamHeight * 0.44;
 
     const baseFlare = new THREE.Mesh(
       new THREE.CircleGeometry(0.76, 18),

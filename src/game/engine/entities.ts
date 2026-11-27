@@ -177,6 +177,8 @@ export interface EnemyEntity {
   /** Type of the last executed action and how many of that type happened in a row. */
   bossLastType?: BossActionType;
   bossStreak?: number;
+  /** Seconds a melee boss has chased while waiting to land a basic attack; past timeout it switches to a skill. */
+  bossBasicChaseTimer?: number;
   /** Enraged (HP first dropped under 50%): faster and hits harder until it dies. */
   bossEnraged?: boolean;
   /** Locked base angle of nova_ring laser beams (set at windup start so charge lines match burst). */

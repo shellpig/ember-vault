@@ -963,7 +963,26 @@ export const guestMpMethods = {
         l.relicRig.artifact.position.y = 0.36 + l.y + Math.sin(this.elapsed * 3.8 + l.id) * 0.1;
         l.relicRig.artifact.rotation.y += dt * 2.4;
         l.relicRig.ring.rotation.z -= dt * 1.2;
-        if (l.relicRig.beam) l.relicRig.beam.rotation.y += dt * 0.85;
+        if (l.relicRig.beam) {
+          l.relicRig.beam.rotation.y += dt * 0.85;
+          if (!this.isSoftwareGl && Math.random() < dt * 12) {
+            const a = Math.random() * Math.PI * 2;
+            const r = 0.08 + Math.random() * 0.42;
+            const col = l.rarity === 'green' ? 0x38f27c : 0xff7b1c;
+            this.spawnParticle(
+              l.x + Math.cos(a) * r,
+              0.2 + Math.random() * 0.35,
+              l.z + Math.sin(a) * r,
+              (Math.random() - 0.5) * 0.25,
+              2.4 + Math.random() * 2.1,
+              (Math.random() - 0.5) * 0.25,
+              Math.random() < 0.35 ? 0xfff4d2 : col,
+              0.48 + Math.random() * 0.36,
+              0.95 + Math.random() * 0.45,
+              -0.25
+            );
+          }
+        }
       } else {
         l.mesh.position.set(l.x, l.y + Math.sin(this.elapsed * 4.5 + l.id) * 0.08, l.z);
         l.mesh.rotation.y += dt * 2.8;

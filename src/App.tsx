@@ -28,7 +28,15 @@ import {
 import { TouchControls, useTouchPrimary } from './components/TouchControls';
 import { EmbervaultEngine } from './game/engine';
 import { HERO_CLASSES, HeroClassId, UpgradeAccent } from './game/classes';
-import { computeRelicSummary, formatRelicStat, getRarityCss } from './game/relics';
+import {
+  SET_RELIC_CATALOG,
+  computeRelicSummary,
+  formatMaxHpStatForClass,
+  formatRelicStat,
+  getRarityCss,
+  getRarityLabel,
+  getUniqueEffectDescForClass,
+} from './game/relics';
 import {
   BannerEvent,
   FloatingLabelData,
@@ -291,6 +299,7 @@ export default function App() {
   const onTouchDash = useCallback(() => engineRef.current?.touchDash(), []);
   const onTouchSkill = useCallback(() => engineRef.current?.triggerPommelStrike(), []);
   const [relicModalOpen, setRelicModalOpen] = useState(false);
+  const [hoveredShopRelicId, setHoveredShopRelicId] = useState<string | null>(null);
   const [codexModalOpen, setCodexModalOpen] = useState(false);
   const [webglError, setWebglError] = useState<string | null>(null);
   const [screen, setScreen] = useState<Screen>('boot');
@@ -1732,8 +1741,69 @@ export default function App() {
           </div>
         )}
 
-        {hud.nearShop && !hud.nearAltar && (
-          <div className="mb-2.5 bg-[#0c0e14]/95 border border-[#d64d74] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2.5">
+        {hud.nearShop && !hud.nearAltar && (() => {
+          const hoveredShopRelic = hoveredShopRelicId
+            ? hud.relicBag.find((r) => r.id === hoveredShopRelicId) ?? null
+            : null;
+          const hoveredCss = hoveredShopRelic ? getRarityCss(hoveredShopRelic.rarity) : null;
+          const hoveredSet =
+            hoveredShopRelic?.setId
+              ? SET_RELIC_CATALOG.find((s) => s.setId === hoveredShopRelic.setId) ?? null
+              : null;
+          const hoveredUniqueDesc = hoveredShopRelic?.uniqueEffectId
+            ? getUniqueEffectDescForClass(hoveredShopRelic.uniqueEffectId, hud.heroClass)
+            : null;
+          return (
+          <div
+            className="relative mb-2.5 bg-[#0c0e14]/95 border border-[#d64d74] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2.5"
+            onMouseLeave={() => setHoveredShopRelicId(null)}
+          >
+            {hoveredShopRelic && hoveredCss && (
+              <div
+                className={`pointer-events-none absolute bottom-full left-0 right-0 mb-2 bg-[#0a0c12]/98 border ${hoveredCss.border} px-3.5 py-2.5 shadow-[0_10px_32px_rgba(0,0,0,0.92)] font-hud text-[11px] space-y-1.5 z-30`}
+              >
+                <div className="flex items-baseline justify-between gap-2 border-b border-[#2a2d3a] pb-1.5">
+                  <div className="flex items-baseline gap-1.5 min-w-0">
+                    <span className={`font-bold text-xs truncate ${hoveredCss.text}`}>
+                      {hoveredShopRelic.name}
+                    </span>
+                    <span className="text-[10px] text-[#9aa0b4] shrink-0">
+                      {getRarityLabel(hoveredShopRelic.rarity)} · Lv.{hoveredShopRelic.level}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-[#ffd466] tabular-nums shrink-0">
+                    賣價 +{hoveredShopRelic.sellValue}G
+                  </span>
+                </div>
+                <div className="space-y-0.5">
+                  {hoveredShopRelic.stats.map((st, idx) => {
+                    const mageNote =
+                      st.key === 'maxHp' ? formatMaxHpStatForClass(st.value, hud.heroClass) : null;
+                    return (
+                      <div key={idx} className="flex items-baseline justify-between gap-2 text-[#e6e9f2]">
+                        <span>{formatRelicStat(st)}</span>
+                        {mageNote && <span className="text-[10px] text-[#8ecbff]/85">{mageNote}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                {hoveredUniqueDesc && (
+                  <div className="pt-1 border-t border-[#2a2433] text-[#ffb86c] text-[10px] leading-snug">
+                    ★ {hoveredUniqueDesc}
+                  </div>
+                )}
+                {hoveredSet && (
+                  <div className="pt-1 border-t border-[#1d3326] text-[#6bf2a4] text-[10px] space-y-0.5 leading-snug">
+                    <div className="font-semibold">套裝：{hoveredSet.name}</div>
+                    {hoveredSet.bonuses.map((b) => (
+                      <div key={b.required}>
+                        {b.required}件：{b.desc}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between gap-3 border-b border-[#40202d] pb-2">
               <div className="flex items-center gap-2 min-w-0">
                 <FlaskConical className="w-3.5 h-3.5 text-[#ff6b93] shrink-0" />
@@ -1791,12 +1861,19 @@ export default function App() {
 
               {hud.relicBag.length > 0 && (
                 <div className="max-h-[116px] overflow-y-auto space-y-1 pr-0.5">
-                  {hud.relicBag.slice(0, 6).map((item) => {
+                  {hud.relicBag.map((item) => {
                     const css = getRarityCss(item.rarity);
+                    const isHovered = hoveredShopRelicId === item.id;
                     return (
                       <div
                         key={item.id}
-                        className="flex items-center justify-between gap-2 px-2 py-1 border border-[#2d2633] bg-[#13141f] font-hud text-[11px]"
+                        onMouseEnter={() => setHoveredShopRelicId(item.id)}
+                        onMouseLeave={() =>
+                          setHoveredShopRelicId((prev) => (prev === item.id ? null : prev))
+                        }
+                        className={`flex items-center justify-between gap-2 px-2 py-1 border ${
+                          isHovered ? `${css.border} bg-[#1c1e2e]` : 'border-[#2d2633] bg-[#13141f]'
+                        } font-hud text-[11px] transition-colors`}
                       >
                         <div className="flex items-baseline gap-1.5 min-w-0">
                           <span className={`font-semibold truncate ${css.text}`}>{item.name}</span>
@@ -1806,7 +1883,10 @@ export default function App() {
                         </div>
                         <button
                           type="button"
-                          onClick={() => engineRef.current?.sellRelic(item.id)}
+                          onClick={() => {
+                            engineRef.current?.sellRelic(item.id);
+                            setHoveredShopRelicId((prev) => (prev === item.id ? null : prev));
+                          }}
                           className="flex items-center gap-1 px-2 py-0.5 border border-[#755827] bg-[#21190c] text-[#ffd466] hover:border-[#ebbf52] transition-colors cursor-pointer whitespace-nowrap shrink-0 tabular-nums"
                         >
                           <Coins className="w-3 h-3" />
@@ -1819,7 +1899,8 @@ export default function App() {
               )}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {!hud.inTown && hud.nearChest && !hud.nearAltar && !hud.nearShop && !hud.rescuePrompt && (
           <div

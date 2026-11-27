@@ -742,20 +742,21 @@ export const lootMethods = {
           l.relicRig.beam.rotation.y += dt * 0.85;
           const pulse = 0.92 + Math.sin(this.elapsed * 4.5 + l.id) * 0.12;
           l.relicRig.beam.scale.set(pulse, 1, pulse);
-          if (Math.random() < dt * 5.5) {
+          if (Math.random() < dt * 14.5) {
             const a = Math.random() * Math.PI * 2;
-            const r = 0.12 + Math.random() * 0.34;
+            const r = 0.08 + Math.random() * 0.42;
+            const isBright = Math.random() < 0.35;
             this.spawnParticle(
               l.x + Math.cos(a) * r,
-              0.25,
+              0.2 + Math.random() * 0.35,
               l.z + Math.sin(a) * r,
-              0,
-              2.2 + Math.random() * 1.8,
-              0,
-              getRarityColorHex(l.relic.rarity),
-              0.72,
-              0.9,
-              -0.3
+              (Math.random() - 0.5) * 0.25,
+              2.4 + Math.random() * 2.1,
+              (Math.random() - 0.5) * 0.25,
+              isBright ? 0xfff4d2 : getRarityColorHex(l.relic.rarity),
+              0.48 + Math.random() * 0.36,
+              0.95 + Math.random() * 0.45,
+              -0.25
             );
           }
         }
