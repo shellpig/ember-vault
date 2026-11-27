@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { EmbervaultEngine } from '../engine';
-import { BOSS_CONFIGS, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, BossSkillKind, FloorBossKind } from './data';
+import { BOSS_CONFIGS, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, BOSS_WARP, BossSkillKind, FloorBossKind } from './data';
 import { EnemyEntity } from './entities';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -731,6 +731,36 @@ void main() {
 }
 `;
 
+/** Royal-blue spatial warp ring shader (#246bff luminous outer halo + razor-sharp bright-white inner edge). */
+const WARP_RING_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uFade;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+void main() {
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  if (r > 1.0 || r < 0.44) discard;
+  float a = atan(p.y, p.x);
+
+  // Luminous royal-blue outer halo bloom
+  float outerHalo = exp(-pow((r - 0.77) / 0.145, 2.0));
+  // Crisp saturated royal-blue main ring band
+  float mainBand = smoothstep(0.088, 0.0, abs(r - 0.75));
+  // Blinding pure-white razor inner rim
+  float whiteInner = smoothstep(0.036, 0.0, abs(r - 0.67));
+  // Subtle rotating energy ticks along the ring circumference
+  float ticks = 0.78 + 0.22 * sin(a * 12.0 + uTime * 10.0);
+  float arcPulse = 0.85 + 0.15 * sin(a * 4.0 - uTime * 14.0);
+
+  vec3 col = uColor * (outerHalo * 1.45 + mainBand * 2.05) * ticks * arcPulse
+           + vec3(0.92, 0.97, 1.0) * (whiteInner * 2.45 + mainBand * 0.42);
+  float alpha = clamp((outerHalo * 0.72 + mainBand * 0.96 + whiteInner) * uFade, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
 // ---------------------------------------------------------------------------------------------------------------
 // Runtime VFX Tracking Structures
 // ---------------------------------------------------------------------------------------------------------------
@@ -774,13 +804,17 @@ export interface BossWindupRig {
   orbitRingB?: THREE.Mesh;
   orbitCubes?: Array<{ mesh: THREE.Mesh; baseAng: number; baseR: number; baseY: number; speedMult: number; spinPhase: number }>;
   orbitAngleAcc?: number;
-  // charge_slam path strip
+  // charge_slam path strip + landing/boss anticipation compression rings
   chargePathMesh?: THREE.Mesh;
   chargePathMat?: THREE.ShaderMaterial;
+  chargeLandRing?: THREE.Mesh;
+  chargeBossRing?: THREE.Mesh;
   // ranged_volley 3-lane dual railgun accelerator gates + 3 fan lines
   volleyGroup?: THREE.Group;
   volleyLines?: Array<{ mesh: THREE.Mesh; mat: THREE.ShaderMaterial }>;
   volleyGates?: THREE.Mesh[];
+  // warp_ambush 5 descending equally-spaced royal-blue rings
+  warpRings?: Array<{ mesh: THREE.Mesh; mat: THREE.ShaderMaterial; targetY: number }>;
 }
 
 const _unitPlaneGeo = new THREE.PlaneGeometry(2, 2);
@@ -838,6 +872,7 @@ export const bossVfxMethods = {
       PRISM_CONE_FRAG,
       TECH_RADAR_FRAG,
       ORBITAL_BEAM_FRAG,
+      WARP_RING_FRAG,
     ];
     const warmGroup = new THREE.Group();
     warmGroup.position.set(0, -100, 0);
@@ -1063,8 +1098,13 @@ export const bossVfxMethods = {
     if (this.bgSim) return false;
     const cfg = BOSS_CONFIGS[e.kind as FloorBossKind];
     const isTechBoss = e.kind === 'boss_mothership_ai' || e.kind === 'boss_xeno_commander';
-    // Tech nova_ring on Omega Core AI uses bright sci-fi ice-blue; Archlich uses arcane violet
-    const effColorHex = skill === 'nova_ring' && e.kind === 'boss_mothership_ai' ? 0x38c8ff : cfg.telegraphColor;
+    // Tech nova_ring on Omega Core AI uses bright sci-fi ice-blue; warp_ambush always uses royal blue (#246bff)
+    const effColorHex =
+      skill === 'warp_ambush'
+        ? BOSS_WARP.color
+        : skill === 'nova_ring' && e.kind === 'boss_mothership_ai'
+        ? 0x38c8ff
+        : cfg.telegraphColor;
     const color = new THREE.Color(effColorHex);
     const prismAccent =
       e.kind === 'boss_crystal_wyrm'
@@ -1326,6 +1366,60 @@ export const bossVfxMethods = {
         group.add(pathMesh);
         rig.chargePathMesh = pathMesh;
         rig.chargePathMat = pathMat;
+
+        // Converging compression ring at the landing zone + coil-back ring around the boss body
+        const landRingMat = new THREE.MeshBasicMaterial({
+          color: cfg.telegraphColor,
+          transparent: true,
+          opacity: 0.75,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const chargeLandRing = new THREE.Mesh(_unitTorusGeo, landRingMat);
+        chargeLandRing.rotation.x = Math.PI / 2;
+        chargeLandRing.position.y = 0.35;
+        group.add(chargeLandRing);
+        rig.chargeLandRing = chargeLandRing;
+
+        const bossRingMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.72,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const chargeBossRing = new THREE.Mesh(_unitTorusGeo, bossRingMat);
+        chargeBossRing.rotation.x = Math.PI / 2;
+        chargeBossRing.position.y = 1.05;
+        group.add(chargeBossRing);
+        rig.chargeBossRing = chargeBossRing;
+      } else if (skill === 'warp_ambush') {
+        // 5 equally-spaced vertical royal-blue spatial rings descending from above to envelop the boss
+        const warpRings: NonNullable<BossWindupRig['warpRings']> = [];
+        const royalCol = new THREE.Color(BOSS_WARP.color);
+        for (let i = 0; i < 5; i++) {
+          const rMat = new THREE.ShaderMaterial({
+            vertexShader: QUAD_VERT,
+            fragmentShader: WARP_RING_FRAG,
+            uniforms: {
+              uTime: { value: 0 },
+              uFade: { value: 1 },
+              uColor: { value: royalCol.clone() },
+            },
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+          });
+          const rMesh = new THREE.Mesh(_unitPlaneGeo, rMat);
+          rMesh.rotation.x = -Math.PI / 2;
+          const targetY = 0.28 + i * 0.52;
+          rMesh.position.y = targetY + 3.4;
+          rMesh.scale.setScalar(1.62);
+          group.add(rMesh);
+          warpRings.push({ mesh: rMesh, mat: rMat, targetY });
+        }
+        rig.warpRings = warpRings;
       } else if (skill === 'ranged_volley') {
         const volleyGroup = new THREE.Group();
         group.add(volleyGroup);
@@ -1423,17 +1517,90 @@ export const bossVfxMethods = {
       const dx = tx - sx;
       const dz = tz - sz;
       const len = Math.hypot(dx, dz);
+      // Anticipation compression beat during final 24% before explosive launch!
+      const compress = progress > 0.76 ? (progress - 0.76) / 0.24 : 0;
       if (len > 0.35) {
         rig.chargePathMesh.visible = true;
         const ang = Math.atan2(dx, dz);
         rig.chargePathMesh.rotation.y = ang;
         // Positioned in rig-local space (rig is at tx, tz, so start is at -dx, -dz)
         rig.chargePathMesh.position.set(-dx * 0.5, 0.062, -dz * 0.5);
-        rig.chargePathMesh.scale.set(1.35, len, 1);
+        const laneW = compress > 0 ? THREE.MathUtils.lerp(1.35, 0.92, compress) : 1.35;
+        rig.chargePathMesh.scale.set(laneW, len, 1);
         rig.chargePathMat.uniforms.uTime.value = this.elapsed;
         rig.chargePathMat.uniforms.uProgress.value = progress;
       } else {
         rig.chargePathMesh.visible = false;
+      }
+      if (rig.chargeLandRing) {
+        const ringR =
+          compress > 0
+            ? THREE.MathUtils.lerp(rad * 0.96, 0.16, compress * compress)
+            : rad * (0.42 + (progress / 0.76) * 0.54);
+        rig.chargeLandRing.scale.setScalar(ringR);
+        rig.chargeLandRing.position.y = compress > 0 ? THREE.MathUtils.lerp(0.58, 0.14, compress) : 0.24 + progress * 0.42;
+        const rm = rig.chargeLandRing.material as THREE.MeshBasicMaterial;
+        rm.color.setHex(compress > 0.25 ? 0xffffff : cfg.telegraphColor);
+        rm.opacity = 0.45 + progress * 0.54;
+      }
+      if (rig.chargeBossRing) {
+        const bRingR =
+          compress > 0
+            ? THREE.MathUtils.lerp(1.55, 0.24, compress * compress)
+            : THREE.MathUtils.lerp(2.15, 1.55, progress / 0.76);
+        rig.chargeBossRing.position.set(-dx, 1.05, -dz);
+        rig.chargeBossRing.scale.setScalar(bRingR);
+        rig.chargeBossRing.rotation.z = this.elapsed * (3.2 + progress * 10);
+        const bm = rig.chargeBossRing.material as THREE.MeshBasicMaterial;
+        bm.color.setHex(compress > 0.2 ? 0xffffff : cfg.telegraphColor);
+        bm.opacity = 0.42 + progress * 0.56;
+      }
+      if (!this.isSoftwareGl && Math.random() < 0.45 + progress * 0.55) {
+        const a = Math.random() * Math.PI * 2;
+        const d = rad * (0.55 + Math.random() * 0.45);
+        this.spawnParticle(
+          tx + Math.cos(a) * d,
+          0.2,
+          tz + Math.sin(a) * d,
+          -Math.cos(a) * (3.2 + progress * 3.4),
+          1.4 + Math.random() * 1.4,
+          -Math.sin(a) * (3.2 + progress * 3.4),
+          compress > 0 || Math.random() < 0.3 ? 0xffffff : cfg.telegraphColor,
+          0.78 + progress * 0.42,
+          0.26,
+          -0.4
+        );
+      }
+    } else if (skill === 'warp_ambush' && rig.warpRings) {
+      // 5 equally-spaced royal-blue rings cascade smoothly down from above to lock around the boss body
+      const compress = progress > 0.82 ? (progress - 0.82) / 0.18 : 0;
+      for (let i = 0; i < rig.warpRings.length; i++) {
+        const wr = rig.warpRings[i];
+        const delay = i * 0.065;
+        const localP = THREE.MathUtils.clamp((progress - delay) / 0.52, 0, 1);
+        const ease = 1 - Math.pow(1 - localP, 3.0);
+        wr.mesh.position.y = wr.targetY + (1 - ease) * 3.6;
+        const tighten = compress > 0 ? THREE.MathUtils.lerp(1.62, 1.32, compress * compress) : 1.72 - ease * 0.1;
+        wr.mesh.scale.setScalar(tighten);
+        wr.mesh.rotation.z = this.elapsed * (i % 2 === 0 ? 1.8 : -1.8) + i * 0.6;
+        wr.mat.uniforms.uTime.value = this.elapsed;
+        wr.mat.uniforms.uFade.value = THREE.MathUtils.clamp(localP * 2.2, 0, 1);
+      }
+      if (!this.isSoftwareGl && Math.random() < 0.6 + progress * 0.4) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 1.15 + Math.random() * 0.55;
+        this.spawnParticle(
+          tx + Math.cos(a) * r,
+          0.2 + Math.random() * 0.5,
+          tz + Math.sin(a) * r,
+          -Math.cos(a) * 0.7,
+          3.2 + Math.random() * 2.4,
+          -Math.sin(a) * 0.7,
+          Math.random() < 0.4 ? 0xe8f4ff : BOSS_WARP.color,
+          0.85,
+          0.32,
+          -0.6
+        );
       }
     } else if (skill === 'nova_ring' && rig.beamGroup && rig.beamLines && rig.chargeOrb && rig.chargeRing) {
       // Anticipation compression rhythm: gather (0..0.76) -> violent inward crush to blazing white pinpoint (0.76..1.0)!
@@ -2140,8 +2307,9 @@ export const bossVfxMethods = {
     const color = new THREE.Color(colorHex);
     const group = new THREE.Group();
 
-    // 1. High-intensity burst PointLight at landing impact
-    this.triggerBossBurstLight(ex, 2.0, ez, colorHex, 175, 0.58);
+    // 1. High-intensity burst PointLight + Radial Anime Impact Flash at landing impact!
+    this.triggerBossBurstLight(ex, 2.0, ez, colorHex, 190, 0.6);
+    this.triggerBossImpactFlash(ex, ez, colorHex, 1.08, 0.16);
 
     // 2. Long jagged burning trench fissure decal along the charge corridor (1.9s)
     const trenchMat = new THREE.ShaderMaterial({
@@ -2299,8 +2467,92 @@ export const bossVfxMethods = {
       pillars.push({ outer, outerMat, core, coreMat, delay: i * 0.032, maxH, radius });
     }
 
-    // 7. Forward directional ember / magma shower blasting out from landing point
-    const sparkCount = this.isSoftwareGl ? 14 : 34;
+    // 7. 16 Tumbling & Bouncing 3D Voxel Debris Cubes blasting along the trench and forward!
+    const debrisCount = this.isSoftwareGl ? 6 : 16;
+    const debris: Array<{
+      mesh: THREE.Mesh;
+      vx: number;
+      vy: number;
+      vz: number;
+      rx: number;
+      rz: number;
+      size: number;
+    }> = [];
+    for (let i = 0; i < debrisCount; i++) {
+      const alongFrac = i < 6 ? 0.35 + (i / 6) * 0.65 : 1.0;
+      const baseX = i < 6 ? startX + dirX * (trenchLen * alongFrac) : ex;
+      const baseZ = i < 6 ? startZ + dirZ * (trenchLen * alongFrac) : ez;
+      const spreadAng = angle + (Math.random() - 0.5) * (i < 6 ? 2.6 : 1.9);
+      const spd = 3.0 + Math.random() * 5.6;
+      const size = 0.16 + Math.random() * 0.22;
+      const mat = new THREE.MeshStandardMaterial({
+        color: i % 2 === 0 ? 0x1b1518 : 0x2a1d24,
+        emissive: colorHex,
+        emissiveIntensity: i % 3 === 0 ? 1.65 : 0.75,
+        roughness: 0.42,
+        metalness: 0.35,
+        transparent: true,
+        opacity: 1,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      mesh.position.set(
+        baseX + (Math.random() - 0.5) * 0.9,
+        0.24 + Math.random() * 0.25,
+        baseZ + (Math.random() - 0.5) * 0.9
+      );
+      mesh.scale.setScalar(size);
+      group.add(mesh);
+      debris.push({
+        mesh,
+        vx: Math.sin(spreadAng) * spd,
+        vy: 3.8 + Math.random() * 4.2,
+        vz: Math.cos(spreadAng) * spd,
+        rx: (Math.random() - 0.5) * 15,
+        rz: (Math.random() - 0.5) * 15,
+        size,
+      });
+    }
+
+    // 7b. 20 High-speed Velocity-Stretched Voxel Energy Bars shooting forward & radially!
+    const streakCount = this.isSoftwareGl ? 8 : 20;
+    const streaks: Array<{
+      mesh: THREE.Mesh;
+      mat: THREE.MeshBasicMaterial;
+      dirX: number;
+      dirZ: number;
+      spd: number;
+      elev: number;
+    }> = [];
+    for (let i = 0; i < streakCount; i++) {
+      // Forward-biased shock fan + side jets
+      const a = angle + (Math.random() - 0.5) * (i < 14 ? 1.75 : Math.PI * 2);
+      const sxDir = Math.sin(a);
+      const szDir = Math.cos(a);
+      const mat = new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0xfff6d6 : colorHex,
+        transparent: true,
+        opacity: 0.96,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      mesh.rotation.order = 'YXZ';
+      mesh.rotation.y = a;
+      mesh.scale.set(0.065, 0.065, 0.85 + Math.random() * 0.72);
+      mesh.position.set(ex + sxDir * 0.35, 0.38 + Math.random() * 0.55, ez + szDir * 0.35);
+      group.add(mesh);
+      streaks.push({
+        mesh,
+        mat,
+        dirX: sxDir,
+        dirZ: szDir,
+        spd: 8.8 + Math.random() * 6.4,
+        elev: 0.7 + Math.random() * 1.8,
+      });
+    }
+
+    // 8. Forward directional ember / magma shower blasting out from landing point
+    const sparkCount = this.isSoftwareGl ? 14 : 36;
     for (let i = 0; i < sparkCount; i++) {
       const fanAng = angle + (Math.random() - 0.5) * 1.55;
       const spd = 4.2 + Math.random() * 6.2;
@@ -2344,6 +2596,41 @@ export const bossVfxMethods = {
           const ease = 1 - Math.pow(1 - ct, 2.2);
           crescentMesh.scale.setScalar(rad * (0.7 + ease * 1.55));
           crescentMesh.position.set(ex + dirX * ease * 0.9, 0.16, ez + dirZ * ease * 0.9);
+        }
+
+        // Ballistic tumbling 3D voxel debris cubes (bounce cleanly off the floor!)
+        const dFrac = Math.min(1, age / 1.15);
+        for (const db of debris) {
+          db.mesh.visible = dFrac < 1;
+          if (dFrac < 1) {
+            db.vy -= 15.2 * dt;
+            db.mesh.position.x += db.vx * dt;
+            db.mesh.position.y += db.vy * dt;
+            db.mesh.position.z += db.vz * dt;
+            if (db.mesh.position.y < db.size * 0.5) {
+              db.mesh.position.y = db.size * 0.5;
+              db.vy = Math.abs(db.vy) * 0.38;
+              db.vx *= 0.68;
+              db.vz *= 0.68;
+            }
+            db.mesh.rotation.x += db.rx * dt;
+            db.mesh.rotation.z += db.rz * dt;
+            const mat = db.mesh.material as THREE.MeshStandardMaterial;
+            mat.opacity = dFrac > 0.65 ? 1 - (dFrac - 0.65) / 0.35 : 1;
+          }
+        }
+
+        // High-speed velocity-stretched voxel energy bars
+        const stFrac = Math.min(1, age / 0.34);
+        for (const st of streaks) {
+          st.mesh.visible = stFrac < 1;
+          if (stFrac < 1) {
+            st.mesh.position.x += st.dirX * st.spd * dt;
+            st.mesh.position.y += st.elev * dt;
+            st.mesh.position.z += st.dirZ * st.spd * dt;
+            st.mesh.scale.z = Math.max(0.08, (1 - stFrac) * 1.25);
+            st.mat.opacity = Math.pow(1 - stFrac, 1.3);
+          }
         }
 
         // Rib blades pop up staggered along the trench, hold, then sink
@@ -3683,6 +3970,482 @@ export const bossVfxMethods = {
         }
 
         scorchMat.uniforms.uLife.value = Math.min(1, age / maxLife);
+      },
+      dispose: () => {
+        this.dynamicGroup.remove(group);
+        disposeOwnedMaterials(group);
+      },
+    });
+  },
+
+  /**
+   * Apply vertical lift, material opacity fade (saving original transparent/opacity/depthWrite), and contact-shadow
+   * hiding for `warp_ambush` Phase 2 (ascend fade-out) & Phase 3 (descend fade-in).
+   */
+  setBossWarpVisual(
+    this: EmbervaultEngine,
+    e: EnemyEntity,
+    liftY: number,
+    opacity: number,
+    hideShadow: boolean
+  ): void {
+    const alpha = THREE.MathUtils.clamp(opacity, 0, 1);
+    e.bossWarpVisualDirty = true;
+    e.rig.body.position.y = liftY;
+    e.rig.body.visible = alpha > 0.015;
+
+    for (const child of e.rig.root.children) {
+      if (child.userData.isContactShadow) {
+        child.visible = !hideShadow;
+      }
+    }
+    if (e.rig.auraRing) e.rig.auraRing.visible = !hideShadow;
+    if (e.rig.rageAura) e.rig.rageAura.visible = Boolean(e.bossEnraged) && !hideShadow;
+    if (e.rig.nameTag) e.rig.nameTag.visible = alpha > 0.15;
+
+    const applyMat = (m: THREE.Material) => {
+      let orig = m.userData.__warpOrig as { transparent: boolean; opacity: number; depthWrite: boolean } | undefined;
+      if (!orig) {
+        orig = { transparent: m.transparent, opacity: m.opacity, depthWrite: m.depthWrite };
+        m.userData.__warpOrig = orig;
+      }
+      if (alpha < 0.999) {
+        m.transparent = true;
+        m.opacity = orig.opacity * alpha;
+        m.depthWrite = alpha > 0.65 ? orig.depthWrite : false;
+      } else {
+        m.transparent = orig.transparent;
+        m.opacity = orig.opacity;
+        m.depthWrite = orig.depthWrite;
+      }
+    };
+
+    e.rig.body.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        if (Array.isArray(obj.material)) obj.material.forEach(applyMat);
+        else applyMat(obj.material);
+      }
+    });
+  },
+
+  /** Cleanly restore boss materials, visibility, lift height, and contact shadow after `warp_ambush`. */
+  resetBossWarpVisual(this: EmbervaultEngine, e: EnemyEntity): void {
+    if (!e.bossWarpVisualDirty) return;
+    this.setBossWarpVisual(e, 0, 1, false);
+    e.bossWarpVisualDirty = false;
+  },
+
+  /**
+   * `warp_ambush` Phase 2 Takeoff VFX (~0.22s):
+   * - 5 royal-blue rings shrink & dissolve sequentially bottom-to-top as the boss shoots upward
+   * - Crisp vertical royal-blue spatial flash beam + upward-stretched voxel light streaks
+   */
+  spawnBossWarpTakeoffVfx(
+    this: EmbervaultEngine,
+    ox: number,
+    oz: number,
+    ascendDur: number
+  ): void {
+    if (this.bgSim) return;
+    const royalCol = new THREE.Color(BOSS_WARP.color);
+    const group = new THREE.Group();
+    group.position.set(ox, 0, oz);
+
+    this.triggerBossBurstLight(ox, 1.8, oz, BOSS_WARP.color, 135, 0.28);
+
+    // 5 royal-blue rings shrinking one-by-one bottom-to-top
+    const rings: Array<{ mesh: THREE.Mesh; mat: THREE.ShaderMaterial; delay: number }> = [];
+    for (let i = 0; i < 5; i++) {
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: QUAD_VERT,
+        fragmentShader: WARP_RING_FRAG,
+        uniforms: {
+          uTime: { value: this.elapsed },
+          uFade: { value: 1 },
+          uColor: { value: royalCol.clone() },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(_unitPlaneGeo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = 0.28 + i * 0.52;
+      mesh.scale.setScalar(1.48);
+      group.add(mesh);
+      rings.push({ mesh, mat, delay: i * 0.025 });
+    }
+
+    // Brief vertical royal-blue launch pillar
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: 0x7cb4ff,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const beam = new THREE.Mesh(_unitCoreCylGeo, beamMat);
+    beam.position.y = 3.8;
+    beam.scale.set(0.45, 7.6, 0.45);
+    group.add(beam);
+
+    // Upward-shooting voxel light bars
+    const streakCount = this.isSoftwareGl ? 6 : 14;
+    const streaks: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; vy: number }> = [];
+    for (let i = 0; i < streakCount; i++) {
+      const a = (i / streakCount) * Math.PI * 2 + Math.random() * 0.3;
+      const r = 0.35 + Math.random() * 0.85;
+      const mat = new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0xffffff : BOSS_WARP.color,
+        transparent: true,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      mesh.position.set(Math.cos(a) * r, 0.2 + Math.random() * 1.4, Math.sin(a) * r);
+      mesh.scale.set(0.06, 0.75 + Math.random() * 0.65, 0.06);
+      group.add(mesh);
+      streaks.push({ mesh, mat, vy: 11 + Math.random() * 8 });
+    }
+
+    this.dynamicGroup.add(group);
+    const maxLife = Math.max(0.28, ascendDur + 0.14);
+    this.bossVfxItems.push({
+      group,
+      life: 0,
+      maxLife,
+      update: (dt, t, elapsed) => {
+        const age = (group.userData.age = (group.userData.age ?? 0) + dt);
+        for (let i = 0; i < rings.length; i++) {
+          const r = rings[i];
+          const ra = Math.max(0, age - r.delay);
+          const rt = Math.min(1, ra / Math.max(0.12, ascendDur * 0.92));
+          r.mesh.visible = rt < 1;
+          if (rt < 1) {
+            const ease = rt * rt;
+            r.mesh.scale.setScalar(THREE.MathUtils.lerp(1.48, 0.08, ease));
+            r.mesh.position.y += dt * 1.8;
+            r.mesh.rotation.z = elapsed * (i % 2 === 0 ? 4.2 : -4.2);
+            r.mat.uniforms.uTime.value = elapsed;
+            r.mat.uniforms.uFade.value = 1 - rt;
+          }
+        }
+
+        const bt = Math.min(1, age / Math.max(0.14, ascendDur));
+        beam.visible = bt < 1;
+        if (bt < 1) {
+          const w = THREE.MathUtils.lerp(0.65, 0.05, bt);
+          beam.scale.set(w, 8.2, w);
+          beamMat.opacity = Math.pow(1 - bt, 1.35) * 0.72;
+        }
+
+        for (const st of streaks) {
+          st.mesh.position.y += st.vy * dt;
+          st.mat.opacity = Math.pow(1 - t, 1.25);
+        }
+      },
+      dispose: () => {
+        this.dynamicGroup.remove(group);
+        disposeOwnedMaterials(group);
+      },
+    });
+  },
+
+  /**
+   * `warp_ambush` Phase 3 Landing & Touchdown VFX:
+   * - 5 equally-spaced royal-blue rings cascade down at the locked landing spot while boss drops & fades in
+   * - At exact touchdown (`age >= descendDur`): royal-blue shockwave + core flash + voxel light cubes & streaks!
+   */
+  spawnBossWarpArriveVfx(
+    this: EmbervaultEngine,
+    lx: number,
+    lz: number,
+    descendDur: number
+  ): void {
+    if (this.bgSim) return;
+    const royalCol = new THREE.Color(BOSS_WARP.color);
+    const group = new THREE.Group();
+    group.position.set(lx, 0, lz);
+
+    // 1. Royal-blue landing ground seal (immediate visual warning for player)
+    const sealMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: SLAM_TELEGRAPH_FRAG,
+      uniforms: {
+        uTime: { value: this.elapsed },
+        uProgress: { value: 0 },
+        uColor: { value: royalCol.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    });
+    const sealMesh = new THREE.Mesh(_unitPlaneGeo, sealMat);
+    sealMesh.rotation.x = -Math.PI / 2;
+    sealMesh.position.y = 0.054;
+    sealMesh.scale.setScalar(BOSS_WARP.telegraphRadius);
+    group.add(sealMesh);
+
+    // 2. 5 equally-spaced royal-blue glowing rings descending from above
+    const rings: Array<{ mesh: THREE.Mesh; mat: THREE.ShaderMaterial; targetY: number }> = [];
+    for (let i = 0; i < 5; i++) {
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: QUAD_VERT,
+        fragmentShader: WARP_RING_FRAG,
+        uniforms: {
+          uTime: { value: this.elapsed },
+          uFade: { value: 1 },
+          uColor: { value: royalCol.clone() },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(_unitPlaneGeo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      const targetY = 0.28 + i * 0.52;
+      mesh.position.y = targetY + 3.8;
+      mesh.scale.setScalar(1.62);
+      group.add(mesh);
+      rings.push({ mesh, mat, targetY });
+    }
+
+    // 3. Touchdown royal-blue shockwave + core flash + elevated torus (activated at age >= descendDur)
+    const waveMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: SHOCKWAVE_FRAG,
+      uniforms: {
+        uLife: { value: 0 },
+        uColor: { value: royalCol.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
+    });
+    const waveMesh = new THREE.Mesh(_unitPlaneGeo, waveMat);
+    waveMesh.rotation.x = -Math.PI / 2;
+    waveMesh.position.y = 0.14;
+    waveMesh.scale.setScalar(0.5);
+    waveMesh.visible = false;
+    group.add(waveMesh);
+
+    const flashMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: CORE_FLASH_FRAG,
+      uniforms: {
+        uIntensity: { value: 1 },
+        uColor: { value: royalCol.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    const flashMesh = new THREE.Mesh(_unitPlaneGeo, flashMat);
+    flashMesh.rotation.x = -Math.PI / 2;
+    flashMesh.position.y = 0.24;
+    flashMesh.scale.setScalar(2.6);
+    flashMesh.visible = false;
+    group.add(flashMesh);
+
+    const torusMat = new THREE.MeshBasicMaterial({
+      color: 0xd9ecff,
+      transparent: true,
+      opacity: 0.92,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const torus = new THREE.Mesh(_unitTorusGeo, torusMat);
+    torus.rotation.x = Math.PI / 2;
+    torus.position.y = 0.25;
+    torus.visible = false;
+    group.add(torus);
+
+    // 4. Touchdown 3D royal-blue voxel light cubes + velocity-stretched voxel streaks
+    const cubeCount = this.isSoftwareGl ? 6 : 12;
+    const cubes: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; vx: number; vy: number; vz: number; rx: number; ry: number }> = [];
+    for (let i = 0; i < cubeCount; i++) {
+      const a = (i / cubeCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
+      const spd = 2.8 + Math.random() * 4.4;
+      const mat = new THREE.MeshBasicMaterial({
+        color: i % 3 === 0 ? 0xffffff : i % 2 === 0 ? 0x6ba6ff : BOSS_WARP.color,
+        transparent: true,
+        opacity: 1,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      mesh.scale.setScalar(0.14 + Math.random() * 0.14);
+      mesh.position.set(Math.cos(a) * 0.35, 0.25, Math.sin(a) * 0.35);
+      mesh.visible = false;
+      group.add(mesh);
+      cubes.push({
+        mesh,
+        mat,
+        vx: Math.cos(a) * spd,
+        vy: 2.8 + Math.random() * 3.0,
+        vz: Math.sin(a) * spd,
+        rx: (Math.random() - 0.5) * 14,
+        ry: (Math.random() - 0.5) * 14,
+      });
+    }
+
+    const streakCount = this.isSoftwareGl ? 6 : 14;
+    const streaks: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; dirX: number; dirZ: number; spd: number }> = [];
+    for (let i = 0; i < streakCount; i++) {
+      const a = (i / streakCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.18;
+      const mat = new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0xeef6ff : BOSS_WARP.color,
+        transparent: true,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      mesh.rotation.order = 'YXZ';
+      mesh.rotation.y = Math.atan2(Math.cos(a), Math.sin(a));
+      mesh.scale.set(0.055, 0.055, 0.7 + Math.random() * 0.5);
+      mesh.position.set(Math.cos(a) * 0.35, 0.32 + Math.random() * 0.4, Math.sin(a) * 0.35);
+      mesh.visible = false;
+      group.add(mesh);
+      streaks.push({ mesh, mat, dirX: Math.cos(a), dirZ: Math.sin(a), spd: 7.5 + Math.random() * 5.0 });
+    }
+
+    let landedBurst = false;
+    this.dynamicGroup.add(group);
+    const maxLife = descendDur + 0.65;
+    this.bossVfxItems.push({
+      group,
+      life: 0,
+      maxLife,
+      update: (dt, _t, elapsed) => {
+        const age = (group.userData.age = (group.userData.age ?? 0) + dt);
+        const descP = Math.min(1, age / Math.max(0.08, descendDur));
+
+        // Ground seal fills rapidly during descend, vanishes on touchdown
+        sealMesh.visible = age < descendDur + 0.05;
+        if (sealMesh.visible) {
+          sealMat.uniforms.uTime.value = elapsed;
+          sealMat.uniforms.uProgress.value = descP;
+        }
+
+        // 5 rings cascade down during descend, then expand & dissolve right after touchdown
+        if (age < descendDur) {
+          for (let i = 0; i < rings.length; i++) {
+            const r = rings[i];
+            const localP = THREE.MathUtils.clamp((descP - i * 0.04) / 0.84, 0, 1);
+            const ease = 1 - Math.pow(1 - localP, 2.8);
+            r.mesh.position.y = r.targetY + (1 - ease) * 3.8;
+            r.mesh.scale.setScalar(1.66 - ease * 0.12);
+            r.mesh.rotation.z = elapsed * (i % 2 === 0 ? 3.2 : -3.2);
+            r.mat.uniforms.uTime.value = elapsed;
+            r.mat.uniforms.uFade.value = THREE.MathUtils.clamp(localP * 2.5, 0, 1);
+          }
+        } else {
+          // Trigger touchdown burst once!
+          if (!landedBurst) {
+            landedBurst = true;
+            this.triggerBossBurstLight(lx, 1.7, lz, BOSS_WARP.color, 165, 0.42);
+            if (!this.isSoftwareGl) {
+              for (let i = 0; i < 24; i++) {
+                const a = (i / 24) * Math.PI * 2 + Math.random() * 0.2;
+                const spd = 3.2 + Math.random() * 4.8;
+                this.spawnParticle(
+                  lx + Math.cos(a) * 0.4,
+                  0.35,
+                  lz + Math.sin(a) * 0.4,
+                  Math.cos(a) * spd,
+                  1.8 + Math.random() * 2.8,
+                  Math.sin(a) * spd,
+                  i % 3 === 0 ? 0xffffff : BOSS_WARP.color,
+                  1.15,
+                  0.45,
+                  6.2
+                );
+              }
+            }
+          }
+          const postAge = age - descendDur;
+
+          // 5 rings flare outward and dissolve over 0.24s
+          const ringFadeT = Math.min(1, postAge / 0.24);
+          for (let i = 0; i < rings.length; i++) {
+            const r = rings[i];
+            r.mesh.visible = ringFadeT < 1;
+            if (ringFadeT < 1) {
+              const ease = 1 - Math.pow(1 - ringFadeT, 2.0);
+              r.mesh.scale.setScalar(1.54 + ease * 0.9);
+              r.mesh.rotation.z = elapsed * (i % 2 === 0 ? 4.0 : -4.0);
+              r.mat.uniforms.uTime.value = elapsed;
+              r.mat.uniforms.uFade.value = 1 - ringFadeT;
+            }
+          }
+
+          // Touchdown shockwave
+          const wt = Math.min(1, postAge / 0.42);
+          waveMesh.visible = wt < 1;
+          if (wt < 1) {
+            waveMat.uniforms.uLife.value = wt;
+            const ease = 1 - Math.pow(1 - wt, 2.2);
+            waveMesh.scale.setScalar(0.65 + ease * 2.8);
+          }
+
+          // Touchdown core flash
+          const ft = Math.min(1, postAge / 0.22);
+          flashMesh.visible = ft < 1;
+          if (ft < 1) {
+            flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.5);
+            flashMesh.scale.setScalar(2.0 + ft * 1.8);
+          }
+
+          // Elevated white-blue ring
+          const tt = Math.min(1, postAge / 0.36);
+          torus.visible = tt < 1;
+          if (tt < 1) {
+            const ease = 1 - Math.pow(1 - tt, 2.2);
+            torus.scale.setScalar(0.5 + ease * 2.4);
+            torus.position.y = 0.22 + ease * 0.65;
+            torusMat.opacity = (1 - tt) * 0.92;
+          }
+
+          // Voxel cubes
+          const ct = Math.min(1, postAge / 0.58);
+          for (const cb of cubes) {
+            cb.mesh.visible = ct < 1;
+            if (ct < 1) {
+              cb.vy -= 11.5 * dt;
+              cb.mesh.position.x += cb.vx * dt;
+              cb.mesh.position.y = Math.max(0.1, cb.mesh.position.y + cb.vy * dt);
+              cb.mesh.position.z += cb.vz * dt;
+              cb.mesh.rotation.x += cb.rx * dt;
+              cb.mesh.rotation.y += cb.ry * dt;
+              cb.mat.opacity = ct > 0.55 ? 1 - (ct - 0.55) / 0.45 : 1;
+            }
+          }
+
+          // Velocity-stretched royal-blue streaks
+          const stT = Math.min(1, postAge / 0.3);
+          for (const st of streaks) {
+            st.mesh.visible = stT < 1;
+            if (stT < 1) {
+              st.mesh.position.x += st.dirX * st.spd * dt;
+              st.mesh.position.z += st.dirZ * st.spd * dt;
+              st.mesh.scale.z = Math.max(0.08, (1 - stT) * 1.0);
+              st.mat.opacity = Math.pow(1 - stT, 1.3);
+            }
+          }
+        }
       },
       dispose: () => {
         this.dynamicGroup.remove(group);

@@ -192,7 +192,7 @@ export const inputMethods = {
     let best: EnemyEntity | null = null;
     let bestDist = Infinity;
     for (const e of this.viewEnemies()) {
-      if (e.dead) continue;
+      if (e.dead || e.bossWarpUntargetable) continue;
       const d = Math.hypot(e.x - h.x, e.z - h.z);
       if (d > range + this.getEnemyHitRadius(e) || d >= bestDist) continue;
       if (ranged && !hasLineOfSight(this.dungeon, h.x, h.z, e.x, e.z, this.doorUnlocked, 0.2)) continue;

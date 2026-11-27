@@ -1,7 +1,7 @@
 import type { EmbervaultEngine } from '../engine';
 import { BOT_REGROUP_DIST, BOT_REGROUP_DONE_DIST, COMPANION_EDGE_NDC, COMPANION_WARP_DIST, FROST_MAGE, HERO_CLASSES, HUNTER, UpgradeKind } from '../classes';
 import { findGridPath, gridToWorld, hasLineOfSight, isTileWalkable, worldToGrid, worldToWalkableGrid } from '../dungeon';
-import { BOSS_AI, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, isGuardianEnemy, isSwarmEnemy } from './data';
+import { BOSS_AI, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, BOSS_WARP, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, EnemyEntity, LootEntity } from './entities';
 import { _projVec } from './scratch';
 import { Hero } from '../hero';
@@ -145,7 +145,7 @@ export const aiMethods = {
     let cz = 0;
     let cn = 0;
     for (const e of this.enemies) {
-      if (e.dead) continue;
+      if (e.dead || e.bossWarpUntargetable) continue;
       const d = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
       const frozen = (e.frozenTimer ?? 0) > 0 || e.stunTimer > 0;
       if (d <= 4 && !frozen) within4 += 1;
@@ -294,7 +294,32 @@ export const aiMethods = {
     };
 
     for (const e of this.enemies) {
-      if (e.dead || !e.isBoss || e.bossState !== 'windup' || e.bossAction === 'basic') continue;
+      if (e.dead || !e.isBoss || e.bossAction === 'basic') continue;
+
+      // warp_ambush Phase 3: royal-blue landing rings locked nearby -> pull away early before the seamless follow-up slam!
+      if (e.bossState === 'strike' && e.bossSkill === 'warp_ambush' && e.bossWarpPhase === 'descend') {
+        const tx = e.telegraphX ?? e.x;
+        const tz = e.telegraphZ ?? e.z;
+        const cdx = hx - tx;
+        const cdz = hz - tz;
+        const cDist = Math.hypot(cdx, cdz);
+        const safeRad = (e.telegraphRadius ?? BOSS_WARP.telegraphRadius) + margin + 1.2;
+        if (cDist < safeRad) {
+          this.hero.ai.status = 'Evading Boss Warp';
+          const escX = cDist > 0.05 ? cdx / cDist : Math.cos(this.elapsed);
+          const escZ = cDist > 0.05 ? cdz / cDist : Math.sin(this.elapsed);
+          if (this.hero.dashCooldown <= 0 && cDist < 2.3 && (e.bossStateTimer ?? 0) < 0.16) {
+            this.hero.facing = Math.atan2(escX, escZ);
+            this.performDash();
+          }
+          return stepAway(escX, escZ);
+        }
+        continue;
+      }
+
+      if (e.bossState !== 'windup') continue;
+      // warp_ambush Phase 1 (takeoff chant) deals no damage at takeoff — keep fighting instead of fleeing
+      if (e.bossSkill === 'warp_ambush') continue;
       const remaining = e.bossStateTimer ?? 0;
       const dur = e.bossStateDuration || 1;
 
@@ -594,7 +619,7 @@ export const aiMethods = {
     // any target once they have been pulled more than 10 away from it (they never explore or chase).
     const away = this.isAwayMode(this.hero);
     for (const e of this.enemies) {
-      if (e.dead) continue;
+      if (e.dead || e.bossWarpUntargetable) continue;
       if (away && (!this.withinLeash(this.hero.x, this.hero.z, 10) || !this.withinLeash(e.x, e.z, 8))) continue;
       const skipUntil = this.hero.ai.skipEnemyUntil.get(e.id);
       if (skipUntil !== undefined && this.elapsed < skipUntil) continue;
@@ -739,7 +764,7 @@ export const aiMethods = {
         let hasPriorityInterrupt = false;
         let hasUnstunnedElite = false;
         for (const e of this.enemies) {
-          if (e.dead) continue;
+          if (e.dead || e.bossWarpUntargetable) continue;
           const ed = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
           const eReach = 2.55 + (e.isBoss ? 0.5 : e.isElite ? 0.18 : 0);
           if (ed <= eReach) {

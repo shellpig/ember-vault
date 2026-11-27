@@ -99,7 +99,7 @@ export const heroCombatMethods = {
       const dashAtkMult = 1 + this.hero.atkUpgrades * 0.1 + this.hero.relicStats.atkPct / 100;
       const fireDmg = Math.max(8, Math.round(14 * dashAtkMult));
       for (const e of this.enemies) {
-        if (e.dead) continue;
+        if (e.dead || e.bossWarpUntargetable) continue;
         const edx = e.x - this.hero.x;
         const edz = e.z - this.hero.z;
         const edist = Math.hypot(edx, edz);
@@ -162,7 +162,7 @@ export const heroCombatMethods = {
     tone: FloatingLabelData['tone'],
     particleColor: number
   ): void {
-    if (enemy.dead || bonusDmg <= 0) return;
+    if (enemy.dead || enemy.bossWarpUntargetable || bonusDmg <= 0) return;
     const rawDmg = bonusDmg;
     bonusDmg = this.scaleEnemyDamageTaken(enemy, bonusDmg);
     if (bonusDmg !== rawDmg) label = label.replace(`-${rawDmg}`, `-${bonusDmg}`);
@@ -274,7 +274,7 @@ export const heroCombatMethods = {
 
     // Damage enemies in arc
     for (const enemy of this.enemies) {
-      if (enemy.dead) continue;
+      if (enemy.dead || enemy.bossWarpUntargetable) continue;
       const dx = enemy.x - this.hero.x;
       const dz = enemy.z - this.hero.z;
       const dist = Math.hypot(dx, dz);
@@ -500,7 +500,7 @@ export const heroCombatMethods = {
     if (isCrit && this.hero.hasUnique('ember_crit_nova')) {
       const splashDmg = Math.max(2, Math.round(dmg * 0.22));
       for (const other of this.enemies) {
-        if (other.dead || other.id === enemy.id) continue;
+        if (other.dead || other.bossWarpUntargetable || other.id === enemy.id) continue;
         if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 2.9) {
           this.applyBonusEnemyDamage(other, splashDmg, `焚燒 -${splashDmg}`, 'relicOrange', 0xff6224);
         }
@@ -528,7 +528,7 @@ export const heroCombatMethods = {
       const arcDmg = Math.max(3, Math.round(dmg * 0.2));
       let chained = 0;
       for (const other of this.enemies) {
-        if (other.dead || other.id === enemy.id || chained >= 3) continue;
+        if (other.dead || other.bossWarpUntargetable || other.id === enemy.id || chained >= 3) continue;
         if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 5.2) {
           chained += 1;
           this.applyBonusEnemyDamage(other, arcDmg, `⚡ -${arcDmg}`, 'info', 0x62f5ff);
@@ -540,7 +540,7 @@ export const heroCombatMethods = {
     if (this.hero.hasSet4pc('dragonfire')) {
       const fireDmg = Math.max(2, Math.round(dmg * 0.14));
       for (const other of this.enemies) {
-        if (other.dead || other.id === enemy.id) continue;
+        if (other.dead || other.bossWarpUntargetable || other.id === enemy.id) continue;
         if (Math.hypot(other.x - enemy.x, other.z - enemy.z) <= 2.4) {
           this.applyBonusEnemyDamage(other, fireDmg, `龍炎 -${fireDmg}`, 'relicOrange', 0xff5a1f);
         }
@@ -553,7 +553,7 @@ export const heroCombatMethods = {
       const bladeDmg = Math.max(3, Math.round(dmg * 0.18));
       let hits = 0;
       for (const other of this.enemies) {
-        if (other.dead || hits >= 3) continue;
+        if (other.dead || other.bossWarpUntargetable || hits >= 3) continue;
         if (Math.hypot(other.x - this.hero.x, other.z - this.hero.z) <= 6.2) {
           hits += 1;
           this.applyBonusEnemyDamage(other, bladeDmg, `虛空刃 -${bladeDmg}`, 'info', 0xb46bff);
@@ -685,7 +685,7 @@ export const heroCombatMethods = {
     let landedHit = false;
 
     for (const enemy of this.enemies) {
-      if (enemy.dead) continue;
+      if (enemy.dead || enemy.bossWarpUntargetable) continue;
       const dx = enemy.x - this.hero.x;
       const dz = enemy.z - this.hero.z;
       const dist = Math.hypot(dx, dz);
@@ -832,7 +832,7 @@ export const heroCombatMethods = {
   },
 
   applySlow(this: EmbervaultEngine, e: EnemyEntity): void {
-    if (e.dead) return;
+    if (e.dead || e.bossWarpUntargetable) return;
     const factor = e.isBoss
       ? FROST_MAGE.bossSlowFactor
       : e.isElite || isGuardianEnemy(e.kind)
@@ -856,7 +856,7 @@ export const heroCombatMethods = {
   },
 
   applyFreeze(this: EmbervaultEngine, e: EnemyEntity, duration: number): void {
-    if (e.dead) return;
+    if (e.dead || e.bossWarpUntargetable) return;
     e.frozenTimer = Math.max(e.frozenTimer ?? 0, duration);
     // Freezing interrupts boss windups / ranged casts, exactly like Pommel Strike
     if (e.isBoss && (e.bossState === 'windup' || e.bossState === 'strike')) {
@@ -889,7 +889,7 @@ export const heroCombatMethods = {
     let best: EnemyEntity | null = null;
     let bestDist = Infinity;
     for (const e of this.viewEnemies()) {
-      if (e.dead) continue;
+      if (e.dead || e.bossWarpUntargetable) continue;
       const d = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
       if (d > range + this.getEnemyHitRadius(e) || d >= bestDist) continue;
       if (
@@ -953,7 +953,7 @@ export const heroCombatMethods = {
         this.hero.hp = Math.min(effMaxHp, this.hero.hp + 3);
         this.emitFloatingText(this.hero.x, 2.25, this.hero.z, '+3 HP 聖盾反震', 'heal');
         for (const e of this.enemies) {
-          if (e.dead) continue;
+          if (e.dead || e.bossWarpUntargetable) continue;
           const edx = e.x - this.hero.x;
           const edz = e.z - this.hero.z;
           const edist = Math.hypot(edx, edz);
@@ -1043,7 +1043,7 @@ export const heroCombatMethods = {
     if (this.hero.hasUnique('eclipse_reflect_beam')) {
       const refDmg = Math.max(4, Math.round(actualDamage * 1.5));
       for (const e of this.enemies) {
-        if (e.dead) continue;
+        if (e.dead || e.bossWarpUntargetable) continue;
         if (Math.hypot(e.x - this.hero.x, e.z - this.hero.z) <= 3.8) {
           this.applyBonusEnemyDamage(e, refDmg, `蝕月反衝 -${refDmg}`, 'info', 0xc88cff);
         }
@@ -1079,7 +1079,7 @@ export const heroCombatMethods = {
         duckHeal ? 'heal' : 'relicYellow'
       );
       for (const e of this.enemies) {
-        if (e.dead) continue;
+        if (e.dead || e.bossWarpUntargetable) continue;
         const edx = e.x - this.hero.x;
         const edz = e.z - this.hero.z;
         const edist = Math.hypot(edx, edz);
@@ -1133,7 +1133,7 @@ export const heroCombatMethods = {
       this.pushBanner('時光砂漏觸發！', '時間凝滯 · 逆轉死亡');
       this.emitFloatingText(this.hero.x, 2.2, this.hero.z, 'TIME REWIND!', 'relicOrange');
       for (const e of this.enemies) {
-        if (e.dead) continue;
+        if (e.dead || e.bossWarpUntargetable) continue;
         const edx = e.x - this.hero.x;
         const edz = e.z - this.hero.z;
         const edist = Math.hypot(edx, edz);

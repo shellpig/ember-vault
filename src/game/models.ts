@@ -143,6 +143,7 @@ function addContactShadow(parent: THREE.Group, shadowMap: THREE.Texture, radius:
   const disc = new THREE.Mesh(geo, mat);
   disc.rotation.x = -Math.PI / 2;
   disc.position.y = 0.025;
+  disc.userData.isContactShadow = true;
   parent.add(disc);
 }
 

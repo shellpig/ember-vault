@@ -94,7 +94,7 @@ export const frameMethods = {
       this.hero.dragonAuraTimer -= dt;
       if (this.hero.dragonAuraTimer <= 0) {
         const nearbyEnemies = this.enemies.filter(
-          (e) => !e.dead && Math.hypot(e.x - this.hero.x, e.z - this.hero.z) <= 3.6
+          (e) => !e.dead && !e.bossWarpUntargetable && Math.hypot(e.x - this.hero.x, e.z - this.hero.z) <= 3.6
         );
         if (nearbyEnemies.length > 0) {
           this.hero.dragonAuraTimer = 3.0;

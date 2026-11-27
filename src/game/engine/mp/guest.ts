@@ -2,7 +2,7 @@ import { EmbervaultEngine } from '../../engine';
 import type { DoorSnap, EnemyStatic, GameEvent, InputPayload, LevelPayload, PrivatePayload, SnapshotPayload, WorldSnap } from '../../../../shared/game';
 import { EF_BOSS_SHIFT, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
 import { HeroClassId, PetSpecies } from '../../classes';
-import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_PRISM, BOSS_SKILL_LIST, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
+import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_PRISM, BOSS_SKILL_LIST, BOSS_WARP, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
 import { BreakableEntity, EnemyEntity, HeroProjectileEntity, LootEntity, MpGuestState, MpSample, ProjectileEntity } from '../entities';
 import { Hero } from '../../hero';
 import { BossTelegraphRig, applyEliteVisuals, createBossTelegraph, createEnemyModel, createHunterArrowMesh, createHunterPetModel, createIceSpikeMesh, createLootMesh, createProjectileMesh, createRelicLootMesh } from '../../models';
@@ -221,14 +221,25 @@ export const guestMpMethods = {
         p.e.slowTimer = flags & EF_SLOW ? 0.3 : 0;
         if (flags & EF_HIT || en[4] < prevHp) p.e.hitFlash = 0.12;
         if (p.e.isBoss) {
-          p.e.bossState = EmbervaultEngine.MP_BOSS_STATES[(flags >> EF_BOSS_SHIFT) & 3] ?? 'chase';
+          const nextState = EmbervaultEngine.MP_BOSS_STATES[(flags >> EF_BOSS_SHIFT) & 3] ?? 'chase';
+          const nextSkill = en[10] !== undefined ? BOSS_SKILL_LIST[en[10]] ?? 'slam' : p.e.bossSkill ?? 'slam';
+          p.e.bossState = nextState;
           p.e.bossEnraged = (flags & EF_ENRAGED) !== 0;
           p.e.bossStateDuration = 1;
           p.e.bossStateTimer = (en[6] ?? 0) / 100;
           p.e.telegraphX = (en[7] ?? 0) / 100;
           p.e.telegraphZ = (en[8] ?? 0) / 100;
           p.e.telegraphRadius = (en[9] ?? 0) / 100;
-          if (en[10] !== undefined) p.e.bossSkill = BOSS_SKILL_LIST[en[10]] ?? 'slam';
+          p.e.bossSkill = nextSkill;
+          p.e.bossWarpUntargetable = nextState === 'strike' && nextSkill === 'warp_ambush';
+          // Flush interpolation buffer on warp_ambush jump so the vanished boss teleports cleanly instead of sliding
+          if (nextState === 'strike' && nextSkill === 'warp_ambush' && p.buf.length >= 2) {
+            const prevS = p.buf[p.buf.length - 2];
+            const curS = p.buf[p.buf.length - 1];
+            if (Math.hypot(curS.x - prevS.x, curS.z - prevS.z) > 0.9) {
+              p.buf = [curS];
+            }
+          }
         }
       }
     }
@@ -883,6 +894,16 @@ export const guestMpMethods = {
         const tz = e.telegraphZ ?? e.z;
         const rad = e.telegraphRadius ?? 0;
 
+        // Capture charge_slam start position when entering windup so the chevron lane draws accurately
+        if (
+          e.bossState === 'windup' &&
+          skill === 'charge_slam' &&
+          (e.prevBossState !== 'windup' || e.prevBossSkill !== 'charge_slam')
+        ) {
+          e.bossChargeStartX = e.x;
+          e.bossChargeStartZ = e.z;
+        }
+
         // Trigger burst VFX once on windup -> strike transition (and on charge_slam arrival)
         if (e.prevBossState === 'windup' && e.bossState === 'strike' && rad > 0 && isFloorBoss(e.kind)) {
           const cfg = BOSS_CONFIGS[e.kind];
@@ -893,6 +914,13 @@ export const guestMpMethods = {
             e.bossChargeStartX = e.x;
             e.bossChargeStartZ = e.z;
             this.spawnBossChargeDashVfx(e.x, e.z, tx, tz, 0.3, cfg.telegraphColor);
+          } else if (skill === 'warp_ambush') {
+            e.bossWarpGuestTimer = 0;
+            e.bossWarpGuestDescTimer = 0;
+            e.bossWarpGuestArrived = false;
+            e.bossWarpOriginX = e.x;
+            e.bossWarpOriginZ = e.z;
+            this.spawnBossWarpTakeoffVfx(e.x, e.z, BOSS_WARP.ascendDur);
           } else if (skill === 'nova_ring') {
             const beams = this.computeNovaBeams(tx, tz, e.facing);
             const laserColor = e.kind === 'boss_mothership_ai' ? 0x38c8ff : cfg.telegraphColor;
@@ -916,7 +944,37 @@ export const guestMpMethods = {
             BOSS_CONFIGS[e.kind].telegraphColor
           );
         }
+
+        // Sync warp_ambush Phase 2 (ascend fade-out) & Phase 3 (landing 5 rings + descend fade-in)
+        if (e.bossState === 'strike' && skill === 'warp_ambush') {
+          e.bossWarpGuestTimer = (e.bossWarpGuestTimer ?? 0) + dt;
+          const strikeProg = 1 - (e.bossStateTimer ?? 0);
+          const ascendFrac = BOSS_WARP.ascendDur / (BOSS_WARP.ascendDur + BOSS_WARP.descendDur);
+          const teleMoved =
+            Math.hypot(tx - (e.bossWarpOriginX ?? tx), tz - (e.bossWarpOriginZ ?? tz)) > 0.5;
+          if (!e.bossWarpGuestArrived && (teleMoved || strikeProg >= ascendFrac)) {
+            e.bossWarpGuestArrived = true;
+            e.bossWarpGuestDescTimer = 0;
+            e.x = tx;
+            e.z = tz;
+            e.rig.root.position.set(tx, 0, tz);
+            this.spawnBossWarpArriveVfx(tx, tz, BOSS_WARP.descendDur);
+          }
+          if (!e.bossWarpGuestArrived) {
+            const pAsc = THREE.MathUtils.clamp((e.bossWarpGuestTimer ?? 0) / BOSS_WARP.ascendDur, 0, 1);
+            this.setBossWarpVisual(e, pAsc * pAsc * BOSS_WARP.liftHeight, 1 - pAsc, true);
+          } else {
+            e.bossWarpGuestDescTimer = (e.bossWarpGuestDescTimer ?? 0) + dt;
+            const pDesc = THREE.MathUtils.clamp(e.bossWarpGuestDescTimer / BOSS_WARP.descendDur, 0, 1);
+            const easeOut = 1 - Math.pow(1 - pDesc, 2.2);
+            this.setBossWarpVisual(e, (1 - easeOut) * BOSS_WARP.liftHeight, pDesc, pDesc < 0.85);
+          }
+        } else if (e.bossWarpVisualDirty) {
+          this.resetBossWarpVisual(e);
+        }
+
         e.prevBossState = e.bossState;
+        e.prevBossSkill = skill;
 
         if (e.telegraph) {
           // A windup without a telegraph radius is a basic attack: nothing on the ground

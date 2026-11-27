@@ -15,6 +15,7 @@ import {
   BOSS_RECOVER,
   BOSS_SKILLS,
   BOSS_VOLLEY,
+  BOSS_WARP,
   BossActionType,
   BossConfig,
   BossSkillKind,
@@ -77,7 +78,7 @@ export const enemiesMethods = {
   /** Red aura + pulsing red tint of an enraged boss. Runs on the host and, from the snapshot flag, on teammates. */
   updateBossRageVisual(this: EmbervaultEngine, e: EnemyEntity, dt: number): void {
     if (!e.isBoss) return;
-    if (!e.bossEnraged) {
+    if (!e.bossEnraged || e.bossWarpUntargetable) {
       if (e.rig.rageAura) e.rig.rageAura.visible = false;
       return;
     }
@@ -125,91 +126,65 @@ export const enemiesMethods = {
   },
 
   /**
-   * Chase state, cooldown over: start the pre-rolled action type if it is possible right now, otherwise keep chasing
-   * (docs/boss-spec.md section 5). A skill that cannot be cast falls back to a basic attack.
+   * Find an unobstructed landing position for `warp_ambush` adjacent to `(hx, hz)` at distance 1.4-1.8 tiles.
    */
-  bossTryStartAction(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig, dx: number, dz: number, dist: number, dt: number): void {
-    const hasLOS = hasLineOfSight(this.dungeon, e.x, e.z, this.hero.x, this.hero.z, this.doorUnlocked, 0.35);
-    const wantType = e.bossNextType ?? 'skill';
+  findWarpLandingSpot(
+    this: EmbervaultEngine,
+    hx: number,
+    hz: number,
+    fromX: number,
+    fromZ: number
+  ): { x: number; z: number } {
+    // Prefer ambushing behind / flanking the player relative to the boss's takeoff position
+    const baseAng = Math.atan2(hx - fromX, hz - fromZ) + (Math.random() - 0.5) * 1.3;
+    const radii = [1.6, 1.45, 1.75, BOSS_WARP.landDistMin, BOSS_WARP.landDistMax];
+    const samples = 16;
 
-    const canBasic = (): boolean =>
-      cfg.bossType === 'melee'
-        ? dist <= BOSS_BASIC.melee.reach
-        : dist <= BOSS_BASIC.caster.range && hasLOS;
-
-    const skillRange = (s: BossSkillKind): number => {
-      const spec = BOSS_SKILLS[s];
-      return (spec.range ?? cfg.triggerRange) + (spec.rangeBonus ?? 0);
-    };
-    const canCastSkill = (s: BossSkillKind): boolean => {
-      if (dist > skillRange(s)) return false;
-      if (BOSS_SKILLS[s].needsLos && !hasLOS) return false;
-      return true;
-    };
-
-    const pickSkill = (): BossSkillKind | null => {
-      const skills = cfg.skills;
-      const idx = (e.bossSkillIndex ?? 0) % skills.length;
-      for (let offset = 0; offset < skills.length; offset++) {
-        const cand = skills[(idx + offset) % skills.length];
-        if (canCastSkill(cand)) {
-          e.bossSkillIndex = (idx + offset) % skills.length;
-          return cand;
+    for (const r of radii) {
+      for (let k = 0; k < samples; k++) {
+        // Alternate clockwise / counter-clockwise outward from baseAng
+        const step = k % 2 === 0 ? k / 2 : -Math.ceil(k / 2);
+        const ang = baseAng + (step / samples) * Math.PI * 2;
+        const cx = hx + Math.sin(ang) * r;
+        const cz = hz + Math.cos(ang) * r;
+        if (
+          this.canMoveTo(cx, cz, 0.52) &&
+          hasLineOfSight(this.dungeon, hx, hz, cx, cz, this.doorUnlocked, 0.25)
+        ) {
+          return { x: cx, z: cz };
         }
       }
-      return null;
-    };
-
-    let skill: BossSkillKind | null = null;
-    let type: BossActionType | null = null;
-    if (wantType === 'skill') {
-      skill = pickSkill();
-      if (skill) type = 'skill';
-      else if (canBasic()) type = 'basic';
-    } else if (canBasic()) {
-      type = 'basic';
-    } else if (cfg.bossType === 'melee') {
-      // Melee boss kited out of basic reach: after a short chase timeout, switch to an in-range skill
-      e.bossBasicChaseTimer = (e.bossBasicChaseTimer ?? 0) + dt;
-      if (e.bossBasicChaseTimer >= BOSS_ACTION.meleeBasicChaseTimeout) {
-        skill = pickSkill();
-        if (skill) type = 'skill';
+    }
+    // Fallback without LOS requirement in very tight corners
+    for (const r of [1.6, 1.4, 1.8, 1.15, 2.0]) {
+      for (let k = 0; k < samples; k++) {
+        const ang = baseAng + (k / samples) * Math.PI * 2;
+        const cx = hx + Math.sin(ang) * r;
+        const cz = hz + Math.cos(ang) * r;
+        if (this.canMoveTo(cx, cz, 0.52)) return { x: cx, z: cz };
       }
     }
-    if (!type) return; // keep chasing
-    e.bossBasicChaseTimer = 0;
+    return this.canMoveTo(hx, hz, 0.52) ? { x: hx, z: hz } : { x: fromX, z: fromZ };
+  },
 
-    e.bossAction = type;
-    if (e.bossLastType === type) e.bossStreak = (e.bossStreak ?? 0) + 1;
-    else {
-      e.bossLastType = type;
-      e.bossStreak = 1;
-    }
-    e.bossNextType = this.bossRollNextType(e);
+  /** Enter the windup state for a chosen boss skill (shared by normal action picks & warp_ambush Phase 4 chain). */
+  startBossSkillWindup(
+    this: EmbervaultEngine,
+    e: EnemyEntity,
+    cfg: BossConfig,
+    chosen: BossSkillKind,
+    dx: number,
+    dz: number,
+    dist: number
+  ): void {
+    const spec = BOSS_SKILLS[chosen];
+    e.bossAction = 'skill';
     e.bossState = 'windup';
     e.bossHitApplied = false;
-    e.facing = Math.atan2(dx, dz);
-
-    if (type === 'basic') {
-      const basic = cfg.bossType === 'melee' ? BOSS_BASIC.melee : BOSS_BASIC.caster;
-      const windupDur = basic.windup / this.bossBasicSpeedDiv(e);
-      e.bossStateDuration = windupDur;
-      e.bossStateTimer = windupDur;
-      // No ground circle for a basic attack: radius 0 also tells teammates not to draw one
-      e.telegraphX = e.x;
-      e.telegraphZ = e.z;
-      e.telegraphRadius = 0;
-      if (e.telegraph) e.telegraph.group.visible = false;
-      this.hideBossWindupVfx(e.id);
-      this.emitHud();
-      return;
-    }
-
-    const chosen = skill!;
-    const spec = BOSS_SKILLS[chosen];
     e.bossSkill = chosen;
     e.bossStateDuration = spec.windup;
     e.bossStateTimer = spec.windup;
+    e.facing = Math.atan2(dx, dz);
 
     let tx = e.x;
     let tz = e.z;
@@ -250,6 +225,10 @@ export const enemiesMethods = {
     } else if (chosen === 'nova_ring') {
       // Lock the radial laser beam angles at windup start so charge lines match the burst
       e.bossNovaAngle = e.facing;
+    } else if (chosen === 'warp_ambush') {
+      // Phase 1 takeoff chant at boss's own position (still damageable)
+      e.bossWarpPhase = undefined;
+      e.bossWarpUntargetable = false;
     }
     // ranged_volley: compact ring beneath the boss; nova_ring: centred on the boss
 
@@ -263,7 +242,9 @@ export const enemiesMethods = {
       e.telegraph.fillDisk.scale.setScalar(0.12);
       e.telegraph.group.visible = !customWindup;
     }
-    if (chosen === 'ranged_volley') {
+    if (chosen === 'warp_ambush') {
+      this.audio.playBossWarpCharge();
+    } else if (chosen === 'ranged_volley') {
       this.audio.playMageCast();
     } else if (chosen === 'nova_ring') {
       this.audio.playBossLaserCharge();
@@ -273,6 +254,115 @@ export const enemiesMethods = {
       this.audio.playBossTelegraph();
     }
     this.emitHud();
+  },
+
+  /**
+   * Chase state, cooldown over: start the pre-rolled action type if it is possible right now, otherwise keep chasing
+   * (docs/boss-spec.md section 5). A skill that cannot be cast falls back to a basic attack.
+   */
+  bossTryStartAction(this: EmbervaultEngine, e: EnemyEntity, cfg: BossConfig, dx: number, dz: number, dist: number, dt: number): void {
+    const hasLOS = hasLineOfSight(this.dungeon, e.x, e.z, this.hero.x, this.hero.z, this.doorUnlocked, 0.35);
+    const wantType = e.bossNextType ?? 'skill';
+
+    const canBasic = (): boolean =>
+      cfg.bossType === 'melee'
+        ? dist <= BOSS_BASIC.melee.reach
+        : dist <= BOSS_BASIC.caster.range && hasLOS;
+
+    const findWarpTarget = (): Hero | null => {
+      const candidates = this.heroes.filter((h) => {
+        if (h.isDead || h.inTown) return false;
+        const d = Math.hypot(h.x - e.x, h.z - e.z);
+        return d > cfg.triggerRange && d <= BOSS_ENGAGE_RANGE;
+      });
+      if (candidates.length === 0) return null;
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    };
+
+    const warpPick: { hero: Hero | null } = { hero: null };
+    const skillRange = (s: BossSkillKind): number => {
+      const spec = BOSS_SKILLS[s];
+      return (spec.range ?? cfg.triggerRange) + (spec.rangeBonus ?? 0);
+    };
+    const canCastSkill = (s: BossSkillKind): boolean => {
+      if (s === 'warp_ambush') {
+        warpPick.hero = findWarpTarget();
+        return warpPick.hero !== null;
+      }
+      if (dist > skillRange(s)) return false;
+      if (BOSS_SKILLS[s].needsLos && !hasLOS) return false;
+      return true;
+    };
+
+    const pickSkill = (): BossSkillKind | null => {
+      const skills = cfg.skills;
+      const idx = (e.bossSkillIndex ?? 0) % skills.length;
+      for (let offset = 0; offset < skills.length; offset++) {
+        const cand = skills[(idx + offset) % skills.length];
+        if (canCastSkill(cand)) {
+          e.bossSkillIndex = (idx + offset) % skills.length;
+          return cand;
+        }
+      }
+      return null;
+    };
+
+    let skill: BossSkillKind | null = null;
+    let type: BossActionType | null = null;
+    if (wantType === 'skill') {
+      skill = pickSkill();
+      if (skill) type = 'skill';
+      else if (canBasic()) type = 'basic';
+    } else if (canBasic()) {
+      type = 'basic';
+    } else if (cfg.bossType === 'melee') {
+      // Melee boss kited out of basic reach: after a short chase timeout, switch to an in-range skill
+      e.bossBasicChaseTimer = (e.bossBasicChaseTimer ?? 0) + dt;
+      if (e.bossBasicChaseTimer >= BOSS_ACTION.meleeBasicChaseTimeout) {
+        skill = pickSkill();
+        if (skill) type = 'skill';
+      }
+    }
+    if (!type) return; // keep chasing
+    e.bossBasicChaseTimer = 0;
+
+    if (e.bossLastType === type) e.bossStreak = (e.bossStreak ?? 0) + 1;
+    else {
+      e.bossLastType = type;
+      e.bossStreak = 1;
+    }
+    e.bossNextType = this.bossRollNextType(e);
+    e.bossWarpChained = false;
+
+    if (type === 'basic') {
+      e.bossAction = 'basic';
+      e.bossState = 'windup';
+      e.bossHitApplied = false;
+      e.facing = Math.atan2(dx, dz);
+      const basic = cfg.bossType === 'melee' ? BOSS_BASIC.melee : BOSS_BASIC.caster;
+      const windupDur = basic.windup / this.bossBasicSpeedDiv(e);
+      e.bossStateDuration = windupDur;
+      e.bossStateTimer = windupDur;
+      // No ground circle for a basic attack: radius 0 also tells teammates not to draw one
+      e.telegraphX = e.x;
+      e.telegraphZ = e.z;
+      e.telegraphRadius = 0;
+      if (e.telegraph) e.telegraph.group.visible = false;
+      this.hideBossWindupVfx(e.id);
+      this.emitHud();
+      return;
+    }
+
+    const chosen = skill!;
+    if (chosen === 'warp_ambush' && warpPick.hero) {
+      const target = warpPick.hero;
+      e.bossWarpTargetId = target.id;
+      const wdx = target.x - e.x;
+      const wdz = target.z - e.z;
+      this.startBossSkillWindup(e, cfg, chosen, wdx, wdz, Math.hypot(wdx, wdz));
+      return;
+    }
+    this.startBossSkillWindup(e, cfg, chosen, dx, dz, dist);
   },
 
   /** Check single-hit damage for active nova_ring laser beams + centre circle across all live heroes and pets. */
@@ -537,6 +627,16 @@ export const enemiesMethods = {
             strikeDur,
             cfg.telegraphColor
           );
+        } else if (!isBasic && skill === 'warp_ambush') {
+          // Phase 2: launch vertically & fade out (untargetable, no collision, shadow hidden)
+          e.bossWarpPhase = 'ascend';
+          e.bossWarpUntargetable = true;
+          e.vx = 0;
+          e.vz = 0;
+          if (e.telegraph) e.telegraph.group.visible = false;
+          this.hideBossWindupVfx(e.id);
+          this.audio.playBossWarpVanish();
+          this.spawnBossWarpTakeoffVfx(e.x, e.z, BOSS_WARP.ascendDur);
         }
       }
     } else if (state === 'strike') {
@@ -552,6 +652,79 @@ export const enemiesMethods = {
           e.bossHitApplied = true;
           if (cfg.bossType === 'melee') this.bossMeleeBasicHit(e, cfg);
           else this.bossCasterBasicShot(e, cfg);
+        }
+      } else if (skill === 'warp_ambush') {
+        const totalDur = e.bossStateDuration || BOSS_WARP.ascendDur + BOSS_WARP.descendDur;
+        const elapsedStrike = Math.max(0, totalDur - (e.bossStateTimer ?? 0));
+        e.vx = 0;
+        e.vz = 0;
+
+        if (elapsedStrike < BOSS_WARP.ascendDur) {
+          // Phase 2: rapid vertical launch & fade-out (opacity 1 -> 0)
+          const pAsc = THREE.MathUtils.clamp(elapsedStrike / BOSS_WARP.ascendDur, 0, 1);
+          this.setBossWarpVisual(e, pAsc * pAsc * BOSS_WARP.liftHeight, 1 - pAsc, true);
+        } else {
+          // Exact moment opacity reaches 0: lock onto chosen player's CURRENT position & descend!
+          if (!e.bossHitApplied) {
+            e.bossHitApplied = true;
+            e.bossWarpPhase = 'descend';
+            const chosenHero = e.bossWarpTargetId ? this.heroById(e.bossWarpTargetId) : null;
+            const targetHero =
+              chosenHero && !chosenHero.isDead && !chosenHero.inTown
+                ? chosenHero
+                : this.nearestLiveHero(e.x, e.z) ?? this.hero;
+            const land = this.findWarpLandingSpot(targetHero.x, targetHero.z, e.x, e.z);
+            e.x = land.x;
+            e.z = land.z;
+            e.telegraphX = land.x;
+            e.telegraphZ = land.z;
+            e.telegraphRadius = BOSS_WARP.telegraphRadius;
+            e.facing = Math.atan2(targetHero.x - land.x, targetHero.z - land.z);
+            e.rig.root.position.set(e.x, 0, e.z);
+            this.audio.playBossWarpArrive();
+            this.spawnBossWarpArriveVfx(land.x, land.z, BOSS_WARP.descendDur);
+          }
+          // Phase 3: vertical drop & fade-in (opacity 0 -> 1)
+          const pDesc = THREE.MathUtils.clamp(
+            (elapsedStrike - BOSS_WARP.ascendDur) / BOSS_WARP.descendDur,
+            0,
+            1
+          );
+          const easeOut = 1 - Math.pow(1 - pDesc, 2.2);
+          this.setBossWarpVisual(e, (1 - easeOut) * BOSS_WARP.liftHeight, pDesc, pDesc < 0.85);
+        }
+
+        // Phase 4: touchdown -> seamless follow-up slam / charge_slam (NO recover, NO cooldown!)
+        if ((e.bossStateTimer ?? 0) <= 0) {
+          this.resetBossWarpVisual(e);
+          e.bossWarpPhase = undefined;
+          e.bossWarpUntargetable = false;
+          e.bossSkillIndex = ((e.bossSkillIndex ?? 0) + 1) % cfg.skills.length;
+
+          const chosenHero = e.bossWarpTargetId ? this.heroById(e.bossWarpTargetId) : null;
+          const followHero =
+            chosenHero && !chosenHero.isDead && !chosenHero.inTown
+              ? chosenHero
+              : this.nearestLiveHero(e.x, e.z) ?? this.hero;
+          const fdx = followHero.x - e.x;
+          const fdz = followHero.z - e.z;
+          const fDist = Math.hypot(fdx, fdz);
+          const followLOS = hasLineOfSight(
+            this.dungeon,
+            e.x,
+            e.z,
+            followHero.x,
+            followHero.z,
+            this.doorUnlocked,
+            0.35
+          );
+          const followSkill: BossSkillKind =
+            fDist <= cfg.triggerRange ? 'slam' : followLOS ? 'charge_slam' : 'slam';
+          e.bossWarpChained = true;
+          this.startBossSkillWindup(e, cfg, followSkill, fdx, fdz, fDist);
+          e.rig.root.position.set(e.x, 0, e.z);
+          e.rig.body.rotation.y = e.facing;
+          return;
         }
       } else if (skill === 'charge_slam') {
         // Dash rapidly from start to locked landing point, leaving a glowing trail, then slam on arrival
@@ -780,7 +953,10 @@ export const enemiesMethods = {
         e.bossState = 'recover';
         e.bossStateDuration = recoverDur;
         e.bossStateTimer = recoverDur;
-        if (!isBasic) e.bossSkillIndex = ((e.bossSkillIndex ?? 0) + 1) % cfg.skills.length;
+        if (!isBasic) {
+          if (e.bossWarpChained) e.bossWarpChained = false;
+          else e.bossSkillIndex = ((e.bossSkillIndex ?? 0) + 1) % cfg.skills.length;
+        }
         this.emitHud();
       }
     } else if (state === 'recover') {
@@ -817,6 +993,7 @@ export const enemiesMethods = {
         : 0;
 
     const isCasterBasic = e.bossAction === 'basic' && cfg.bossType === 'caster';
+    const isWarp = e.bossAction !== 'basic' && e.bossSkill === 'warp_ambush';
 
     if (e.bossState === 'windup') {
       const p = THREE.MathUtils.clamp(
@@ -824,7 +1001,13 @@ export const enemiesMethods = {
         0,
         1
       );
-      if (isCasterBasic) {
+      if (isWarp) {
+        // Levitating spatial-chant pose while the 5 royal-blue rings lock around the boss
+        e.rig.body.position.y = hoverY + p * 0.35;
+        e.rig.body.rotation.x = -p * 0.14;
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = -p * 1.45;
+        if (e.rig.leftArm) e.rig.leftArm.rotation.x = -p * 1.45;
+      } else if (isCasterBasic) {
         // Poised floating cast (no backward recoil that looks like being hit)
         e.rig.body.position.y = hoverY + p * 0.08;
         e.rig.body.rotation.x = THREE.MathUtils.damp(e.rig.body.rotation.x, 0, 12, dt);
@@ -840,7 +1023,12 @@ export const enemiesMethods = {
         }
       }
     } else if (e.bossState === 'strike') {
-      if (isCasterBasic) {
+      if (isWarp) {
+        // Preserve vertical liftY driven by setBossWarpVisual; keep upright dramatic warp silhouette
+        e.rig.body.rotation.x = 0;
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = -0.45;
+        if (e.rig.leftArm) e.rig.leftArm.rotation.x = -0.45;
+      } else if (isCasterBasic) {
         // Crisp forward staff cast while staying upright
         e.rig.body.position.y = hoverY + 0.04;
         e.rig.body.rotation.x = 0.06;
@@ -893,11 +1081,14 @@ export const enemiesMethods = {
       }
     }
 
-    // Flash white on hit, or pulse warning color during windup
+    // Flash white on hit, royal-blue during warp_ambush, or pulse warning color during windup
     for (const m of e.rig.flashMaterials) {
       if (e.hitFlash > 0) {
         m.emissive.setHex(0xffffff);
         m.emissiveIntensity = 0.85;
+      } else if (isWarp && (e.bossState === 'windup' || e.bossState === 'strike')) {
+        m.emissive.setHex(BOSS_WARP.color);
+        m.emissiveIntensity = 0.42 + Math.sin(this.elapsed * 26) * 0.2;
       } else if (e.bossState === 'windup') {
         m.emissive.setHex(cfg.telegraphColor);
         m.emissiveIntensity = isCasterBasic ? 0.16 : 0.25 + Math.sin(this.elapsed * 22) * 0.18;
@@ -1173,7 +1364,7 @@ export const enemiesMethods = {
 
       // Soft separation from other enemies
       for (const other of this.enemies) {
-        if (other === e || other.dead) continue;
+        if (other === e || other.dead || other.bossWarpUntargetable) continue;
         const ox = e.x - other.x;
         const oz = e.z - other.z;
         const od = Math.hypot(ox, oz);
@@ -1303,7 +1494,7 @@ export const enemiesMethods = {
         }
       }
 
-      if (e.stunTimer > 0 || isFrozen) {
+      if ((e.stunTimer > 0 || isFrozen) && !e.bossWarpUntargetable) {
         // Stunned / Frozen: only slide from remaining knockback, sway dizzily, cannot move/attack/cast
         const stunnedPos = this.moveWithSlide(e.x, e.z, e.vx * dt, e.vz * dt, e.isBoss ? 0.72 : 0.38);
         e.x = stunnedPos.x;
@@ -1382,7 +1573,7 @@ export const enemiesMethods = {
 
         // Soft separation between enemies so packs fan around the hero instead of stacking identically
         for (const other of this.enemies) {
-          if (other === e || other.dead) continue;
+          if (other === e || other.dead || other.bossWarpUntargetable) continue;
           const ox = e.x - other.x;
           const oz = e.z - other.z;
           const od = Math.hypot(ox, oz);

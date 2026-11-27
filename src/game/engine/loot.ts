@@ -73,6 +73,9 @@ export const lootMethods = {
 
   killEnemy(this: EmbervaultEngine, enemy: EnemyEntity): void {
     enemy.dead = true;
+    enemy.bossWarpUntargetable = false;
+    this.resetBossWarpVisual(enemy);
+    this.hideBossWindupVfx(enemy.id);
     enemy.rig.root.visible = false;
     if (this.mp?.role === 'host') this.mpEmit(['x', q100(enemy.x), q100(enemy.z), enemy.isBoss || enemy.isElite ? 1 : 0]);
     if (enemy.telegraph) {

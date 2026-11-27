@@ -194,8 +194,25 @@ export interface EnemyEntity {
     hitIds: Set<string>;
     dodgedChecked?: boolean;
   };
-  /** Guest only: previous bossState so windup -> strike triggers burst VFX once. */
+  /** Guest only: previous bossState / bossSkill so transitions trigger VFX once. */
   prevBossState?: BossAttackState;
+  prevBossSkill?: BossSkillKind;
+  /** warp_ambush runtime state (host & guest visual sync). */
+  bossWarpPhase?: 'ascend' | 'descend';
+  /** True while boss is mid-warp (ascend/descend): untargetable, no collision, shadow hidden. */
+  bossWarpUntargetable?: boolean;
+  /** Chosen distant hero id for warp_ambush landing. */
+  bossWarpTargetId?: string;
+  /** True when current slam/charge_slam was seamlessly chained from warp_ambush (don't double-advance skill index). */
+  bossWarpChained?: boolean;
+  /** True when boss materials/shadow have been modified by warp fade and need restoration. */
+  bossWarpVisualDirty?: boolean;
+  /** Guest-side local animation clocks & takeoff anchor for warp_ambush. */
+  bossWarpGuestTimer?: number;
+  bossWarpGuestDescTimer?: number;
+  bossWarpGuestArrived?: boolean;
+  bossWarpOriginX?: number;
+  bossWarpOriginZ?: number;
   /** Queued follow-up strikes of `orbital_barrage` (shots 2 & 3 track live heroes independently). */
   bossOrbitalQueue?: Array<{
     x: number;

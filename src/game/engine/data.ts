@@ -18,7 +18,8 @@ export type BossSkillKind =
   | 'ranged_volley'
   | 'targeted_blast'
   | 'prism_cone'
-  | 'orbital_barrage';
+  | 'orbital_barrage'
+  | 'warp_ambush';
 
 /** Stable index order for syncing `bossSkill` over multiplayer snapshots. */
 export const BOSS_SKILL_LIST: readonly BossSkillKind[] = [
@@ -29,6 +30,7 @@ export const BOSS_SKILL_LIST: readonly BossSkillKind[] = [
   'targeted_blast',
   'prism_cone',
   'orbital_barrage',
+  'warp_ambush',
 ];
 
 /** Special start-depth sentinel for the hidden PC Boss Test Arena (Boss Rush) mode. */
@@ -198,7 +200,7 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     triggerRange: 3.1,
     skills: ['charge_slam', 'slam'],
   },
-  // Depth 15 Cavern Boss #1 (Slam expanded range + Charge + Prism Cone)
+  // Depth 15 Cavern Boss #1 (Slam expanded range + Charge + Royal-Blue Warp Ambush)
   boss_crystal_wyrm: {
     name: 'CRYSTAL BEHEMOTH',
     bossType: 'melee',
@@ -209,7 +211,7 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x3be8ff,
     telegraphRadius: 3.6,
     triggerRange: 4.2,
-    skills: ['slam', 'charge_slam', 'prism_cone'],
+    skills: ['slam', 'charge_slam', 'warp_ambush'],
     projectileKind: 'crystal_shard',
   },
   // Depth 20 Cavern Boss #2 (Spore Slam + Laser Nova + Orbital Barrage)
@@ -268,7 +270,7 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     skills: ['ranged_volley', 'nova_ring', 'orbital_barrage'],
     projectileKind: 'ion_orb',
   },
-  // Depth 35 Alien Spaceship Boss #1 (Plasma Spread + Warp Charge + Plasma Prism Cone)
+  // Depth 35 Alien Spaceship Boss #1 (Plasma Spread + Warp Charge + Plasma Prism Cone + Royal-Blue Warp Ambush)
   boss_xeno_commander: {
     name: 'XENO OVERLORD',
     bossType: 'melee',
@@ -279,7 +281,7 @@ export const BOSS_CONFIGS: Record<FloorBossKind, BossConfig> = {
     telegraphColor: 0x39ff7a,
     telegraphRadius: 3.0,
     triggerRange: 3.15,
-    skills: ['ranged_volley', 'charge_slam', 'prism_cone'],
+    skills: ['ranged_volley', 'charge_slam', 'prism_cone', 'warp_ambush'],
     projectileKind: 'plasma_bolt',
   },
 };
@@ -350,6 +352,18 @@ export interface BossSkillSpec {
   radius: number | null;
 }
 
+/** warp_ambush: royal-blue 5-ring spatial ambush targeting a player outside slam triggerRange. */
+export const BOSS_WARP = {
+  windup: 0.6,
+  ascendDur: 0.22,
+  descendDur: 0.25,
+  landDistMin: 1.4,
+  landDistMax: 1.8,
+  liftHeight: 5.4,
+  color: 0x246bff,
+  telegraphRadius: 2.2,
+} as const;
+
 export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
   slam: { windup: 0.8, strike: 0.1, damage: 1.5, range: null, radius: null },
   nova_ring: { windup: 0.6, strike: 0.1, damage: 0.9, range: 8.5, radius: null },
@@ -358,6 +372,13 @@ export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
   targeted_blast: { windup: 0.95, strike: 0.1, damage: 1.5, range: 10.5, radius: 2.25 },
   prism_cone: { windup: 0.75, strike: 0.1, damage: 1.35, range: 6.2, radius: 5.8 },
   orbital_barrage: { windup: 0.65, strike: 0.1, damage: 0.95, range: 9.5, radius: 1.85 },
+  warp_ambush: {
+    windup: BOSS_WARP.windup,
+    strike: BOSS_WARP.ascendDur + BOSS_WARP.descendDur,
+    damage: 0,
+    range: 11.5,
+    radius: BOSS_WARP.telegraphRadius,
+  },
 };
 
 /** prism_cone: 70-degree stained-glass crystal/bone/plasma fan (tracks first 40% of windup, then locks). */

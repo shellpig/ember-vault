@@ -108,7 +108,7 @@ export const classSkillsMethods = {
         5.5
       );
     }
-    if (!target || target.dead) return;
+    if (!target || target.dead || target.bossWarpUntargetable) return;
     // Guest client only has puppet enemies; real damage is computed by host.
     if (this.mpGuestDungeon()) return;
 
@@ -401,7 +401,7 @@ export const classSkillsMethods = {
         let target: EnemyEntity | null = null;
         let bestD: number = HUNTER.petAggroRange;
         for (const e of this.enemies) {
-          if (e.dead) continue;
+          if (e.dead || e.bossWarpUntargetable) continue;
           const dPet = Math.hypot(e.x - pet.x, e.z - pet.z);
           const dOwner = Math.hypot(e.x - owner.x, e.z - owner.z);
           if (dPet < bestD && dOwner < HUNTER.petLeashReturnDist && !this.isCompanionTooFar(owner, e.x, e.z)) {
@@ -644,7 +644,7 @@ export const classSkillsMethods = {
 
         const hitTargets = this.mpGuestDungeon() && this.mp ? this.mp.guest.enemyList : this.enemies;
         for (const e of hitTargets) {
-          if (e.dead) continue;
+          if (e.dead || e.bossWarpUntargetable) continue;
           if (Math.hypot(e.x - p.x, e.z - p.z) <= hitRad + this.getEnemyHitRadius(e)) {
             if (isArrow) this.hitHunterArrow(p.x, p.z, e, p.phantomCrit);
             else this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
@@ -767,7 +767,7 @@ export const classSkillsMethods = {
     let landedHit = false;
 
     for (const enemy of this.enemies) {
-      if (enemy.dead) continue;
+      if (enemy.dead || enemy.bossWarpUntargetable) continue;
       const d = Math.hypot(enemy.x - x, enemy.z - z);
       if (d > radius + this.getEnemyHitRadius(enemy)) continue;
       // Walls block the blast
@@ -876,7 +876,7 @@ export const classSkillsMethods = {
     let landedHit = false;
 
     for (const enemy of this.enemies) {
-      if (enemy.dead) continue;
+      if (enemy.dead || enemy.bossWarpUntargetable) continue;
       const dx = enemy.x - this.hero.x;
       const dz = enemy.z - this.hero.z;
       const dist = Math.hypot(dx, dz);
@@ -946,7 +946,7 @@ export const classSkillsMethods = {
   triggerPhoenixRingAt(this: EmbervaultEngine, x: number, z: number): void {
     const fireDmg = Math.max(8, Math.round(14 * (1 + this.hero.atkUpgrades * 0.1 + this.hero.relicStats.atkPct / 100)));
     for (const e of this.enemies) {
-      if (e.dead) continue;
+      if (e.dead || e.bossWarpUntargetable) continue;
       const edx = e.x - x;
       const edz = e.z - z;
       const edist = Math.hypot(edx, edz);

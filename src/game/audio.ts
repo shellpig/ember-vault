@@ -818,6 +818,128 @@ export class DungeonAudio {
     src.start(now, 0.05, 0.46);
   }
 
+  /** Royal-blue warp_ambush Phase 1: ethereal rising spatial-ring chant (0.6s). */
+  public playBossWarpCharge(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+
+    // Twin detuned arcane harmonic sweep rising across 0.58s
+    for (const [f0, f1, vol] of [
+      [220, 740, 0.22],
+      [330, 1110, 0.16],
+    ] as const) {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f0, now);
+      osc.frequency.exponentialRampToValueAtTime(f1, now + 0.56);
+
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.01, now);
+      g.gain.linearRampToValueAtTime(vol, now + 0.36);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.62);
+    }
+
+    // 5 cascading crystalline ring chimes matching the 5 descending royal-blue rings
+    const ringFreqs = [523.25, 659.25, 783.99, 987.77, 1318.5];
+    ringFreqs.forEach((freq, i) => {
+      this.playTone(freq, 'triangle', now + i * 0.085, 0.18, 0.11);
+    });
+  }
+
+  /** Royal-blue warp_ambush Phase 2: crisp vertical zip vanish swoosh (~0.22s). */
+  public playBossWarpVanish(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(340, now);
+    osc.frequency.exponentialRampToValueAtTime(1780, now + 0.2);
+
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.28, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.24);
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(600, now);
+    bp.frequency.exponentialRampToValueAtTime(3200, now + 0.2);
+    bp.Q.value = 1.8;
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.26, now);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+    src.connect(bp);
+    bp.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(now, 0.06, 0.24);
+  }
+
+  /** Royal-blue warp_ambush Phase 3: downward spatial drop + royal-blue touchdown thump. */
+  public playBossWarpArrive(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    // 1. Rapid downward spatial-fold swoop over 0.24s
+    const drop = this.ctx.createOscillator();
+    drop.type = 'triangle';
+    drop.frequency.setValueAtTime(1520, now);
+    drop.frequency.exponentialRampToValueAtTime(190, now + 0.24);
+    const dg = this.ctx.createGain();
+    dg.gain.setValueAtTime(0.18, now);
+    dg.gain.linearRampToValueAtTime(0.32, now + 0.21);
+    dg.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    drop.connect(dg);
+    dg.connect(this.masterGain);
+    drop.start(now);
+    drop.stop(now + 0.3);
+
+    // 2. Touchdown sub-bass thump + royal-blue pulse at +0.23s
+    const land = now + 0.23;
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(175, land);
+    sub.frequency.exponentialRampToValueAtTime(38, land + 0.28);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.56, land);
+    sg.gain.exponentialRampToValueAtTime(0.001, land + 0.32);
+    sub.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(land);
+    sub.stop(land + 0.34);
+
+    // Crisp crystalline arrival chord
+    this.playTone(783.99, 'sine', land, 0.24, 0.16);
+    this.playTone(1174.66, 'triangle', land + 0.02, 0.22, 0.13);
+
+    // Touchdown air burst
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1600, land);
+    bp.frequency.exponentialRampToValueAtTime(320, land + 0.22);
+    bp.Q.value = 1.2;
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.34, land);
+    ng.gain.exponentialRampToValueAtTime(0.001, land + 0.24);
+    src.connect(bp);
+    bp.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(land, 0.04, 0.26);
+  }
+
   public playBossVolley(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
