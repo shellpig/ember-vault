@@ -1,5 +1,14 @@
 import * as THREE from 'three';
 import { BiomeConfig } from './types';
+import {
+  AlienPalette,
+  alienFloorKinds,
+  drawAlienCrate,
+  drawAlienDecal,
+  drawAlienFloorVariant,
+  drawAlienPillar,
+  drawAlienWallVariant,
+} from './alienTextures';
 
 export interface DungeonTextureSet {
   floorMap: THREE.CanvasTexture;
@@ -90,6 +99,15 @@ export function createDungeonTextures(
 
   const baseRgb = hexToRgb(biome.floorBase);
   const accentRgb = hexToRgb(biome.floorAccent);
+  const alienPal: AlienPalette = {
+    isCore: biome.id === 'alien_core',
+    floor: baseRgb,
+    floorAcc: accentRgb,
+    mortar: biome.floorMortar,
+    wall: hexToRgb(biome.wallBase),
+    wallAcc: hexToRgb(biome.wallAccent),
+    accent: hexToRgb(biome.runeCss),
+  };
 
   fctx.fillStyle = biome.floorMortar;
   fctx.fillRect(0, 0, 64, 64);
@@ -388,82 +406,7 @@ export function createDungeonTextures(
   } else if (theme === 'flesh') {
     drawFleshFloorVariant(fctx, fbctx, 0, seed * 19 + 203);
   } else if (theme === 'alien') {
-    // Bright Blue-Silver Sci-Fi Starship Deck Plating with recessed grip treads, rivets & glowing cyan conduits
-    fctx.fillStyle = '#1b3554';
-    fctx.fillRect(0, 0, 64, 64);
-    fbctx.fillStyle = '#252525';
-    fbctx.fillRect(0, 0, 64, 64);
-
-    // 2x2 brushed titanium deck tiles
-    for (let gy = 0; gy < 2; gy++) {
-      for (let gx = 0; gx < 2; gx++) {
-        const px = gx * 32 + 2;
-        const py = gy * 32 + 2;
-        const pw = 28;
-        const ph = 28;
-        const isAcc = (gx + gy) % 2 === 1;
-        const rgb = isAcc ? accentRgb : baseRgb;
-
-        fctx.fillStyle = shiftColor(rgb, 8);
-        fctx.fillRect(px, py, pw, ph);
-
-        // Brushed metallic micro-streaks
-        for (let sy = py + 2; sy < py + ph - 2; sy += 2) {
-          const streak = Math.floor((rand() - 0.5) * 14);
-          fctx.fillStyle = shiftColor(rgb, 8 + streak);
-          fctx.fillRect(px + 2, sy, pw - 4, 1);
-        }
-
-        // Crisp chrome bevel highlight & dark lower seam
-        fctx.fillStyle = '#e8f5ff';
-        fctx.fillRect(px, py, pw, 1);
-        fctx.fillRect(px, py, 1, ph);
-        fctx.fillStyle = '#537396';
-        fctx.fillRect(px, py + ph - 1, pw, 1);
-        fctx.fillRect(px + pw - 1, py, 1, ph);
-
-        // Corner titanium bolts
-        fctx.fillStyle = '#38587a';
-        fctx.fillRect(px + 2, py + 2, 2, 2);
-        fctx.fillRect(px + pw - 4, py + 2, 2, 2);
-        fctx.fillRect(px + 2, py + ph - 4, 2, 2);
-        fctx.fillRect(px + pw - 4, py + ph - 4, 2, 2);
-        fctx.fillStyle = '#f0faff';
-        fctx.fillRect(px + 2, py + 2, 1, 1);
-        fctx.fillRect(px + pw - 4, py + 2, 1, 1);
-
-        // Central recessed deck grip ribs
-        fctx.fillStyle = shiftColor(rgb, -18);
-        fctx.fillRect(px + 7, py + 8, 14, 12);
-        fctx.fillStyle = shiftColor(rgb, 24);
-        for (let ry = 10; ry <= 16; ry += 3) {
-          fctx.fillRect(px + 9, py + ry, 10, 1);
-        }
-
-        // Bump map
-        fbctx.fillStyle = '#dcdcdc';
-        fbctx.fillRect(px, py, pw, ph);
-        fbctx.fillStyle = '#ffffff';
-        fbctx.fillRect(px, py, pw, 2);
-        fbctx.fillStyle = '#888888';
-        fbctx.fillRect(px + 7, py + 8, 14, 12);
-      }
-    }
-
-    // Glowing cyan energy conduits along tile seam crosshairs
-    fctx.fillStyle = '#29c8f2';
-    fctx.fillRect(31, 0, 2, 64);
-    fctx.fillRect(0, 31, 64, 2);
-    fctx.fillStyle = '#b8f7ff';
-    fctx.fillRect(31, 10, 2, 12);
-    fctx.fillRect(31, 42, 2, 12);
-    fctx.fillRect(10, 31, 12, 2);
-    fctx.fillRect(42, 31, 12, 2);
-    // Central glowing circuit node
-    fctx.fillStyle = '#75f2ff';
-    fctx.fillRect(29, 29, 6, 6);
-    fctx.fillStyle = '#ffffff';
-    fctx.fillRect(31, 31, 2, 2);
+    drawAlienFloorVariant(fctx, fbctx, alienFloorKinds(alienPal.isCore)[0], seed * 47 + 509, alienPal);
   } else {
     // Classic Stone Dungeon Flagstone Floor (Depths 1-10)
     const rows = 4;
@@ -712,64 +655,7 @@ export function createDungeonTextures(
   } else if (theme === 'flesh') {
     drawFleshWallVariant(wctx, wbctx, 0, seed * 29 + 409);
   } else if (theme === 'alien') {
-    // Bright Silver-Blue Starship Bulkhead Wall with chrome trim, air vents & glowing cyan LED strips
-    wctx.fillStyle = '#233f5e';
-    wctx.fillRect(0, 0, 64, 64);
-    wbctx.fillStyle = '#303030';
-    wbctx.fillRect(0, 0, 64, 64);
-
-    // Top structural header rail
-    wctx.fillStyle = '#d4e8fa';
-    wctx.fillRect(0, 0, 64, 8);
-    wctx.fillStyle = '#7ba3cc';
-    wctx.fillRect(0, 8, 64, 2);
-    wbctx.fillStyle = '#ffffff';
-    wbctx.fillRect(0, 0, 64, 8);
-
-    // Main twin brushed-silver bulkhead panels
-    for (let px = 0; px < 64; px += 32) {
-      wctx.fillStyle = shiftColor(wallRgb, 14);
-      wctx.fillRect(px + 2, 12, 28, 34);
-      wctx.fillStyle = '#eaf6ff';
-      wctx.fillRect(px + 2, 12, 28, 2);
-      wctx.fillRect(px + 2, 12, 1, 34);
-      wctx.fillStyle = '#5579a0';
-      wctx.fillRect(px + 2, 45, 28, 1);
-
-      // Recessed blue-steel tech bay inside panel
-      wctx.fillStyle = shiftColor(wallAccRgb, -8);
-      wctx.fillRect(px + 6, 18, 20, 22);
-      wctx.fillStyle = '#2e4e73';
-      for (let vy = 21; vy <= 33; vy += 4) {
-        wctx.fillRect(px + 9, vy, 14, 2);
-      }
-      // Small cyan telemetry indicator lights
-      wctx.fillStyle = '#47f0ff';
-      wctx.fillRect(px + 6, 14, 6, 2);
-      wctx.fillStyle = '#e0ffff';
-      wctx.fillRect(px + 14, 14, 2, 2);
-
-      wbctx.fillStyle = '#d8d8d8';
-      wbctx.fillRect(px + 2, 12, 28, 34);
-      wbctx.fillStyle = '#787878';
-      wbctx.fillRect(px + 6, 18, 20, 22);
-    }
-
-    // Horizontal luminous cyan light bar
-    wctx.fillStyle = '#1ca8e8';
-    wctx.fillRect(0, 48, 64, 4);
-    wctx.fillStyle = '#9cf8ff';
-    wctx.fillRect(2, 49, 60, 2);
-    wbctx.fillStyle = '#ffffff';
-    wbctx.fillRect(0, 48, 64, 4);
-
-    // Heavy titanium base kickplate
-    wctx.fillStyle = '#537396';
-    wctx.fillRect(0, 53, 64, 11);
-    wctx.fillStyle = '#89aed4';
-    wctx.fillRect(0, 53, 64, 2);
-    wbctx.fillStyle = '#c8c8c8';
-    wbctx.fillRect(0, 53, 64, 11);
+    drawAlienWallVariant(wctx, wbctx, 0, seed * 53 + 617, alienPal);
   } else {
     // Classic Ashlar Wall Brick (Depths 1-10)
     const brickRows = 8;
@@ -865,21 +751,7 @@ export function createDungeonTextures(
       pctx.fillRect(2, fy + 1, 24, 1);
     }
   } else if (theme === 'alien') {
-    // Brushed chrome & silver-blue reactor support column with glowing cyan plasma bands
-    pctx.fillStyle = '#b4cde6';
-    pctx.fillRect(0, 0, 32, 64);
-    pctx.fillStyle = '#e6f5ff';
-    pctx.fillRect(3, 0, 5, 64);
-    pctx.fillStyle = '#6287b0';
-    pctx.fillRect(22, 0, 8, 64);
-    for (const py of [12, 30, 48]) {
-      pctx.fillStyle = '#1f3b5c';
-      pctx.fillRect(0, py - 1, 32, 6);
-      pctx.fillStyle = '#38e8ff';
-      pctx.fillRect(0, py, 32, 4);
-      pctx.fillStyle = '#e0ffff';
-      pctx.fillRect(2, py + 1, 28, 2);
-    }
+    drawAlienPillar(pctx, seed * 59 + 71, alienPal);
   } else {
     pctx.fillStyle = shiftColor(wallRgb, -6);
     pctx.fillRect(0, 0, 32, 64);
@@ -917,25 +789,7 @@ export function createDungeonTextures(
     cctx.fillStyle = '#ff94eb';
     cctx.fillRect(10, 10, 4, 4);
   } else if (theme === 'alien') {
-    // Sealed silver-white sci-fi energy supply canister with cyan core strip
-    cctx.fillStyle = '#3c5a7d';
-    cctx.fillRect(0, 0, 32, 32);
-    cctx.fillStyle = '#cfe2f5';
-    cctx.fillRect(2, 2, 28, 28);
-    cctx.fillStyle = '#f2faff';
-    cctx.fillRect(3, 3, 26, 3);
-    cctx.fillStyle = '#6d94bd';
-    cctx.fillRect(4, 11, 24, 10);
-    cctx.fillStyle = '#2de4ff';
-    cctx.fillRect(6, 14, 20, 4);
-    cctx.fillStyle = '#e6ffff';
-    cctx.fillRect(10, 15, 12, 2);
-    // Corner clamps
-    cctx.fillStyle = '#243c59';
-    cctx.fillRect(0, 0, 6, 6);
-    cctx.fillRect(26, 0, 6, 6);
-    cctx.fillRect(0, 26, 6, 6);
-    cctx.fillRect(26, 26, 6, 6);
+    drawAlienCrate(cctx, alienPal);
   } else {
     cctx.fillStyle = theme === 'cavern' ? '#524436' : '#5c3c24';
     cctx.fillRect(0, 0, 32, 32);
@@ -1455,6 +1309,38 @@ export function createDungeonTextures(
         dctx.fillRect(10, 21, 3, 2);
         dctx.fillRect(21, 10, 2, 3);
       }
+      return finalizePixelTexture(dc, true, aniso, false);
+    });
+  } else if (theme === 'alien') {
+    // 6 deck variants (Command Deck has twice the grates), 4 bulkhead variants, 3 decals (see alienTextures.ts)
+    const kinds = alienFloorKinds(alienPal.isCore);
+    floorVariants = [floorMap];
+    for (let v = 1; v < kinds.length; v++) {
+      const vc = document.createElement('canvas');
+      vc.width = 64;
+      vc.height = 64;
+      drawAlienFloorVariant(vc.getContext('2d')!, null, kinds[v], seed * 61 + v * 919 + 37, alienPal);
+      floorVariants.push(finalizePixelTexture(vc, true, aniso, true));
+    }
+    wallVariants = [];
+    for (let v = 0; v < 4; v++) {
+      const wc = document.createElement('canvas');
+      wc.width = 64;
+      wc.height = 64;
+      const wvctx = wc.getContext('2d')!;
+      if (v === 0) {
+        wvctx.drawImage(wallCanvas, 0, 0);
+      } else {
+        drawAlienWallVariant(wvctx, null, v, seed * 67 + v * 541 + 83, alienPal);
+      }
+      wallVariants.push(finalizePixelTexture(wc, true, aniso, true));
+    }
+    wallMap = wallVariants[0];
+    floorDecalMaps = [0, 1, 2].map((dIdx) => {
+      const dc = document.createElement('canvas');
+      dc.width = 32;
+      dc.height = 32;
+      drawAlienDecal(dc.getContext('2d')!, dIdx, seed * 71 + dIdx * 13);
       return finalizePixelTexture(dc, true, aniso, false);
     });
   } else {

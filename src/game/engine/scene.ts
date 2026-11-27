@@ -2,7 +2,7 @@ import type { EmbervaultEngine } from '../engine';
 import { q100 } from '../../../shared/game';
 import { AnimatedLightProp, WallOcclusionTile } from './entities';
 import { _mat4, _pos, _quat, _scale, _upAxis } from './scratch';
-import { createHeroModel, createHeroSetAura } from '../models';
+import { alienStripClock, createHeroModel, createHeroSetAura } from '../models';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
@@ -281,6 +281,7 @@ export const sceneMethods = {
   },
 
   updateEnvironment(this: EmbervaultEngine, dt: number): void {
+    alienStripClock.value = this.elapsed; // spaceship floor light strips breathe on the engine clock
     // Animate props and collect active light candidates sorted by proximity to hero
     const activeLights: Array<{ prop: AnimatedLightProp; dist: number; intensity: number }> = [];
 

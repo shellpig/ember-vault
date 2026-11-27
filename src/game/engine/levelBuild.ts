@@ -2,9 +2,9 @@ import type { EmbervaultEngine } from '../engine';
 import { TILE_SIZE, generateBossArena, generateDungeon, gridToWorld, worldToGrid } from '../dungeon';
 import { BOSS_ARENA_DEPTH, BOSS_CONFIGS, getBossForDepth } from './data';
 import { SavedDungeonSnapshot } from './entities';
-import type { TreasureRoomData } from '../types';
+import type { TileType, TreasureRoomData } from '../types';
 import { _camTarget, _color, _mat4, _pos, _quat, _scale } from './scratch';
-import { createAmbientDecorProp, createBrazier, createCrateProp, createKeyPedestal, createLockedGate, createPotionShop, createRuneWell, createSpikeTrap, createStairwell, createUpgradeAltar, createWallCapGeometries, createWallTorch } from '../models';
+import { createAlienStripMaterial, createAmbientDecorProp, createBrazier, createCrateProp, createKeyPedestal, createLockedGate, createPotionShop, createRuneWell, createSpikeTrap, createStairwell, createUpgradeAltar, createWallCapGeometries, createWallTorch } from '../models';
 import { createDungeonTextures } from '../textures';
 import * as THREE from 'three';
 
@@ -187,9 +187,9 @@ export const levelBuildMethods = {
         buckets[variantIdx].push(coord);
       }
       const floorBumpMap = this.textures.floorBump;
-      const varBumpScale = theme === 'flesh' ? 0.055 : 0.06;
-      const varRoughness = theme === 'flesh' ? 0.56 : 0.94;
-      const varMetalness = theme === 'flesh' ? 0.08 : 0.06;
+      const varBumpScale = theme === 'flesh' ? 0.055 : theme === 'alien' ? 0.035 : 0.06;
+      const varRoughness = theme === 'flesh' ? 0.56 : theme === 'alien' ? 0.46 : 0.94;
+      const varMetalness = theme === 'flesh' ? 0.08 : theme === 'alien' ? 0.42 : 0.06;
 
       buckets.forEach((coords, vIdx) => {
         if (coords.length === 0) return;
@@ -252,7 +252,7 @@ export const levelBuildMethods = {
 
     // 1b. Clean Cross-Tile Floor Decals (Cavern cracks/moss/pebbles; Flesh folds/stains/veins)
     const floorDecalMaps = this.textures.floorDecalMaps;
-    if (floorDecalMaps && floorDecalMaps.length > 0 && (theme === 'cavern' || theme === 'flesh')) {
+    if (floorDecalMaps && floorDecalMaps.length > 0 && (theme === 'cavern' || theme === 'flesh' || theme === 'alien')) {
       let ds = ((depth * 4099 + (this.dungeon.genSeed ?? 0) * 131) >>> 0) || 1;
       const drand = () => {
         ds = (ds * 1664525 + 1013904223) >>> 0;
@@ -268,8 +268,14 @@ export const levelBuildMethods = {
       for (let gz = 2; gz < height - 2; gz++) {
         for (let gx = 2; gx < width - 2; gx++) {
           if (tiles[gz][gx] !== 1 || runeKeys.has(`${gx},${gz}`)) continue;
-          if (drand() > 0.16) continue;
-          const dIdx = Math.floor(drand() * floorDecalMaps.length);
+          if (drand() > (theme === 'alien' ? 0.11 : 0.16)) continue;
+          let dIdx = Math.floor(drand() * floorDecalMaps.length);
+          // Spaceship: hazard chevrons (decal 0) only on floor that touches a wall, never mid-room
+          if (theme === 'alien' && dIdx === 0) {
+            const byWall =
+              tiles[gz - 1][gx] === 2 || tiles[gz + 1][gx] === 2 || tiles[gz][gx - 1] === 2 || tiles[gz][gx + 1] === 2;
+            if (!byWall) dIdx = 1 + Math.floor(drand() * (floorDecalMaps.length - 1));
+          }
           // Slight seam-straddling offset only toward neighboring open floor so decals never clip walls
           const canPosX = tiles[gz][gx + 1] === 1;
           const canNegX = tiles[gz][gx - 1] === 1;
@@ -294,7 +300,7 @@ export const levelBuildMethods = {
           map: floorDecalMaps[dIdx],
           transparent: true,
           depthWrite: false,
-          roughness: theme === 'flesh' ? 0.62 : 0.95,
+          roughness: theme === 'flesh' ? 0.62 : theme === 'alien' ? 0.6 : 0.95,
           metalness: 0.02,
           polygonOffset: true,
           polygonOffsetFactor: -1,
@@ -325,7 +331,9 @@ export const levelBuildMethods = {
     const capBaseMat = new THREE.MeshStandardMaterial({
       color:
         theme === 'alien'
-          ? 0x223b59
+          ? biome.id === 'alien_core'
+            ? 0x1d2330
+            : 0x283545
           : theme === 'flesh'
           ? 0x3b1233
           : theme === 'cavern'
@@ -341,7 +349,7 @@ export const levelBuildMethods = {
     this.wallFadeMeshes = [];
     this.wallTiles = [];
 
-    // Pre-assign each wall coordinate to a cap bucket (1 flat cap for Stone/Alien; 3 sculpted variants for Cavern/Flesh)
+    // Pre-assign each wall coordinate to a cap bucket (1 flat cap for Stone; 3 sculpted variants for Cavern/Flesh/Alien)
     const capBuckets: Array<Array<{ gx: number; gz: number; rotY: number }>> = capGeos.map(() => []);
     const capAssignment: Array<{ capBucketIdx: number; capInstIdx: number; capRotY: number }> = [];
     wallCoords.forEach(([gx, gz]) => {
@@ -395,9 +403,9 @@ export const levelBuildMethods = {
         wallBuckets[vIdx].push({ gx, gz, ...ca });
       });
       const wallBumpMap = this.textures.wallBump;
-      const wBumpScale = theme === 'flesh' ? 0.06 : 0.065;
-      const wRoughness = theme === 'flesh' ? 0.54 : 0.96;
-      const wMetalness = theme === 'flesh' ? 0.08 : 0.04;
+      const wBumpScale = theme === 'flesh' ? 0.06 : theme === 'alien' ? 0.04 : 0.065;
+      const wRoughness = theme === 'flesh' ? 0.54 : theme === 'alien' ? 0.5 : 0.96;
+      const wMetalness = theme === 'flesh' ? 0.08 : theme === 'alien' ? 0.4 : 0.04;
 
       wallBuckets.forEach((entries, vIdx) => {
         if (entries.length === 0) return;
@@ -517,20 +525,59 @@ export const levelBuildMethods = {
           : theme === 'flesh'
           ? new THREE.CylinderGeometry(0.4, 0.52, 2.45, 7)
           : theme === 'alien'
-          ? new THREE.CylinderGeometry(0.44, 0.44, 2.5, 10)
+          ? new THREE.BoxGeometry(0.78, 2.45, 0.78)
           : new THREE.CylinderGeometry(0.46, 0.52, 2.5, 8);
       const pillarMat = new THREE.MeshStandardMaterial({
         map: this.textures.pillarMap,
         roughness:
-          theme === 'alien' ? 0.22 : theme === 'flesh' ? 0.48 : theme === 'cavern' ? 0.92 : 0.82,
-        metalness: theme === 'alien' ? 0.72 : theme === 'flesh' ? 0.08 : 0.12,
+          theme === 'alien' ? 0.42 : theme === 'flesh' ? 0.48 : theme === 'cavern' ? 0.92 : 0.82,
+        metalness: theme === 'alien' ? 0.5 : theme === 'flesh' ? 0.08 : 0.12,
       });
       const shaftInst = new THREE.InstancedMesh(shaftGeo, pillarMat, pillarCoords.length);
       shaftInst.castShadow = true;
       shaftInst.receiveShadow = true;
       shaftInst.frustumCulled = false;
 
-      if (theme === 'cavern' || theme === 'flesh') {
+      if (theme === 'alien') {
+        // Square machined column: stepped base and crown plus one thin, dim glow ring (unlit, no extra lights)
+        const metalMat = new THREE.MeshStandardMaterial({
+          color: biome.id === 'alien_core' ? 0x262d3a : 0x2f3c4d,
+          roughness: 0.4,
+          metalness: 0.6,
+        });
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(biome.runeColor).multiplyScalar(0.6),
+        });
+        const parts: Array<[THREE.BufferGeometry, THREE.Material, number]> = [
+          [new THREE.BoxGeometry(1.08, 0.32, 1.08), metalMat, 0.16],
+          [new THREE.BoxGeometry(0.98, 0.24, 0.98), metalMat, 2.52],
+          [new THREE.BoxGeometry(0.84, 0.07, 0.84), ringMat, 1.62],
+        ];
+        const partInsts = parts.map(([geo, mat]) => {
+          const inst = new THREE.InstancedMesh(geo, mat, pillarCoords.length);
+          inst.castShadow = mat !== ringMat;
+          inst.receiveShadow = mat !== ringMat;
+          inst.frustumCulled = false;
+          return inst;
+        });
+        pillarCoords.forEach(([gx, gz], i) => {
+          const wx = gx * TILE_SIZE;
+          const wz = gz * TILE_SIZE;
+          _quat.identity();
+          _scale.set(1, 1, 1);
+          _pos.set(wx, 1.24, wz);
+          _mat4.compose(_pos, _quat, _scale);
+          shaftInst.setMatrixAt(i, _mat4);
+          parts.forEach(([, , y], p) => {
+            _pos.set(wx, y, wz);
+            _mat4.compose(_pos, _quat, _scale);
+            partInsts[p].setMatrixAt(i, _mat4);
+          });
+        });
+        shaftInst.instanceMatrix.needsUpdate = true;
+        for (const inst of partInsts) inst.instanceMatrix.needsUpdate = true;
+        this.levelGroup.add(shaftInst, ...partInsts);
+      } else if (theme === 'cavern' || theme === 'flesh') {
         // Organic stepped rock / sinew base & crown instead of medieval square plinths
         const baseGeo =
           theme === 'cavern'
@@ -586,9 +633,9 @@ export const levelBuildMethods = {
       } else {
         const plinthGeo = new THREE.BoxGeometry(1.18, 0.28, 1.18);
         const plinthMat = new THREE.MeshStandardMaterial({
-          color: theme === 'alien' ? 0x2b496b : 0x2c303a,
-          roughness: theme === 'alien' ? 0.28 : 0.85,
-          metalness: theme === 'alien' ? 0.78 : 0.15,
+          color: 0x2c303a,
+          roughness: 0.85,
+          metalness: 0.15,
         });
         const plinthInst = new THREE.InstancedMesh(plinthGeo, plinthMat, pillarCoords.length * 2);
         plinthInst.castShadow = true;
@@ -626,8 +673,8 @@ export const levelBuildMethods = {
       alphaTest: 0.25,
       side: THREE.DoubleSide,
       roughness: theme === 'alien' ? 0.25 : 0.9,
-      emissive: theme === 'alien' ? new THREE.Color(0x1f9ce8) : new THREE.Color(0x000000),
-      emissiveIntensity: theme === 'alien' ? 0.58 : 0,
+      emissive: theme === 'alien' ? new THREE.Color(biome.bannerColor) : new THREE.Color(0x000000),
+      emissiveIntensity: theme === 'alien' ? 0.4 : 0,
     });
     const propLightColor = theme === 'dungeon' ? 0xff9838 : biome.torchColor;
 
@@ -736,8 +783,8 @@ export const levelBuildMethods = {
       }
     }
 
-    // 4b. Sparse, Non-Blocking Ambient Micro-Decorations (Cavern & Flesh only, deterministic per seed)
-    if (theme === 'cavern' || theme === 'flesh') {
+    // 4b. Sparse, Non-Blocking Ambient Micro-Decorations (Cavern, Flesh & Alien; deterministic per seed)
+    if (theme === 'cavern' || theme === 'flesh' || theme === 'alien') {
       let as = ((depth * 6151 + (this.dungeon.genSeed ?? 0) * 257) >>> 0) || 1;
       const arand = () => {
         as = (as * 1664525 + 1013904223) >>> 0;
@@ -790,9 +837,17 @@ export const levelBuildMethods = {
             } else {
               kind = roll < 0.42 ? 2 : roll < 0.78 ? 0 : 1;
             }
-          } else {
+          } else if (theme === 'flesh') {
             const roll = arand();
             kind = roll < 0.3 ? 0 : roll < 0.62 ? 1 : roll < 0.84 ? 2 : 3;
+          } else {
+            const roll = arand();
+            if (rareMinerCount < 2 && roll > 0.9) {
+              kind = 3; // Rare hologram projector (at most 2 per floor)
+              rareMinerCount++;
+            } else {
+              kind = roll < 0.45 ? 0 : roll < 0.72 ? 1 : 2;
+            }
           }
 
           const decor = createAmbientDecorProp(theme, biome.id, kind, biome.runeColor);
@@ -805,6 +860,10 @@ export const levelBuildMethods = {
         }
       }
     }
+
+    // 4b'. Spaceship floor light strips: thin segments along room edges and corridor walls, softly breathing
+    //      through one shared time uniform (no lights added, never in room centres where boss telegraphs land)
+    if (theme === 'alien') this.buildAlienFloorStrips(tiles, width, height);
 
     // 4c. Treasure room chests (docs/treasure-room-spec.md; none on most floors)
     this.buildTreasureChests();
@@ -1009,6 +1068,67 @@ export const levelBuildMethods = {
     if (this.mp?.role === 'host') this.mpHostAnnounceLevel(!snap);
   },
 
+  /**
+   * Spaceship floor light strips: thin segments on floor tiles that touch a wall (room edges and corridors),
+   * laid parallel to the wall. One InstancedMesh with an unlit, softly breathing material; deterministic per
+   * depth + genSeed so every client in a room builds the same strips.
+   */
+  buildAlienFloorStrips(this: EmbervaultEngine, tiles: TileType[][], width: number, height: number): void {
+    let ss = ((this.depth * 7477 + (this.dungeon.genSeed ?? 0) * 389) >>> 0) || 1;
+    const srand = () => {
+      ss = (ss * 1664525 + 1013904223) >>> 0;
+      return ss / 4294967296;
+    };
+    const d = this.dungeon;
+    const blocked = new Set<string>(
+      [d.spawn, d.keyPos, d.doorPos, d.stairsPos, d.altarPos, d.shopPos]
+        .filter((p): p is { gx: number; gz: number } => Boolean(p))
+        .map((p) => `${p.gx},${p.gz}`)
+    );
+    for (const p of d.props) blocked.add(`${p.gx},${p.gz}`);
+    const inRoom = (gx: number, gz: number) =>
+      d.rooms.some((r) => gx >= r.x && gx < r.x + r.w && gz >= r.z && gz < r.z + r.h);
+
+    const strips: Array<{ x: number; z: number; rot: number }> = [];
+    const dirs: Array<[number, number]> = [
+      [0, -1],
+      [0, 1],
+      [-1, 0],
+      [1, 0],
+    ];
+    for (let gz = 1; gz < height - 1; gz++) {
+      for (let gx = 1; gx < width - 1; gx++) {
+        if (tiles[gz][gx] !== 1 || blocked.has(`${gx},${gz}`)) continue;
+        const chance = inRoom(gx, gz) ? 0.55 : 0.3;
+        for (const [dx, dz] of dirs) {
+          if (tiles[gz + dz][gx + dx] !== 2 || srand() > chance) continue;
+          strips.push({
+            x: gx * TILE_SIZE + dx * TILE_SIZE * 0.4,
+            z: gz * TILE_SIZE + dz * TILE_SIZE * 0.4,
+            rot: dx !== 0 ? Math.PI / 2 : 0,
+          });
+        }
+      }
+    }
+    if (strips.length === 0) return;
+
+    const geo = new THREE.PlaneGeometry(TILE_SIZE * 0.74, 0.16);
+    geo.rotateX(-Math.PI / 2);
+    const mesh = new THREE.InstancedMesh(geo, createAlienStripMaterial(d.biome.runeColor), strips.length);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 1;
+    const up = new THREE.Vector3(0, 1, 0);
+    strips.forEach((st, i) => {
+      _pos.set(st.x, 0.02, st.z);
+      _quat.setFromAxisAngle(up, st.rot);
+      _scale.set(1, 1, 1);
+      _mat4.compose(_pos, _quat, _scale);
+      mesh.setMatrixAt(i, _mat4);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    this.levelGroup.add(mesh);
+  },
+
   /** Scene atmosphere (background, fog, ambient / rim light, lantern colour) of the dungeon floor in `this.dungeon`. */
   applyDungeonAtmosphere(this: EmbervaultEngine): void {
     const biome = this.dungeon.biome;
@@ -1017,10 +1137,12 @@ export const levelBuildMethods = {
     this.scene.fog = new THREE.Fog(biome.fogColor, isAlienDeck ? 38 : 32, isAlienDeck ? 62 : 54);
     this.hemiLight.color.setHex(biome.hemiSky);
     this.hemiLight.groundColor.setHex(biome.hemiGround);
-    this.hemiLight.intensity = isAlienDeck ? 0.96 : 0.12;
-    this.rimLight.color.setHex(isAlienDeck ? 0xd8f3ff : 0x6c8cc4);
-    this.rimLight.intensity = isAlienDeck ? 0.62 : 0.09;
-    this.scene.environmentIntensity = isAlienDeck ? 0.45 : 0.07;
+    // Spaceship: dimmer than before (lantern pools and accent lights must read), but a bit brighter than caves
+    const isCommandDeck = biome.id === 'alien_core';
+    this.hemiLight.intensity = isAlienDeck ? (isCommandDeck ? 0.3 : 0.36) : 0.12;
+    this.rimLight.color.setHex(isAlienDeck ? (isCommandDeck ? 0xc8d2e6 : 0xc4e6ff) : 0x6c8cc4);
+    this.rimLight.intensity = isAlienDeck ? (isCommandDeck ? 0.16 : 0.2) : 0.09;
+    this.scene.environmentIntensity = isAlienDeck ? (isCommandDeck ? 0.12 : 0.16) : 0.07;
     this.heroLight.color.setHex(this.localHero.isMage() ? 0x9fe6ff : biome.torchColor);
   },
 };
