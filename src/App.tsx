@@ -1377,7 +1377,7 @@ export default function App() {
         {/* Hunter pet: compact row (same style as the teammate rows below), keeps the animal icon */}
         {!hud.inTown && hud.pet && (
           <div
-            className="mt-1.5 w-1/2 min-w-[190px] bg-[#0c0e14]/85 border border-[#b85b3a]/70 px-1.5 py-1 font-hud text-[10px] leading-none shadow-[0_3px_10px_rgba(0,0,0,0.55)]"
+            className="relative mt-1.5 w-1/2 min-w-[190px] bg-[#0c0e14]/85 border border-[#b85b3a]/70 px-1.5 py-1 font-hud text-[10px] leading-none shadow-[0_3px_10px_rgba(0,0,0,0.55)]"
             aria-label={`Pet ${hud.pet.name}, HP ${hud.pet.hp} of ${hud.pet.maxHp}`}
             title={`${hud.pet.name} · ${hud.pet.hp} / ${hud.pet.maxHp} HP${
               hud.pet.buffRemaining > 0 ? ` · 狂野激勵 +20% ${hud.pet.buffRemaining.toFixed(1)}s` : ''
@@ -1398,13 +1398,14 @@ export default function App() {
                   }}
                 />
               </div>
-              {hud.pet.buffRemaining > 0 && (
-                <span className="shrink-0 flex items-center gap-0.5 text-[#ffd166] tabular-nums">
-                  <Zap className="w-2.5 h-2.5 text-[#ff9f43]" />
-                  {hud.pet.buffRemaining.toFixed(1)}s
-                </span>
-              )}
             </div>
+            {/* Buff timer sits outside the row (to its right) so the HP bar keeps its length */}
+            {hud.pet.buffRemaining > 0 && (
+              <span className="absolute left-full top-1/2 -translate-y-1/2 ml-1.5 flex items-center gap-0.5 px-1 py-0.5 bg-[#2d1a0b]/90 border border-[#ff9f43]/70 text-[#ffd166] tabular-nums whitespace-nowrap">
+                <Zap className="w-2.5 h-2.5 text-[#ff9f43]" />
+                {hud.pet.buffRemaining.toFixed(1)}s
+              </span>
+            )}
           </div>
         )}
 
