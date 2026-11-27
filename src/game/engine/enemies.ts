@@ -1,0 +1,1130 @@
+import type { EmbervaultEngine } from '../engine';
+import { TILE_SIZE, hasLineOfSight, worldToGrid } from '../dungeon';
+import { BOSS_CONFIGS, BossSkillKind, getRangedProjectileKind, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
+import { EnemyEntity, PetEntity } from './entities';
+import { createProjectileMesh } from '../models';
+import { ProjectileKind } from '../types';
+import * as THREE from 'three';
+
+export const enemiesMethods = {
+  updateBoss(this: EmbervaultEngine, e: EnemyEntity, dt: number, dx: number, dz: number, dist: number): void {
+    if (!isFloorBoss(e.kind)) return;
+    const cfg = BOSS_CONFIGS[e.kind];
+    const state = e.bossState ?? 'chase';
+
+    if (e.rig.auraRing) {
+      e.rig.auraRing.rotation.z += dt * 0.9;
+    }
+    if (e.rig.coreMesh) {
+      e.rig.coreMesh.rotation.y += dt * 2.4;
+      if (e.kind === 'boss_leviathan_heart') {
+        const beat = 1 + Math.sin(this.elapsed * 6.5) * 0.16;
+        e.rig.coreMesh.scale.setScalar(beat);
+      }
+    }
+
+    let moveX = 0;
+    let moveZ = 0;
+
+    if (state === 'chase') {
+      if (e.telegraph) e.telegraph.group.visible = false;
+
+      if (dist < 12.5 && dist > 1.35) {
+        const dirX = dx / (dist || 1);
+        const dirZ = dz / (dist || 1);
+        moveX = dirX * e.speed;
+        moveZ = dirZ * e.speed;
+        e.facing = Math.atan2(dirX, dirZ);
+      }
+
+      if (e.attackCooldown <= 0 && dist < 11.5) {
+        const skills = cfg.skills;
+        const idx = (e.bossSkillIndex ?? 0) % skills.length;
+        let skill: BossSkillKind = skills[idx];
+
+        const hasLOS = hasLineOfSight(
+          this.dungeon,
+          e.x,
+          e.z,
+          this.hero.x,
+          this.hero.z,
+          this.doorUnlocked,
+          0.35
+        );
+
+        const skillRange = (s: BossSkillKind): number => {
+          switch (s) {
+            case 'ranged_volley':
+              return 7.8;
+            case 'targeted_blast':
+              return 6.4;
+            case 'charge_slam':
+              return 5.4;
+            case 'nova_ring':
+              return cfg.triggerRange + 0.55;
+            default:
+              return cfg.triggerRange;
+          }
+        };
+
+        const canCastSkill = (s: BossSkillKind): boolean => {
+          if (dist > skillRange(s)) return false;
+          if ((s === 'ranged_volley' || s === 'charge_slam') && !hasLOS) return false;
+          return true;
+        };
+
+        let ready = canCastSkill(skill);
+        if (!ready && skills.length > 1) {
+          // If queued skill is out of range or blocked by a pillar, check another ready skill in kit
+          for (let offset = 1; offset < skills.length; offset++) {
+            const alt = skills[(idx + offset) % skills.length];
+            if (canCastSkill(alt)) {
+              skill = alt;
+              e.bossSkillIndex = (idx + offset) % skills.length;
+              ready = true;
+              break;
+            }
+          }
+        }
+
+        if (ready) {
+          e.bossSkill = skill;
+          e.bossState = 'windup';
+          const windupDur =
+            skill === 'ranged_volley'
+              ? 0.78
+              : skill === 'charge_slam'
+              ? 0.84
+              : skill === 'targeted_blast'
+              ? 0.96
+              : cfg.windupDuration;
+          e.bossStateDuration = windupDur;
+          e.bossStateTimer = windupDur;
+          e.bossHitApplied = false;
+          e.facing = Math.atan2(dx, dz);
+
+          let tx = e.x;
+          let tz = e.z;
+          let tRad = cfg.telegraphRadius;
+
+          if (skill === 'targeted_blast') {
+            // Lock psychic/arcane blast circle directly under the hero's current spot
+            tx = this.hero.x;
+            tz = this.hero.z;
+            tRad = 2.25;
+          } else if (skill === 'charge_slam') {
+            // Find farthest unobstructed landing spot along line toward hero (up to 4.6u)
+            const dirX = dx / (dist || 1);
+            const dirZ = dz / (dist || 1);
+            const maxLunge = Math.min(4.6, Math.max(1.5, dist + 0.35));
+            let bestX = e.x;
+            let bestZ = e.z;
+            const steps = 10;
+            for (let s = 1; s <= steps; s++) {
+              const frac = (s / steps) * maxLunge;
+              const cx = e.x + dirX * frac;
+              const cz = e.z + dirZ * frac;
+              if (this.canMoveTo(cx, cz, 0.52)) {
+                bestX = cx;
+                bestZ = cz;
+              } else {
+                break;
+              }
+            }
+            tx = bestX;
+            tz = bestZ;
+            tRad = 2.25;
+            e.bossChargeStartX = e.x;
+            e.bossChargeStartZ = e.z;
+          } else if (skill === 'ranged_volley') {
+            // Compact charge ring beneath the Boss to telegraph incoming ranged fan
+            tx = e.x;
+            tz = e.z;
+            tRad = 1.45;
+          } else if (skill === 'nova_ring') {
+            tx = e.x;
+            tz = e.z;
+            tRad = cfg.telegraphRadius;
+          } else {
+            // Classic melee slam (Depth 5 first boss & cavern melee slams)
+            const leadDist = Math.min(1.1, dist * 0.5);
+            tx = e.x + (dx / (dist || 1)) * leadDist;
+            tz = e.z + (dz / (dist || 1)) * leadDist;
+            tRad = cfg.telegraphRadius;
+          }
+
+          e.telegraphX = tx;
+          e.telegraphZ = tz;
+          e.telegraphRadius = tRad;
+
+          if (e.telegraph) {
+            e.telegraph.group.position.set(tx, 0, tz);
+            e.telegraph.group.scale.setScalar(tRad);
+            e.telegraph.fillDisk.scale.setScalar(0.12);
+            e.telegraph.group.visible = true;
+          }
+          if (skill === 'ranged_volley') {
+            this.audio.playMageCast();
+          } else {
+            this.audio.playBossTelegraph();
+          }
+          this.emitHud();
+        }
+      }
+    } else if (state === 'windup') {
+      e.bossStateTimer = (e.bossStateTimer ?? 0) - dt;
+      const dur = e.bossStateDuration || cfg.windupDuration;
+      const progress = THREE.MathUtils.clamp(1 - (e.bossStateTimer ?? 0) / dur, 0, 1);
+      const skill = e.bossSkill ?? 'slam';
+
+      // For ranged volley, smoothly track hero during the first 60% of windup, then lock aim so player can sidestep
+      if (skill === 'ranged_volley' && progress < 0.6) {
+        e.facing = Math.atan2(dx, dz);
+      }
+
+      // Smoothly fill ground danger circle so player reads exact dodge timing
+      if (e.telegraph) {
+        e.telegraph.fillDisk.scale.setScalar(0.12 + progress * 0.88);
+        e.telegraph.fillMat.opacity = 0.2 + progress * 0.34;
+        e.telegraph.ringMat.opacity = 0.72 + Math.sin(this.elapsed * 26) * 0.24;
+      }
+
+      if ((e.bossStateTimer ?? 0) <= 0) {
+        e.bossState = 'strike';
+        const strikeDur =
+          skill === 'charge_slam'
+            ? 0.34
+            : skill === 'ranged_volley'
+            ? 0.22
+            : cfg.strikeDuration;
+        e.bossStateDuration = strikeDur;
+        e.bossStateTimer = strikeDur;
+        e.bossHitApplied = false;
+      }
+    } else if (state === 'strike') {
+      e.bossStateTimer = (e.bossStateTimer ?? 0) - dt;
+      const skill = e.bossSkill ?? 'slam';
+      const tx = e.telegraphX ?? e.x;
+      const tz = e.telegraphZ ?? e.z;
+      const rad = e.telegraphRadius ?? cfg.telegraphRadius;
+
+      const emitShockwave = (cx: number, cz: number, r: number, colorHex: number) => {
+        const waveGeo = new THREE.RingGeometry(r * 0.35, r, 28);
+        const waveMat = new THREE.MeshBasicMaterial({
+          color: colorHex,
+          transparent: true,
+          opacity: 0.9,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        });
+        const waveMesh = new THREE.Mesh(waveGeo, waveMat);
+        waveMesh.rotation.x = -Math.PI / 2;
+        waveMesh.position.set(cx, 0.14, cz);
+        this.scene.add(waveMesh);
+        this.slashArcs.push({
+          mesh: waveMesh,
+          life: 0,
+          maxLife: 0.34,
+          isCleave: true,
+        });
+
+        for (let i = 0; i < 24; i++) {
+          const a = (i / 24) * Math.PI * 2;
+          const spd = 2.4 + Math.random() * 4.2;
+          this.spawnParticle(
+            cx + Math.cos(a) * r * 0.4,
+            0.25,
+            cz + Math.sin(a) * r * 0.4,
+            Math.cos(a) * spd,
+            2.0 + Math.random() * 3.0,
+            Math.sin(a) * spd,
+            i % 3 === 0 ? 0xffe484 : colorHex,
+            1.35,
+            0.55,
+            7.2
+          );
+        }
+      };
+
+      if (skill === 'charge_slam') {
+        // Dash rapidly from start to locked landing point, leaving a glowing trail, then slam on arrival
+        const dur = e.bossStateDuration || 0.34;
+        const p = THREE.MathUtils.clamp(1 - (e.bossStateTimer ?? 0) / dur, 0, 1);
+        const sx = e.bossChargeStartX ?? e.x;
+        const sz = e.bossChargeStartZ ?? e.z;
+        const nx = THREE.MathUtils.lerp(sx, tx, p);
+        const nz = THREE.MathUtils.lerp(sz, tz, p);
+        if (this.canMoveTo(nx, nz, 0.48)) {
+          e.x = nx;
+          e.z = nz;
+        }
+        if (Math.random() < dt * 45) {
+          this.spawnParticle(
+            e.x,
+            0.55,
+            e.z,
+            (Math.random() - 0.5) * 1.4,
+            0.7,
+            (Math.random() - 0.5) * 1.4,
+            cfg.telegraphColor,
+            1.2,
+            0.35,
+            2.0
+          );
+        }
+
+        if (p >= 0.88 && !e.bossHitApplied) {
+          e.bossHitApplied = true;
+          if (e.telegraph) e.telegraph.group.visible = false;
+          this.audio.playBossSlam();
+          this.addScreenShake(0.4, 0.24);
+          emitShockwave(e.x, e.z, rad, cfg.telegraphColor);
+
+          this.forEachLiveHero(() => {
+            const heroDistToImpact = Math.hypot(this.hero.x - e.x, this.hero.z - e.z);
+            if (heroDistToImpact <= rad) {
+              this.damageHero(
+                cfg.damage * 0.95 * this.getDepthDamageScale(),
+                e.x,
+                e.z,
+                this.getEnemyLabel(e)
+              );
+            } else if (heroDistToImpact <= rad + 3.2) {
+              this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
+            }
+          });
+          this.damagePetsInRadius(e.x, e.z, rad, cfg.damage * 0.95 * this.getDepthDamageScale());
+        }
+      } else if (!e.bossHitApplied) {
+        e.bossHitApplied = true;
+        if (e.telegraph) e.telegraph.group.visible = false;
+
+        if (skill === 'ranged_volley') {
+          // Fair 3-shot ranged fan toward locked aim direction
+          const projKind: ProjectileKind = cfg.projectileKind ?? 'bio_orb';
+          const baseAngle = e.facing;
+          const spreadOffsets = [-0.28, 0, 0.28]; // ~16 deg apart
+          const projSpeed = projKind === 'bone_dart' ? 7.8 : 6.6;
+          const projDmg = cfg.damage * 0.62 * this.getDepthDamageScale();
+
+          this.audio.playMageCast();
+          this.addScreenShake(0.2, 0.14);
+          for (const offset of spreadOffsets) {
+            const a = baseAngle + offset;
+            const sdx = Math.sin(a);
+            const sdz = Math.cos(a);
+            this.spawnProjectile(
+              projKind,
+              e.x + sdx * 0.85,
+              e.z + sdz * 0.85,
+              sdx,
+              sdz,
+              1,
+              this.getEnemyLabel(e),
+              projSpeed,
+              projDmg
+            );
+          }
+          for (let i = 0; i < 14; i++) {
+            const a = baseAngle + (Math.random() - 0.5) * 0.9;
+            this.spawnParticle(
+              e.x + Math.sin(a) * 0.7,
+              0.9,
+              e.z + Math.cos(a) * 0.7,
+              Math.sin(a) * (2.5 + Math.random() * 2.5),
+              1.1,
+              Math.cos(a) * (2.5 + Math.random() * 2.5),
+              cfg.telegraphColor,
+              1.1,
+              0.4,
+              2.5
+            );
+          }
+        } else if (skill === 'nova_ring') {
+          // Close shockwave + dodgeable radial orb ring (6 orbs Depth 10-20, 8 orbs Depth 21-30)
+          this.audio.playBossSlam();
+          this.addScreenShake(0.38, 0.22);
+          emitShockwave(tx, tz, rad, cfg.telegraphColor);
+
+          this.forEachLiveHero(() => {
+            const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
+            if (heroDistToImpact <= rad * 0.92) {
+              this.damageHero(
+                cfg.damage * 0.9 * this.getDepthDamageScale(),
+                tx,
+                tz,
+                this.getEnemyLabel(e)
+              );
+            } else if (heroDistToImpact <= rad + 3.0) {
+              this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
+            }
+          });
+          this.damagePetsInRadius(tx, tz, rad * 0.92, cfg.damage * 0.9 * this.getDepthDamageScale());
+
+          const orbCount = this.depth >= 21 ? 8 : 6;
+          const orbKind: ProjectileKind =
+            cfg.projectileKind && cfg.projectileKind !== 'bone_dart'
+              ? cfg.projectileKind
+              : this.depth >= 21
+              ? 'bio_orb'
+              : 'mage_orb';
+          const orbDmg = cfg.damage * 0.58 * this.getDepthDamageScale();
+          const baseAng = e.facing;
+          for (let i = 0; i < orbCount; i++) {
+            const a = baseAng + (i / orbCount) * Math.PI * 2;
+            const sdx = Math.sin(a);
+            const sdz = Math.cos(a);
+            this.spawnProjectile(
+              orbKind,
+              tx + sdx * 0.75,
+              tz + sdz * 0.75,
+              sdx,
+              sdz,
+              1,
+              this.getEnemyLabel(e),
+              5.4,
+              orbDmg
+            );
+          }
+        } else {
+          // 'slam' (classic Depth 5 boss & cavern slams) or 'targeted_blast' (remote psychic blast)
+          this.audio.playBossSlam();
+          this.addScreenShake(0.42, 0.24);
+          emitShockwave(tx, tz, rad, cfg.telegraphColor);
+
+          this.forEachLiveHero(() => {
+            const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);
+            if (heroDistToImpact <= rad) {
+              this.damageHero(
+                cfg.damage * this.getDepthDamageScale(),
+                tx,
+                tz,
+                this.getEnemyLabel(e)
+              );
+            } else if (heroDistToImpact <= rad + 3.4) {
+              this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
+            }
+          });
+          this.damagePetsInRadius(tx, tz, rad, cfg.damage * this.getDepthDamageScale());
+        }
+      }
+
+      if ((e.bossStateTimer ?? 0) <= 0) {
+        e.bossState = 'recover';
+        e.bossStateDuration = cfg.recoverDuration;
+        e.bossStateTimer = cfg.recoverDuration;
+        e.bossSkillIndex = ((e.bossSkillIndex ?? 0) + 1) % cfg.skills.length;
+        this.emitHud();
+      }
+    } else if (state === 'recover') {
+      e.bossStateTimer = (e.bossStateTimer ?? 0) - dt;
+      if ((e.bossStateTimer ?? 0) <= 0) {
+        e.bossState = 'chase';
+        e.attackCooldown = 0.65;
+        this.emitHud();
+      }
+    }
+
+    const nextPos = this.moveWithSlide(
+      e.x,
+      e.z,
+      (moveX + e.vx) * dt,
+      (moveZ + e.vz) * dt,
+      0.52
+    );
+    e.x = nextPos.x;
+    e.z = nextPos.z;
+    e.vx *= Math.exp(-11 * dt);
+    e.vz *= Math.exp(-11 * dt);
+
+    // Boss Procedural 3D Animation (Distinct Windup -> Slam -> Recover silhouette!)
+    e.rig.root.position.set(e.x, 0, e.z);
+    e.rig.body.rotation.y = e.facing;
+    e.hopPhase += dt * 5.2;
+
+    const hoverY =
+      e.kind === 'boss_lich' ||
+      e.kind === 'boss_abyssal_brain' ||
+      e.kind === 'boss_mothership_ai'
+        ? 0.16 + Math.sin(this.elapsed * 3.2) * 0.1
+        : 0;
+
+    if (e.bossState === 'windup') {
+      const p = THREE.MathUtils.clamp(
+        1 - (e.bossStateTimer ?? 0) / (e.bossStateDuration || 1),
+        0,
+        1
+      );
+      // Dramatically raise weapon/arms high overhead & lean back
+      e.rig.body.position.y = hoverY + p * 0.22;
+      e.rig.body.rotation.x = -p * 0.22;
+      if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = -p * 2.45;
+      if (e.rig.leftArm) {
+        e.rig.leftArm.rotation.x = e.kind === 'boss_juggernaut' ? -p * 0.8 : -p * 2.35;
+      }
+    } else if (e.bossState === 'strike') {
+      // Violent downward slam or forward lunge!
+      e.rig.body.position.y = hoverY - 0.14;
+      e.rig.body.rotation.x = e.bossSkill === 'charge_slam' ? 0.42 : 0.34;
+      if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = 1.05;
+      if (e.rig.leftArm) {
+        e.rig.leftArm.rotation.x = e.kind === 'boss_juggernaut' ? 0.3 : 0.95;
+      }
+    } else if (e.bossState === 'recover') {
+      // Hunched / catching breath — clear visual cue for player to counterattack!
+      e.rig.body.position.y = hoverY - 0.08 + Math.sin(this.elapsed * 6) * 0.03;
+      e.rig.body.rotation.x = 0.22;
+      if (e.rig.weaponArm) e.rig.weaponArm.rotation.x = 0.65;
+      if (e.rig.leftArm) e.rig.leftArm.rotation.x = 0.45;
+    } else {
+      const walkSwing = dist < 12.0 && dist > 1.35 ? Math.sin(e.hopPhase) * 0.42 : 0;
+      e.rig.body.position.y = hoverY + Math.abs(walkSwing) * 0.08;
+      e.rig.body.rotation.x = THREE.MathUtils.damp(e.rig.body.rotation.x, 0, 10, dt);
+      if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = walkSwing;
+      if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -walkSwing;
+      if (e.rig.weaponArm) {
+        e.rig.weaponArm.rotation.x = THREE.MathUtils.damp(
+          e.rig.weaponArm.rotation.x,
+          -walkSwing * 0.35,
+          10,
+          dt
+        );
+      }
+      if (e.rig.leftArm) {
+        e.rig.leftArm.rotation.x = THREE.MathUtils.damp(
+          e.rig.leftArm.rotation.x,
+          walkSwing * 0.35,
+          10,
+          dt
+        );
+      }
+    }
+
+    // Flash white on hit, or pulse warning color during windup
+    for (const m of e.rig.flashMaterials) {
+      if (e.hitFlash > 0) {
+        m.emissive.setHex(0xffffff);
+        m.emissiveIntensity = 0.85;
+      } else if (e.bossState === 'windup') {
+        m.emissive.setHex(cfg.telegraphColor);
+        m.emissiveIntensity = 0.25 + Math.sin(this.elapsed * 22) * 0.18;
+      } else {
+        m.emissive.setHex(0x000000);
+        m.emissiveIntensity = 0;
+      }
+    }
+  },
+
+  spawnProjectile(
+    this: EmbervaultEngine,
+    kind: ProjectileKind,
+    x: number,
+    z: number,
+    dirX: number,
+    dirZ: number,
+    damageMult = 1,
+    sourceLabel?: string,
+    customSpeed?: number,
+    customDamage?: number
+  ): void {
+    const mesh = createProjectileMesh(kind);
+    const isFastShot =
+      kind === 'arrow' ||
+      kind === 'crystal_shard' ||
+      kind === 'bone_dart' ||
+      kind === 'plasma_bolt';
+    const speed = customSpeed ?? (isFastShot ? 10.2 : 7.4);
+    mesh.position.set(x, 0.85, z);
+    mesh.rotation.y = Math.atan2(dirX, dirZ);
+    this.dynamicGroup.add(mesh);
+
+    this.projectiles.push({
+      kind,
+      mesh,
+      x,
+      z,
+      vx: dirX * speed,
+      vz: dirZ * speed,
+      damage: customDamage ?? (isFastShot ? 4 : 5) * this.getDepthDamageScale() * damageMult,
+      sourceLabel: sourceLabel ?? (isFastShot ? '遠程射手' : '遠程術士'),
+      life: 0,
+      maxLife: 2.8,
+    });
+  },
+
+  removeProjectileAt(this: EmbervaultEngine, idx: number): void {
+    const p = this.projectiles[idx];
+    this.dynamicGroup.remove(p.mesh);
+    p.mesh.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose();
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose());
+        else obj.material.dispose();
+      }
+    });
+    this.projectiles.splice(idx, 1);
+  },
+
+  updateProjectiles(this: EmbervaultEngine, dt: number): void {
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const p = this.projectiles[i];
+      p.life += dt;
+      if (p.life >= p.maxLife) {
+        this.removeProjectileAt(i);
+        continue;
+      }
+
+      p.x += p.vx * dt;
+      p.z += p.vz * dt;
+      p.mesh.position.set(p.x, 0.85, p.z);
+      const isOrb =
+        p.kind === 'mage_orb' ||
+        p.kind === 'spore_orb' ||
+        p.kind === 'bio_orb' ||
+        p.kind === 'ion_orb';
+      if (isOrb) {
+        p.mesh.rotation.y += dt * 7;
+        p.mesh.rotation.x += dt * 4;
+      }
+
+      const trailCol =
+        p.kind === 'crystal_shard'
+          ? 0x62f5ff
+          : p.kind === 'spore_orb'
+          ? Math.random() < 0.5
+            ? 0x66f59a
+            : 0xc2ff78
+          : p.kind === 'bone_dart'
+          ? 0xffc84d
+          : p.kind === 'bio_orb'
+          ? Math.random() < 0.5
+            ? 0x2ee6b8
+            : 0xc6ff66
+          : p.kind === 'plasma_bolt'
+          ? 0x4dff88
+          : p.kind === 'ion_orb'
+          ? Math.random() < 0.5
+            ? 0xff5ce6
+            : 0x6ef2ff
+          : p.kind === 'mage_orb'
+          ? Math.random() < 0.5
+            ? 0x6ef2ff
+            : 0xb866ff
+          : 0xffe484;
+
+      // Subtle flight trail sparks
+      if (Math.random() < dt * (isOrb ? 28 : 16)) {
+        this.spawnParticle(
+          p.x,
+          0.85,
+          p.z,
+          (Math.random() - 0.5) * 0.5,
+          0.25,
+          (Math.random() - 0.5) * 0.5,
+          trailCol,
+          isOrb ? 0.65 : 0.45,
+          0.24,
+          0
+        );
+      }
+
+      // Wall, closed-door, or stone-pillar impact check
+      const g = worldToGrid(p.x, p.z);
+      const tile = this.dungeon.tiles[g.gz]?.[g.gx] ?? 0;
+      let hitSolid = tile === 0 || tile === 2 || (tile === 3 && !this.doorUnlocked);
+      if (!hitSolid && tile === 5) {
+        const px = g.gx * TILE_SIZE;
+        const pz = g.gz * TILE_SIZE;
+        if (Math.hypot(p.x - px, p.z - pz) < 0.58) hitSolid = true;
+      }
+
+      if (hitSolid) {
+        for (let k = 0; k < 6; k++) {
+          this.spawnParticle(
+            p.x,
+            0.85,
+            p.z,
+            (Math.random() - 0.5) * 3.8,
+            1.2 + Math.random() * 1.5,
+            (Math.random() - 0.5) * 3.8,
+            trailCol,
+            0.72,
+            0.3,
+            5
+          );
+        }
+        this.removeProjectileAt(i);
+        continue;
+      }
+
+      // Pet collision (pets can body-block enemy projectiles)
+      let hitPet: PetEntity | null = null;
+      for (const pet of this.pets.values()) {
+        if (pet.hp <= 0) continue;
+        const owner = this.heroById(pet.ownerId);
+        if (!owner || owner.isDead || owner.inTown) continue;
+        if (Math.hypot(p.x - pet.x, p.z - pet.z) < 0.62) {
+          hitPet = pet;
+          break;
+        }
+      }
+      if (hitPet) {
+        this.damagePet(hitPet, p.damage, p.x - p.vx * 0.05, p.z - p.vz * 0.05);
+        for (let k = 0; k < 6; k++) {
+          this.spawnParticle(
+            p.x,
+            0.85,
+            p.z,
+            (Math.random() - 0.5) * 3.8,
+            1.2 + Math.random() * 1.4,
+            (Math.random() - 0.5) * 3.8,
+            trailCol,
+            0.72,
+            0.28,
+            4
+          );
+        }
+        this.removeProjectileAt(i);
+        continue;
+      }
+
+      // Hero collision (any standing hero; heroes can dash through projectiles!)
+      const struck = this.heroes.find(
+        (h) => !h.isDead && !h.inTown && h.dashTimer <= 0 && Math.hypot(p.x - h.x, p.z - h.z) < 0.58
+      );
+      if (struck) {
+        this.setActor(struck);
+        this.damageHero(p.damage, p.x - p.vx * 0.05, p.z - p.vz * 0.05, p.sourceLabel);
+        this.setActor(this.localHero);
+        for (let k = 0; k < 8; k++) {
+          this.spawnParticle(
+            p.x,
+            0.9,
+            p.z,
+            (Math.random() - 0.5) * 4.2,
+            1.4 + Math.random() * 1.6,
+            (Math.random() - 0.5) * 4.2,
+            trailCol,
+            0.82,
+            0.32,
+            4
+          );
+        }
+        this.removeProjectileAt(i);
+      }
+    }
+  },
+
+  updateRangedEnemy(this: EmbervaultEngine, e: EnemyEntity, dt: number, dx: number, dz: number, dist: number): void {
+    const isArcher = isArcherLikeRanged(e.kind);
+    const fireRange = isArcher ? 9.2 : 8.6;
+    const minKeepDist = isArcher ? 3.5 : 3.2;
+    const aggroRange = 11.5;
+
+    let moveX = 0;
+    let moveZ = 0;
+
+    const clearLOS =
+      dist < aggroRange &&
+      hasLineOfSight(this.dungeon, e.x, e.z, this.hero.x, this.hero.z, this.doorUnlocked, 0.24);
+
+    if (dist < aggroRange) {
+      const dirX = dx / (dist || 1);
+      const dirZ = dz / (dist || 1);
+      e.facing = Math.atan2(dirX, dirZ);
+
+      if (e.windupTimer > 0) {
+        e.windupTimer -= dt;
+        if (e.windupTimer <= 0) {
+          // Release terrain-matched projectile!
+          this.spawnProjectile(
+            getRangedProjectileKind(e.kind),
+            e.x + dirX * 0.48,
+            e.z + dirZ * 0.48,
+            dirX,
+            dirZ,
+            e.damageMult,
+            this.getEnemyLabel(e)
+          );
+          const eliteAtkSpeed = e.isElite ? 1.25 : 1;
+          if (isArcher) {
+            this.audio.playBowShot();
+            e.attackCooldown = (1.55 + Math.random() * 0.25) / eliteAtkSpeed;
+          } else {
+            this.audio.playMageCast();
+            e.attackCooldown = (1.85 + Math.random() * 0.25) / eliteAtkSpeed;
+          }
+        }
+      } else if (clearLOS && dist <= fireRange && e.attackCooldown <= 0) {
+        // Begin short readable draw/cast windup before firing
+        const eliteAtkSpeed = e.isElite ? 1.25 : 1;
+        e.windupTimer = (isArcher ? 0.32 : 0.42) / eliteAtkSpeed;
+      } else if (!clearLOS) {
+        // Flank sideways around pillars/corners so ranged enemies don't glue themselves behind cover
+        const side = e.id % 2 === 0 ? 1 : -1;
+        moveX = (dirX * 0.55 - dirZ * 0.84 * side) * e.speed;
+        moveZ = (dirZ * 0.55 + dirX * 0.84 * side) * e.speed;
+      } else if (dist > fireRange * 0.85) {
+        moveX = dirX * e.speed;
+        moveZ = dirZ * e.speed;
+      } else if (dist < minKeepDist) {
+        // Gently kite backward if hero closes in
+        moveX = -dirX * e.speed * 0.72;
+        moveZ = -dirZ * e.speed * 0.72;
+      }
+
+      // Soft separation from other enemies
+      for (const other of this.enemies) {
+        if (other === e || other.dead) continue;
+        const ox = e.x - other.x;
+        const oz = e.z - other.z;
+        const od = Math.hypot(ox, oz);
+        if (od > 0.01 && od < 1.15) {
+          moveX += (ox / od) * 1.8;
+          moveZ += (oz / od) * 1.8;
+        }
+      }
+    } else {
+      e.windupTimer = 0;
+    }
+
+    const nextPos = this.moveWithSlide(
+      e.x,
+      e.z,
+      (moveX + e.vx) * dt,
+      (moveZ + e.vz) * dt,
+      0.38
+    );
+    e.x = nextPos.x;
+    e.z = nextPos.z;
+    e.vx *= Math.exp(-9 * dt);
+    e.vz *= Math.exp(-9 * dt);
+
+    // Procedural Rig Animation
+    e.rig.root.position.set(e.x, 0, e.z);
+    e.rig.body.rotation.y = e.facing;
+    if (e.rig.auraRing) {
+      e.rig.auraRing.rotation.z += dt * 1.4;
+    }
+    const moving = Math.hypot(moveX, moveZ) > 0.3;
+    e.hopPhase += dt * (isArcher ? 8.2 : 5.2);
+
+    if (isArcher) {
+      const walkSwing = moving ? Math.sin(e.hopPhase) * 0.45 : 0;
+      if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = walkSwing;
+      if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -walkSwing;
+      if (e.rig.weaponArm) {
+        const targetRot = e.windupTimer > 0 ? -0.42 : 0;
+        e.rig.weaponArm.rotation.x = THREE.MathUtils.damp(
+          e.rig.weaponArm.rotation.x,
+          targetRot,
+          14,
+          dt
+        );
+      }
+      if (e.rig.coreMesh) {
+        e.rig.coreMesh.visible = e.windupTimer > 0 || e.attackCooldown < 0.45;
+      }
+    } else {
+      // Caster / hovering eyeball glides & energizes core while casting
+      e.rig.body.position.y = (e.kind === 'flesh_eye' ? 0.14 : 0.08) + Math.sin(e.hopPhase) * 0.08;
+      if (e.rig.coreMesh) {
+        e.rig.coreMesh.rotation.y += dt * (e.windupTimer > 0 ? 11 : 3.2);
+        const s = e.windupTimer > 0 ? 1.42 : 1.0;
+        e.rig.coreMesh.scale.setScalar(s);
+      }
+      if (e.rig.weaponArm) {
+        const targetRot = e.windupTimer > 0 ? -0.9 : 0;
+        e.rig.weaponArm.rotation.x = THREE.MathUtils.damp(
+          e.rig.weaponArm.rotation.x,
+          targetRot,
+          12,
+          dt
+        );
+      }
+    }
+
+    // Hit flash or subtle windup telegraph glow
+    const windupColor =
+      e.kind === 'cavern_spitter'
+        ? 0x5cf5ff
+        : e.kind === 'cavern_shaman'
+        ? 0x6ef7a2
+        : e.kind === 'flesh_spiner' || e.kind === 'flesh_eye'
+        ? 0xff5ec4
+        : e.kind === 'alien_gunner'
+        ? 0x4dff88
+        : e.kind === 'alien_psion'
+        ? 0xff5ce6
+        : isArcher
+        ? 0xffd24a
+        : 0x7ef5ff;
+    for (const m of e.rig.flashMaterials) {
+      if (e.hitFlash > 0) {
+        m.emissive.setHex(0xffffff);
+        m.emissiveIntensity = 0.85;
+      } else if (e.windupTimer > 0) {
+        m.emissive.setHex(windupColor);
+        m.emissiveIntensity = 0.32;
+      } else {
+        m.emissive.setHex(0x000000);
+        m.emissiveIntensity = 0;
+      }
+    }
+  },
+
+  updateEnemies(this: EmbervaultEngine, dt: number): void {
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+
+      e.hitFlash = Math.max(0, e.hitFlash - dt);
+      e.stunTimer = Math.max(0, e.stunTimer - dt);
+      e.frozenTimer = Math.max(0, (e.frozenTimer ?? 0) - dt);
+      const isFrozen = e.frozenTimer > 0;
+      const isSlowed = (e.slowTimer ?? 0) > 0;
+      if (isSlowed) e.slowTimer = Math.max(0, (e.slowTimer ?? 0) - dt);
+      // Slowed enemies run their whole AI (movement, attack cooldowns, boss windups) on scaled time
+      const edt = dt * (isSlowed ? 1 - (e.slowPct ?? 0) : 1);
+      e.attackCooldown = Math.max(0, e.attackCooldown - edt);
+
+      if (e.rig.frozenShell) e.rig.frozenShell.visible = isFrozen;
+      if (e.rig.slowMarker) {
+        e.rig.slowMarker.visible = isSlowed && !isFrozen;
+        if (isSlowed) e.rig.slowMarker.rotation.y += dt * 2.2;
+      }
+
+      if (e.rig.stunStars) {
+        e.rig.stunStars.visible = e.stunTimer > 0;
+        if (e.stunTimer > 0) {
+          e.rig.stunStars.rotation.y += dt * 5.8;
+          e.rig.stunStars.rotation.z = Math.sin(this.elapsed * 7 + e.id) * 0.14;
+        }
+      }
+
+      if (e.stunTimer > 0 || isFrozen) {
+        // Stunned / Frozen: only slide from remaining knockback, sway dizzily, cannot move/attack/cast
+        const stunnedPos = this.moveWithSlide(e.x, e.z, e.vx * dt, e.vz * dt, e.isBoss ? 0.72 : 0.38);
+        e.x = stunnedPos.x;
+        e.z = stunnedPos.z;
+        e.vx *= Math.exp(-9 * dt);
+        e.vz *= Math.exp(-9 * dt);
+        e.rig.root.position.set(e.x, 0, e.z);
+        e.rig.body.rotation.z = isFrozen ? 0 : Math.sin(this.elapsed * 18 + e.id) * 0.12;
+        if (e.rig.auraRing) {
+          e.rig.auraRing.rotation.z += dt * 1.4;
+        }
+        for (const m of e.rig.flashMaterials) {
+          if (e.hitFlash > 0) {
+            m.emissive.setHex(0xffffff);
+            m.emissiveIntensity = 0.85;
+          } else if (isFrozen) {
+            m.emissive.setHex(0x7fdcff);
+            m.emissiveIntensity = 0.45;
+          } else {
+            m.emissive.setHex(0xffd24d);
+            m.emissiveIntensity = 0.16;
+          }
+        }
+        continue;
+      } else if (e.rig.body.rotation.z !== 0) {
+        e.rig.body.rotation.z = 0;
+      }
+
+      // Lock onto the nearest hero (or Hunter pet for non-boss enemies)
+      const prey = this.nearestLiveHero(e.x, e.z);
+      if (!prey) continue;
+      this.setActor(prey);
+      let dx = this.hero.x - e.x;
+      let dz = this.hero.z - e.z;
+      let dist = Math.hypot(dx, dz);
+
+      if (e.isBoss) {
+        this.updateBoss(e, edt, dx, dz, dist);
+        continue;
+      }
+
+      let targetPet: PetEntity | null = null;
+      for (const pet of this.pets.values()) {
+        if (pet.hp <= 0) continue;
+        const owner = this.heroById(pet.ownerId);
+        if (!owner || owner.isDead || owner.inTown) continue;
+        const pd = Math.hypot(pet.x - e.x, pet.z - e.z);
+        if (pd < dist) {
+          dist = pd;
+          dx = pet.x - e.x;
+          dz = pet.z - e.z;
+          targetPet = pet;
+        }
+      }
+
+      if (e.isRanged) {
+        this.updateRangedEnemy(e, edt, dx, dz, dist);
+        continue;
+      }
+
+      const isSwarm = isSwarmEnemy(e.kind);
+      const aggroRange = isSwarm ? 10.5 : 9.5;
+      const stopDist = isSwarm ? 0.62 : 0.9;
+      const sepRadius = isSwarm ? 0.62 : 1.1;
+
+      let moveX = 0;
+      let moveZ = 0;
+
+      // Aggro and pursue hero (swarm critters lock on and rush at 3x speed)
+      if (dist < aggroRange && dist > stopDist) {
+        const dirX = dx / dist;
+        const dirZ = dz / dist;
+        moveX = dirX * e.speed;
+        moveZ = dirZ * e.speed;
+        e.facing = Math.atan2(dirX, dirZ);
+
+        // Soft separation between enemies so packs fan around the hero instead of stacking identically
+        for (const other of this.enemies) {
+          if (other === e || other.dead) continue;
+          const ox = e.x - other.x;
+          const oz = e.z - other.z;
+          const od = Math.hypot(ox, oz);
+          if (od > 0.01 && od < sepRadius) {
+            const sepPush = isSwarm ? 2.4 : 1.8;
+            moveX += (ox / od) * sepPush;
+            moveZ += (oz / od) * sepPush;
+          }
+        }
+      } else if (isSwarm && dist <= stopDist) {
+        e.facing = Math.atan2(dx / (dist || 1), dz / (dist || 1));
+      }
+
+      const nextPos = this.moveWithSlide(
+        e.x,
+        e.z,
+        (moveX + e.vx) * edt,
+        (moveZ + e.vz) * edt,
+        isSwarm ? 0.25 : 0.38
+      );
+      e.x = nextPos.x;
+      e.z = nextPos.z;
+      e.vx *= Math.exp(-9 * edt);
+      e.vz *= Math.exp(-9 * edt);
+
+      // Enemy Attack on Hero
+      const isGuard = isGuardianEnemy(e.kind);
+      const attackReach = isGuard ? 1.45 : e.isElite ? 1.4 : isSwarm ? 1.05 : 1.12;
+      if (dist < attackReach && e.attackCooldown <= 0) {
+        const eliteAtkSpeed = e.isElite ? 1.25 : 1;
+        e.attackCooldown = (isSwarm ? 0.5 : isGuard ? 1.15 : 1.05) / eliteAtkSpeed; // Swarm bites 2 times per second!
+        const baseMelee = isGuard ? 9 : isSwarm ? 1.25 + Math.random() * 0.65 : 5;
+        // Swarm critters scale gentler with depth (+6%/floor instead of +12%)
+        const depthScale = isSwarm ? this.getSwarmDepthDamageScale() : this.getDepthDamageScale();
+        const dmg = baseMelee * depthScale * e.damageMult;
+        if (targetPet) {
+          this.damagePet(targetPet, dmg, e.x, e.z);
+        } else {
+          this.damageHero(dmg, e.x, e.z, this.getEnemyLabel(e), e);
+        }
+      }
+
+      // Enemy Procedural Rig Animation
+      e.rig.root.position.set(e.x, 0, e.z);
+      e.rig.body.rotation.y = e.facing;
+      if (e.rig.auraRing) {
+        e.rig.auraRing.rotation.z += edt * 1.4;
+      }
+      const isBouncy = e.kind === 'slime' || e.kind === 'flesh_cell';
+      const isWingedFlyer = e.kind === 'cavern_bat' || e.kind === 'flesh_parasite';
+      const isHoverTech = e.kind === 'wisp' || e.kind === 'alien_probe' || e.kind === 'alien_saucer';
+      e.hopPhase +=
+        edt * (isSwarm ? 24.0 : isBouncy ? 5.8 : isWingedFlyer ? 14.0 : isHoverTech ? 6.5 : 8.5);
+
+      if (isSwarm) {
+        const chasing = dist < aggroRange;
+        const scurry = chasing ? Math.sin(e.hopPhase) : Math.sin(e.hopPhase * 0.25) * 0.15;
+        if (e.kind === 'flesh_leech') {
+          e.rig.body.scale.set(1 + scurry * 0.08, 1 - scurry * 0.06, 1 + scurry * 0.14);
+          e.rig.body.position.y = Math.max(0, scurry) * 0.08;
+          if (e.rig.coreMesh) {
+            const p = 1 + Math.sin(this.elapsed * 9 + e.id) * 0.15;
+            e.rig.coreMesh.scale.setScalar(p);
+          }
+          if (e.rig.weaponArm) {
+            e.rig.weaponArm.position.z = e.attackCooldown > 0.34 ? 0.38 : 0.28;
+          }
+        } else if (e.kind === 'alien_nanobot') {
+          e.rig.body.position.y = 0.04 + Math.sin(e.hopPhase * 0.6) * 0.07;
+          if (e.rig.coreMesh) e.rig.coreMesh.rotation.z += edt * 16;
+          if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = scurry * 0.55;
+          if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -scurry * 0.55;
+          const snap = e.attackCooldown > 0.34 ? 0.42 : scurry * 0.18;
+          if (e.rig.leftArm) e.rig.leftArm.rotation.y = snap;
+          if (e.rig.weaponArm) e.rig.weaponArm.rotation.y = -snap;
+        } else {
+          // dungeon_rat & cavern_mite rapid scurrying gait + fast bite lunge
+          e.rig.body.position.y = Math.abs(scurry) * 0.09;
+          if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = scurry * 0.72;
+          if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -scurry * 0.72;
+          if (e.kind === 'cavern_mite') {
+            const snap = e.attackCooldown > 0.34 ? 0.45 : scurry * 0.16;
+            if (e.rig.leftArm) e.rig.leftArm.rotation.y = snap;
+            if (e.rig.weaponArm) e.rig.weaponArm.rotation.y = -snap;
+          } else if (e.rig.weaponArm) {
+            e.rig.weaponArm.position.z = e.attackCooldown > 0.34 ? 0.32 : 0.2;
+          }
+        }
+      } else if (isBouncy) {
+        const bounce = Math.max(0, Math.sin(e.hopPhase));
+        e.rig.body.position.y = bounce * 0.42;
+        const stretch = 1 + bounce * 0.18;
+        const squash = 1 / Math.sqrt(stretch);
+        const baseScale = e.isSpecialElite ? 1.38 : e.isElite ? 1.32 : 1;
+        e.rig.body.scale.set(squash * baseScale, stretch * baseScale, squash * baseScale);
+        if (e.rig.coreMesh) {
+          e.rig.coreMesh.rotation.y += edt * 2.5;
+        }
+      } else if (isWingedFlyer) {
+        e.rig.body.position.y = 0.12 + Math.sin(e.hopPhase * 0.45) * 0.16;
+        const flap = Math.sin(e.hopPhase) * 0.65;
+        if (e.rig.leftArm) e.rig.leftArm.rotation.z = flap;
+        if (e.rig.weaponArm) e.rig.weaponArm.rotation.z = -flap;
+      } else if (isHoverTech) {
+        e.rig.body.position.y = Math.sin(e.hopPhase) * 0.2;
+        if (e.rig.coreMesh) {
+          e.rig.coreMesh.rotation.y += edt * (e.kind === 'alien_saucer' ? 6.5 : 4.2);
+          if (e.kind === 'alien_probe') {
+            e.rig.coreMesh.rotation.z += edt * 3.0;
+          }
+        }
+      } else {
+        const walkSwing = dist < 9.5 ? Math.sin(e.hopPhase) * 0.5 : 0;
+        if (e.rig.leftLeg) e.rig.leftLeg.rotation.x = walkSwing;
+        if (e.rig.rightLeg) e.rig.rightLeg.rotation.x = -walkSwing;
+        if (e.rig.weaponArm) {
+          e.rig.weaponArm.rotation.x = e.attackCooldown > 0.75 ? -1.4 : -walkSwing * 0.3;
+        }
+      }
+
+      // White hit flash
+      for (const m of e.rig.flashMaterials) {
+        if (e.hitFlash > 0) {
+          m.emissive.setHex(0xffffff);
+          m.emissiveIntensity = 0.85;
+        } else if (e.kind === 'slime') {
+          m.emissive.setHex(this.dungeon.biome.id === 'ossuary' ? 0x9b5de5 : 0x45d66b);
+          m.emissiveIntensity = 0.22;
+        } else if (e.kind === 'flesh_cell') {
+          m.emissive.setHex(0xa6266e);
+          m.emissiveIntensity = 0.28;
+        } else if (e.kind === 'flesh_leech') {
+          m.emissive.setHex(0x8a1242);
+          m.emissiveIntensity = 0.2;
+        } else if (e.kind === 'cavern_mite') {
+          m.emissive.setHex(0x4b1d8c);
+          m.emissiveIntensity = 0.16;
+        } else {
+          m.emissive.setHex(0x000000);
+          m.emissiveIntensity = 0;
+        }
+      }
+    }
+    this.setActor(this.localHero);
+  },
+};
