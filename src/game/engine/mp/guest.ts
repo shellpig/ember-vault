@@ -888,7 +888,11 @@ export const guestMpMethods = {
           const cfg = BOSS_CONFIGS[e.kind];
           this.hideBossWindupVfx(e.id);
           if (skill === 'slam') {
-            this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor);
+            this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor, e.kind);
+          } else if (skill === 'charge_slam') {
+            e.bossChargeStartX = e.x;
+            e.bossChargeStartZ = e.z;
+            this.spawnBossChargeDashVfx(e.x, e.z, tx, tz, 0.3, cfg.telegraphColor);
           } else if (skill === 'nova_ring') {
             const beams = this.computeNovaBeams(tx, tz, e.facing);
             this.spawnBossNovaLaserVfx(tx, tz, rad, beams, cfg.telegraphColor);
@@ -898,7 +902,14 @@ export const guestMpMethods = {
             this.spawnBossVolleyVfx(e.x, e.z, e.facing, cfg.telegraphColor);
           }
         } else if (e.prevBossState === 'strike' && e.bossState === 'recover' && skill === 'charge_slam' && rad > 0 && isFloorBoss(e.kind)) {
-          this.spawnBossSlamVfx(e.x, e.z, rad, BOSS_CONFIGS[e.kind].telegraphColor);
+          this.spawnBossChargeImpactVfx(
+            e.bossChargeStartX ?? e.x,
+            e.bossChargeStartZ ?? e.z,
+            e.x,
+            e.z,
+            rad,
+            BOSS_CONFIGS[e.kind].telegraphColor
+          );
         }
         e.prevBossState = e.bossState;
 

@@ -481,6 +481,16 @@ export const enemiesMethods = {
         e.bossStateDuration = strikeDur;
         e.bossStateTimer = strikeDur;
         e.bossHitApplied = false;
+        if (!isBasic && skill === 'charge_slam') {
+          this.spawnBossChargeDashVfx(
+            e.bossChargeStartX ?? e.x,
+            e.bossChargeStartZ ?? e.z,
+            e.telegraphX ?? e.x,
+            e.telegraphZ ?? e.z,
+            strikeDur,
+            cfg.telegraphColor
+          );
+        }
       }
     } else if (state === 'strike') {
       e.bossStateTimer = (e.bossStateTimer ?? 0) - dt;
@@ -528,9 +538,16 @@ export const enemiesMethods = {
           if (e.telegraph) e.telegraph.group.visible = false;
           this.hideBossWindupVfx(e.id);
           const dmg = this.bossDamage(e, BOSS_SKILLS.charge_slam.damage);
-          this.audio.playBossSlam();
-          this.forEachLiveHero(() => this.addScreenShake(0.62, 0.32));
-          this.spawnBossSlamVfx(e.x, e.z, rad, cfg.telegraphColor);
+          this.audio.playBossChargeImpact();
+          this.forEachLiveHero(() => this.addScreenShake(0.66, 0.34));
+          this.spawnBossChargeImpactVfx(
+            e.bossChargeStartX ?? e.x,
+            e.bossChargeStartZ ?? e.z,
+            e.x,
+            e.z,
+            rad,
+            cfg.telegraphColor
+          );
 
           this.forEachLiveHero(() => {
             const heroDistToImpact = Math.hypot(this.hero.x - e.x, this.hero.z - e.z);
@@ -624,11 +641,11 @@ export const enemiesMethods = {
           });
           this.damagePetsInRadius(tx, tz, rad, dmg);
         } else {
-          // 'slam' heavy floor smash with full-screen shake
+          // 'slam' heavy floor smash with themed palette & full-screen shake
           const dmg = this.bossDamage(e, BOSS_SKILLS[skill].damage);
           this.audio.playBossSlam();
           this.forEachLiveHero(() => this.addScreenShake(0.68, 0.36));
-          this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor);
+          this.spawnBossSlamVfx(tx, tz, rad, cfg.telegraphColor, e.kind as FloorBossKind);
 
           this.forEachLiveHero(() => {
             const heroDistToImpact = Math.hypot(this.hero.x - tx, this.hero.z - tz);

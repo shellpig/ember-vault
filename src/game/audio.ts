@@ -664,6 +664,47 @@ export class DungeonAudio {
     src.start(now, 0.08, 0.62);
   }
 
+  public playBossChargeImpact(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    // 1. Seismic fissure tear + rising lava eruption roar
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sawtooth';
+    sub.frequency.setValueAtTime(175, now);
+    sub.frequency.exponentialRampToValueAtTime(36, now + 0.52);
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(520, now);
+    lp.frequency.exponentialRampToValueAtTime(110, now + 0.55);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.55, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + 0.58);
+    sub.connect(lp);
+    lp.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 0.6);
+
+    // 2. Blazing fire-pillar whoosh eruption
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(420, now);
+    bp.frequency.exponentialRampToValueAtTime(1450, now + 0.16);
+    bp.frequency.exponentialRampToValueAtTime(260, now + 0.66);
+    bp.Q.value = 0.85;
+    const ng = this.ctx.createGain();
+    ng.gain.setValueAtTime(0.56, now);
+    ng.gain.linearRampToValueAtTime(0.42, now + 0.22);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + 0.68);
+    src.connect(bp);
+    bp.connect(ng);
+    ng.connect(this.masterGain);
+    src.start(now, 0.03, 0.7);
+  }
+
   public playBossVolley(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;

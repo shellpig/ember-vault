@@ -119,10 +119,11 @@ void main() {
 }
 `;
 
-/** Procedural Voronoi cracked ground decal (intense molten fissures that cool and dissolve). */
+/** Procedural Voronoi cracked ground decal (theme-tinted fissures that cool and dissolve). */
 const VORONOI_SCORCH_FRAG = /* glsl */ `
 uniform float uLife;
 uniform vec3 uColor;
+uniform vec3 uCoreColor;
 varying vec2 vUv;
 
 vec2 hash2(vec2 p) {
@@ -179,10 +180,111 @@ void main() {
   float coolFade = pow(1.0 - uLife, 1.05);
 
   vec3 emberCol = mix(uColor, uColor * 0.55, uLife);
-  vec3 hotCore = vec3(1.0, 0.95, 0.74);
-  vec3 col = emberCol * (crack * 1.95 + centerHeat * 1.35) + hotCore * (coreCrack * (1.0 - uLife * 0.68) * 1.6 + centerHeat * 1.05);
+  vec3 col = emberCol * (crack * 2.0 + centerHeat * 1.35) + uCoreColor * (coreCrack * (1.0 - uLife * 0.65) * 1.65 + centerHeat * 1.05);
 
   float alpha = clamp((crack * 1.0 + centerHeat * 0.72) * radialMask * coolFade, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+/** Linear jagged magma/energy trench fissure left along a charge_slam path (video 01:12-01:17). */
+const TRENCH_FISSURE_FRAG = /* glsl */ `
+uniform float uLife;
+uniform float uTime;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void main() {
+  // vUv.x across width, vUv.y along charge path (0=start, 1=landing)
+  float jag = sin(vUv.y * 22.0) * 0.09 + sin(vUv.y * 47.0 + 1.3) * 0.05;
+  float lat = abs((vUv.x - 0.5) * 2.0 + jag);
+
+  // Cracked core trench + glowing outer magma rim
+  float coreWidth = mix(0.36, 0.14, uLife);
+  float core = 1.0 - smoothstep(0.0, coreWidth, lat);
+  float rim = (1.0 - smoothstep(coreWidth * 0.6, 0.92, lat)) * (0.7 + 0.3 * sin(vUv.y * 34.0 - uTime * 8.0));
+
+  // Cross-fissure cracks radiating off the main trench
+  float ribs = smoothstep(0.22, 0.02, abs(fract(vUv.y * 7.0) - 0.5)) * (1.0 - smoothstep(0.2, 0.96, lat));
+
+  float endFade = smoothstep(0.0, 0.07, vUv.y) * (1.0 - smoothstep(0.92, 1.0, vUv.y));
+  float fade = pow(1.0 - uLife, 1.1);
+
+  vec3 whiteHot = vec3(1.0, 0.96, 0.78);
+  vec3 col = uColor * (rim * 1.65 + ribs * 1.35 + core * 1.2) + whiteHot * (core * (1.0 - uLife * 0.7) * 1.85 + ribs * (1.0 - uLife) * 0.55);
+  float alpha = clamp((core + rim * 0.8 + ribs * 0.7) * endFade * fade, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+/** Soaring vertical erupting fire / plasma pillar shader (video 01:15 magma pillars). */
+const PILLAR_FLAME_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uLife;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+void main() {
+  // vUv.y = 0 at ground base, 1 at pillar top
+  float flame1 = sin(vUv.x * 18.849 + vUv.y * 9.0 - uTime * 22.0) * 0.5 + 0.5;
+  float flame2 = sin(vUv.x * 31.416 - vUv.y * 14.0 - uTime * 30.0) * 0.5 + 0.5;
+  float turb = 0.55 + 0.3 * flame1 + 0.25 * pow(flame2, 2.0);
+
+  // Intense white-hot base transitioning into blazing theme color & dissipating top
+  float vertFade = smoothstep(0.0, 0.1, vUv.y) * (1.0 - smoothstep(0.55, 1.0, vUv.y));
+  float baseHot = exp(-vUv.y * 3.4);
+  float fade = pow(1.0 - uLife, 1.25);
+
+  vec3 coreCol = vec3(1.0, 0.96, 0.82);
+  vec3 col = mix(uColor, coreCol, clamp(baseHot * 0.85 + flame2 * 0.32, 0.0, 1.0)) * turb * 1.85;
+  float alpha = clamp(vertFade * turb * fade * 0.92, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+/** Forward-blasting crescent cleave shockwave at charge_slam impact point. */
+const CRESCENT_ARC_FRAG = /* glsl */ `
+uniform float uLife;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+void main() {
+  vec2 p = vUv * 2.0 - 1.0;
+  float r = length(p);
+  if (r > 1.0) discard;
+  // Local +Y is forward charge direction (after rotation.x = PI/2, rotation.y = angle)
+  float forwardMask = smoothstep(-0.15, 0.32, p.y);
+  if (forwardMask <= 0.001) discard;
+
+  float arcPos = mix(0.32, 0.92, pow(uLife, 0.6));
+  float arcWidth = mix(0.28, 0.1, uLife);
+  float d = abs(r - arcPos);
+  float wave = smoothstep(arcWidth, 0.0, d);
+  float razor = smoothstep(arcWidth * 0.32, 0.0, d);
+
+  float fade = pow(1.0 - uLife, 1.25);
+  vec3 col = uColor * wave * 1.75 + vec3(1.0, 0.97, 0.88) * razor * 2.0;
+  float alpha = clamp((wave * 0.9 + razor) * forwardMask * fade, 0.0, 1.0);
+  gl_FragColor = vec4(col, alpha);
+}
+`;
+
+/** Supersonic forward airflow cone wrapping the boss during charge_slam dash. */
+const CHARGE_CONE_FRAG = /* glsl */ `
+uniform float uTime;
+uniform float uIntensity;
+uniform vec3 uColor;
+varying vec2 vUv;
+
+void main() {
+  float streak = sin(vUv.x * 25.132 + vUv.y * 12.0 + uTime * 34.0) * 0.5 + 0.5;
+  float tip = smoothstep(0.0, 0.25, vUv.y) * (1.0 - smoothstep(0.7, 1.0, vUv.y));
+  vec3 col = mix(uColor, vec3(1.0, 0.96, 0.88), 0.45 + 0.35 * streak) * 1.65;
+  float alpha = clamp(tip * (0.45 + 0.55 * streak) * uIntensity, 0.0, 1.0);
   gl_FragColor = vec4(col, alpha);
 }
 `;
@@ -486,6 +588,8 @@ const _unitSphereGeo = new THREE.SphereGeometry(1, 16, 12);
 const _unitTorusGeo = new THREE.TorusGeometry(1, 0.075, 10, 42);
 const _unitHexGateGeo = new THREE.RingGeometry(0.62, 0.85, 6);
 const _unitSpikeGeo = new THREE.ConeGeometry(0.27, 1.35, 5);
+const _unitRibGeo = new THREE.BoxGeometry(0.32, 1.55, 0.58);
+const _unitChargeConeGeo = new THREE.ConeGeometry(1.15, 2.2, 14, 1, true);
 const _unitPuffGeo = new THREE.IcosahedronGeometry(0.42, 1);
 
 function disposeOwnedMaterials(group: THREE.Object3D): void {
@@ -521,6 +625,10 @@ export const bossVfxMethods = {
       CORE_FLASH_FRAG,
       ACCRETION_DISK_FRAG,
       GRAVITY_WELL_FRAG,
+      TRENCH_FISSURE_FRAG,
+      PILLAR_FLAME_FRAG,
+      CRESCENT_ARC_FRAG,
+      CHARGE_CONE_FRAG,
     ];
     const warmGroup = new THREE.Group();
     warmGroup.position.set(0, -100, 0);
@@ -539,6 +647,7 @@ export const bossVfxMethods = {
           uIntensity: { value: 1 },
           uScorch: { value: 0 },
           uColor: { value: dummyColor },
+          uCoreColor: { value: dummyColor },
         },
         transparent: true,
         depthWrite: false,
@@ -1033,27 +1142,44 @@ export const bossVfxMethods = {
   },
 
   /**
-   * Upgraded `slam` / `charge_slam` landing impact VFX:
-   * - Intense white-hot core flash + high-power temporary dynamic PointLight
-   * - Dual-layer polar turbulent shockwave + rising outer shock torus
-   * - 16 staggered 3D erupting shattered rock/molten spikes
-   * - Rolling ember dust ring + radial spark fountain
-   * - Richer procedural Voronoi cracked molten ground decal (2.0s aftermath)
+   * Upgraded `slam` 360-degree impact VFX (Scheme 1 themed palettes — zero muddy brown!):
+   * - Ironclad Warden (`boss_juggernaut`): high-contrast crimson + cool steel-white core, dark gunmetal blades, crimson-black smoke
+   * - Crystal Behemoth (`boss_crystal_wyrm`): translucent luminous ice-cyan crystals, frost mist, icy cracks
+   * - Spore Sovereign (`boss_fungal_king`): toxic emerald spikes, emerald spore clouds, venomous cracks
    */
   spawnBossSlamVfx(
     this: EmbervaultEngine,
     cx: number,
     cz: number,
     rad: number,
-    colorHex: number
+    colorHex: number,
+    bossKind?: FloorBossKind
   ): void {
     if (this.bgSim) return;
-    const color = new THREE.Color(colorHex);
+    // Theme palette selection (eliminates earthy brown tones)
+    const isCrimsonSteel = bossKind === 'boss_juggernaut';
+    const isCrystal = bossKind === 'boss_crystal_wyrm';
+    const isSpore = bossKind === 'boss_fungal_king';
+
+    const mainHex = isCrimsonSteel ? 0xff1e3a : colorHex;
+    const color = new THREE.Color(mainHex);
+    const coreColor = isCrimsonSteel
+      ? new THREE.Color(0xfff0f4)
+      : isCrystal
+      ? new THREE.Color(0xebfdff)
+      : isSpore
+      ? new THREE.Color(0xeafff0)
+      : new THREE.Color(0xfff4e0);
+    const spikeBaseHex = isCrimsonSteel ? 0x1a1d28 : isCrystal ? 0x5be8ff : isSpore ? 0x143320 : 0x1e202c;
+    const spikeAltHex = isCrimsonSteel ? 0x26121b : isCrystal ? 0xb4f7ff : isSpore ? 0x225436 : 0x2a2433;
+    const smokeHex = isCrimsonSteel ? 0x24070f : isCrystal ? 0x17445e : isSpore ? 0x11361e : 0x261c28;
+    const sparkAccentHex = isCrimsonSteel ? 0xffd6de : isCrystal ? 0xffffff : isSpore ? 0xd8ffe4 : 0xfff2ba;
+
     const group = new THREE.Group();
     group.position.set(cx, 0, cz);
 
     // 1. High-power burst PointLight
-    this.triggerBossBurstLight(cx, 1.85, cz, colorHex, 165, 0.52);
+    this.triggerBossBurstLight(cx, 1.85, cz, mainHex, 165, 0.52);
 
     // 2. White-hot core flash
     const flashMat = new THREE.ShaderMaterial({
@@ -1096,9 +1222,9 @@ export const bossVfxMethods = {
     waveMesh.scale.setScalar(rad * 0.45);
     group.add(waveMesh);
 
-    // 4. Elevated 3D shockwave torus ring (gives dramatic vertical punch)
+    // 4. Elevated 3D shockwave torus ring
     const shockTorusMat = new THREE.MeshBasicMaterial({
-      color: 0xfff0cc,
+      color: coreColor.getHex(),
       transparent: true,
       opacity: 0.92,
       blending: THREE.AdditiveBlending,
@@ -1109,13 +1235,14 @@ export const bossVfxMethods = {
     shockTorus.position.y = 0.25;
     group.add(shockTorus);
 
-    // 5. Procedural Voronoi cracked molten ground decal (2.0s aftermath)
+    // 5. Procedural Voronoi cracked ground decal (themed core color — crisp crimson/ice/toxic!)
     const scorchMat = new THREE.ShaderMaterial({
       vertexShader: QUAD_VERT,
       fragmentShader: VORONOI_SCORCH_FRAG,
       uniforms: {
         uLife: { value: 0 },
         uColor: { value: color.clone() },
+        uCoreColor: { value: coreColor.clone() },
       },
       transparent: true,
       depthWrite: false,
@@ -1131,7 +1258,7 @@ export const bossVfxMethods = {
     scorchMesh.scale.setScalar(rad * 1.24);
     group.add(scorchMesh);
 
-    // 6. Staggered 3D erupting shattered rock/molten spikes around the perimeter
+    // 6. Staggered 3D erupting themed spikes (gunmetal crimson blades / translucent ice crystals / toxic spines)
     const spikeCount = this.isSoftwareGl ? 7 : 16;
     const spikes: Array<{ mesh: THREE.Mesh; delay: number; maxH: number }> = [];
     for (let i = 0; i < spikeCount; i++) {
@@ -1139,13 +1266,13 @@ export const bossVfxMethods = {
       const dist = rad * (0.64 + Math.random() * 0.34);
       const isHot = i % 2 === 0;
       const mat = new THREE.MeshStandardMaterial({
-        color: isHot ? 0x341916 : 0x1e1822,
-        emissive: colorHex,
-        emissiveIntensity: isHot ? 1.75 : 0.85,
-        roughness: 0.68,
-        metalness: 0.18,
+        color: isHot ? spikeAltHex : spikeBaseHex,
+        emissive: mainHex,
+        emissiveIntensity: isCrystal ? 1.45 : isHot ? 1.55 : 0.75,
+        roughness: isCrystal ? 0.14 : isCrimsonSteel ? 0.28 : 0.55,
+        metalness: isCrimsonSteel ? 0.78 : isCrystal ? 0.2 : 0.2,
         transparent: true,
-        opacity: 1,
+        opacity: isCrystal ? 0.88 : 1,
       });
       const mesh = new THREE.Mesh(_unitSpikeGeo, mat);
       mesh.position.set(Math.cos(a) * dist, -0.5, Math.sin(a) * dist);
@@ -1159,15 +1286,15 @@ export const bossVfxMethods = {
       spikes.push({ mesh, delay: (i % 3) * 0.022, maxH });
     }
 
-    // 7. Outer rolling dust / ember billows
+    // 7. Outer rolling themed mist / smoke billows
     const puffCount = this.isSoftwareGl ? 0 : 14;
     const puffs: Array<{ mesh: THREE.Mesh; dirX: number; dirZ: number; startR: number; spd: number }> = [];
     for (let i = 0; i < puffCount; i++) {
       const a = (i / puffCount) * Math.PI * 2 + Math.random() * 0.25;
       const mat = new THREE.MeshBasicMaterial({
-        color: i % 3 === 0 ? colorHex : 0x452822,
+        color: i % 3 === 0 ? mainHex : smokeHex,
         transparent: true,
-        opacity: 0.6,
+        opacity: isCrystal ? 0.45 : 0.58,
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(_unitPuffGeo, mat);
@@ -1190,7 +1317,7 @@ export const bossVfxMethods = {
         Math.cos(a) * spd,
         2.8 + Math.random() * 4.0,
         Math.sin(a) * spd,
-        i % 3 === 0 ? 0xfff2ba : colorHex,
+        i % 3 === 0 ? sparkAccentHex : mainHex,
         1.4,
         0.58,
         8.8
@@ -1269,6 +1396,364 @@ export const bossVfxMethods = {
             pf.mesh.rotation.y += dt * 2.4;
             (pf.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - pt) * 0.52;
           }
+        }
+      },
+      dispose: () => {
+        this.dynamicGroup.remove(group);
+        disposeOwnedMaterials(group);
+      },
+    });
+  },
+
+  /**
+   * `charge_slam` Supersonic Dash Cone VFX (rides in front of the charging boss for 0.3s).
+   */
+  spawnBossChargeDashVfx(
+    this: EmbervaultEngine,
+    sx: number,
+    sz: number,
+    tx: number,
+    tz: number,
+    duration: number,
+    colorHex: number
+  ): void {
+    if (this.bgSim) return;
+    const dx = tx - sx;
+    const dz = tz - sz;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.4) return;
+    const angle = Math.atan2(dx, dz);
+
+    const group = new THREE.Group();
+    const coneMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: CHARGE_CONE_FRAG,
+      uniforms: {
+        uTime: { value: this.elapsed },
+        uIntensity: { value: 1.0 },
+        uColor: { value: new THREE.Color(colorHex) },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    const cone = new THREE.Mesh(_unitChargeConeGeo, coneMat);
+    cone.rotation.order = 'YXZ';
+    cone.rotation.y = angle;
+    // Tip points forward along (sin(angle), 0, cos(angle))
+    cone.rotation.x = Math.PI / 2;
+    cone.position.set(sx, 1.05, sz);
+    group.add(cone);
+
+    this.dynamicGroup.add(group);
+    this.bossVfxItems.push({
+      group,
+      life: 0,
+      maxLife: Math.max(0.15, duration),
+      update: (_dt, t, elapsed) => {
+        const px = THREE.MathUtils.lerp(sx, tx, t);
+        const pz = THREE.MathUtils.lerp(sz, tz, t);
+        cone.position.set(px + (dx / dist) * 0.6, 1.05, pz + (dz / dist) * 0.6);
+        coneMat.uniforms.uTime.value = elapsed;
+        coneMat.uniforms.uIntensity.value = Math.sin(t * Math.PI);
+      },
+      dispose: () => {
+        this.dynamicGroup.remove(group);
+        disposeOwnedMaterials(group);
+      },
+    });
+  },
+
+  /**
+   * Independent `charge_slam` Impact VFX (inspired by video 01:11-01:17 Magma Rib Fissure + Fire Pillars):
+   * - Long jagged molten/energy trench fissure along the entire charge path
+   * - Two parallel rows of angled rib-like rock/crystal blades erupting along both sides of the trench
+   * - 5 soaring vertical flame/energy pillars blasting skyward sequentially along the charge axis
+   * - Forward-blasting giant crescent cleave shockwave + forward ember fan shower (completely distinct from `slam`!)
+   */
+  spawnBossChargeImpactVfx(
+    this: EmbervaultEngine,
+    sx: number,
+    sz: number,
+    ex: number,
+    ez: number,
+    rad: number,
+    colorHex: number
+  ): void {
+    if (this.bgSim) return;
+    const dx = ex - sx;
+    const dz = ez - sz;
+    const rawLen = Math.hypot(dx, dz);
+    const angle = rawLen > 0.1 ? Math.atan2(dx, dz) : 0;
+    const dirX = Math.sin(angle);
+    const dirZ = Math.cos(angle);
+    const rightX = Math.cos(angle);
+    const rightZ = -Math.sin(angle);
+    const trenchLen = Math.max(3.6, rawLen + rad * 0.75);
+    // Trench starts behind ex along -dir and extends slightly past ex
+    const startX = ex - dirX * (trenchLen - rad * 0.65);
+    const startZ = ez - dirZ * (trenchLen - rad * 0.65);
+
+    const color = new THREE.Color(colorHex);
+    const group = new THREE.Group();
+
+    // 1. High-intensity burst PointLight at landing impact
+    this.triggerBossBurstLight(ex, 2.0, ez, colorHex, 175, 0.58);
+
+    // 2. Long jagged burning trench fissure decal along the charge corridor (1.9s)
+    const trenchMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: TRENCH_FISSURE_FRAG,
+      uniforms: {
+        uLife: { value: 0 },
+        uTime: { value: this.elapsed },
+        uColor: { value: color.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    });
+    const trenchMesh = new THREE.Mesh(_unitBeamFloorGeo, trenchMat);
+    trenchMesh.rotation.order = 'YXZ';
+    trenchMesh.rotation.y = angle;
+    trenchMesh.rotation.x = Math.PI / 2;
+    trenchMesh.scale.set(2.35, trenchLen, 1);
+    trenchMesh.position.set(
+      startX + dirX * (trenchLen * 0.5),
+      0.056,
+      startZ + dirZ * (trenchLen * 0.5)
+    );
+    group.add(trenchMesh);
+
+    // 3. Forward-blasting giant crescent cleave shockwave at the landing point
+    const crescentMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: CRESCENT_ARC_FRAG,
+      uniforms: {
+        uLife: { value: 0 },
+        uColor: { value: color.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
+    });
+    const crescentMesh = new THREE.Mesh(_unitPlaneGeo, crescentMat);
+    crescentMesh.rotation.order = 'YXZ';
+    crescentMesh.rotation.y = angle;
+    crescentMesh.rotation.x = Math.PI / 2;
+    crescentMesh.position.set(ex, 0.16, ez);
+    crescentMesh.scale.setScalar(rad * 0.7);
+    group.add(crescentMesh);
+
+    // 4. White-hot impact core flash at landing spot
+    const flashMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: CORE_FLASH_FRAG,
+      uniforms: {
+        uIntensity: { value: 1.0 },
+        uColor: { value: color.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    const flashMesh = new THREE.Mesh(_unitPlaneGeo, flashMat);
+    flashMesh.rotation.x = -Math.PI / 2;
+    flashMesh.position.set(ex, 0.28, ez);
+    flashMesh.scale.setScalar(rad * 1.55);
+    group.add(flashMesh);
+
+    // 5. Two parallel rows of angled rib-like rock/energy blades flanking the trench (video 01:12!)
+    const ribPairs = this.isSoftwareGl ? 3 : 6;
+    const ribs: Array<{ mesh: THREE.Mesh; delay: number; maxH: number }> = [];
+    for (let i = 0; i < ribPairs; i++) {
+      const frac = (i + 0.5) / ribPairs;
+      const rxBase = startX + dirX * (trenchLen * frac);
+      const rzBase = startZ + dirZ * (trenchLen * frac);
+      for (const side of [-1, 1]) {
+        const mat = new THREE.MeshStandardMaterial({
+          color: 0x1c1412,
+          emissive: colorHex,
+          emissiveIntensity: 1.45,
+          roughness: 0.65,
+          metalness: 0.2,
+          transparent: true,
+          opacity: 1,
+        });
+        const mesh = new THREE.Mesh(_unitRibGeo, mat);
+        const lateral = 1.05 + (i === ribPairs - 1 ? 0.25 : 0);
+        mesh.position.set(rxBase + rightX * side * lateral, -0.5, rzBase + rightZ * side * lateral);
+        mesh.rotation.order = 'YXZ';
+        mesh.rotation.y = angle;
+        // Tilt outward like giant rib bones flanking the magma fissure
+        mesh.rotation.z = -side * 0.36;
+        const maxH = 0.85 + frac * 0.65;
+        mesh.scale.set(1, 0.02, 1);
+        group.add(mesh);
+        ribs.push({ mesh, delay: i * 0.024, maxH });
+      }
+    }
+
+    // 6. 5 Soaring vertical erupting flame/energy pillars blasting skyward along the trench (video 01:15!)
+    const pillarCount = this.isSoftwareGl ? 3 : 5;
+    const pillars: Array<{
+      outer: THREE.Mesh;
+      outerMat: THREE.ShaderMaterial;
+      core: THREE.Mesh;
+      coreMat: THREE.MeshBasicMaterial;
+      delay: number;
+      maxH: number;
+      radius: number;
+    }> = [];
+    for (let i = 0; i < pillarCount; i++) {
+      const frac = 0.14 + (i / Math.max(1, pillarCount - 1)) * 0.82;
+      const px = startX + dirX * (trenchLen * frac);
+      const pz = startZ + dirZ * (trenchLen * frac);
+      const radius = 0.42 + frac * 0.28;
+      const maxH = 3.2 + frac * 1.9;
+
+      const outerMat = new THREE.ShaderMaterial({
+        vertexShader: QUAD_VERT,
+        fragmentShader: PILLAR_FLAME_FRAG,
+        uniforms: {
+          uTime: { value: this.elapsed },
+          uLife: { value: 0 },
+          uColor: { value: color.clone() },
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      const outer = new THREE.Mesh(_unitCylGeo, outerMat);
+      outer.position.set(px, 0, pz);
+      outer.scale.set(radius, 0.01, radius);
+      outer.visible = false;
+      group.add(outer);
+
+      const coreMat = new THREE.MeshBasicMaterial({
+        color: 0xfff8de,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const core = new THREE.Mesh(_unitCoreCylGeo, coreMat);
+      core.position.set(px, 0, pz);
+      core.scale.set(radius * 0.38, 0.01, radius * 0.38);
+      core.visible = false;
+      group.add(core);
+
+      pillars.push({ outer, outerMat, core, coreMat, delay: i * 0.032, maxH, radius });
+    }
+
+    // 7. Forward directional ember / magma shower blasting out from landing point
+    const sparkCount = this.isSoftwareGl ? 14 : 34;
+    for (let i = 0; i < sparkCount; i++) {
+      const fanAng = angle + (Math.random() - 0.5) * 1.55;
+      const spd = 4.2 + Math.random() * 6.2;
+      this.spawnParticle(
+        ex + (Math.random() - 0.5) * 0.8,
+        0.4,
+        ez + (Math.random() - 0.5) * 0.8,
+        Math.sin(fanAng) * spd,
+        2.6 + Math.random() * 4.2,
+        Math.cos(fanAng) * spd,
+        i % 3 === 0 ? 0xfff4c2 : colorHex,
+        1.35,
+        0.58,
+        8.4
+      );
+    }
+
+    this.dynamicGroup.add(group);
+    const maxLife = 1.9;
+    this.bossVfxItems.push({
+      group,
+      life: 0,
+      maxLife,
+      update: (dt, _t, elapsed) => {
+        const age = (group.userData.age = (group.userData.age ?? 0) + dt);
+
+        trenchMat.uniforms.uLife.value = Math.min(1, age / maxLife);
+        trenchMat.uniforms.uTime.value = elapsed;
+
+        const ft = Math.min(1, age / 0.22);
+        flashMesh.visible = ft < 1;
+        if (ft < 1) {
+          flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.5);
+          flashMesh.scale.setScalar(rad * (1.0 + ft * 0.95));
+        }
+
+        const ct = Math.min(1, age / 0.44);
+        crescentMesh.visible = ct < 1;
+        if (ct < 1) {
+          crescentMat.uniforms.uLife.value = ct;
+          const ease = 1 - Math.pow(1 - ct, 2.2);
+          crescentMesh.scale.setScalar(rad * (0.7 + ease * 1.55));
+          crescentMesh.position.set(ex + dirX * ease * 0.9, 0.16, ez + dirZ * ease * 0.9);
+        }
+
+        // Rib blades pop up staggered along the trench, hold, then sink
+        for (const rb of ribs) {
+          const ra = age - rb.delay;
+          if (ra <= 0 || ra >= 1.15) {
+            rb.mesh.visible = false;
+            continue;
+          }
+          rb.mesh.visible = true;
+          const mat = rb.mesh.material as THREE.MeshStandardMaterial;
+          if (ra < 0.12) {
+            const p = ra / 0.12;
+            const h = rb.maxH * p * (1 + Math.sin(p * Math.PI) * 0.22);
+            rb.mesh.scale.y = Math.max(0.05, h);
+            rb.mesh.position.y = h * 0.55;
+            mat.emissiveIntensity = 1.9;
+          } else {
+            const p = (ra - 0.12) / 1.03;
+            const sink = 1 - Math.pow(p, 1.9);
+            const h = rb.maxH * sink;
+            rb.mesh.scale.y = Math.max(0.02, h);
+            rb.mesh.position.y = h * 0.55 - p * 0.2;
+            mat.emissiveIntensity = 1.3 * (1 - p);
+            mat.opacity = 1 - Math.pow(p, 2.2);
+          }
+        }
+
+        // Vertical fire pillars erupt skyward rapidly then dissolve over 0.72s
+        for (const pl of pillars) {
+          const pa = age - pl.delay;
+          const pDur = 0.72;
+          if (pa <= 0 || pa >= pDur) {
+            pl.outer.visible = false;
+            pl.core.visible = false;
+            continue;
+          }
+          pl.outer.visible = true;
+          pl.core.visible = true;
+          const pt = pa / pDur;
+          const rise = Math.min(1, pa / 0.11);
+          const h = pl.maxH * (1 - Math.pow(1 - rise, 2.4));
+          const width = (1 - Math.pow(pt, 1.8)) * (0.9 + 0.15 * Math.sin(elapsed * 40));
+
+          pl.outer.scale.set(pl.radius * (0.65 + width * 0.55), Math.max(0.05, h), pl.radius * (0.65 + width * 0.55));
+          pl.outer.position.y = h * 0.5;
+          pl.outerMat.uniforms.uTime.value = elapsed;
+          pl.outerMat.uniforms.uLife.value = pt;
+
+          pl.core.scale.set(pl.radius * 0.36 * width, Math.max(0.05, h * 0.85), pl.radius * 0.36 * width);
+          pl.core.position.y = h * 0.425;
+          pl.coreMat.opacity = Math.pow(1 - pt, 1.35) * 0.85;
         }
       },
       dispose: () => {
