@@ -1,7 +1,7 @@
 import type { EmbervaultEngine } from '../engine';
-import { BOT_REGROUP_DIST, BOT_REGROUP_DONE_DIST, COMPANION_EDGE_NDC, COMPANION_WARP_DIST, FROST_MAGE, HUNTER, UpgradeKind } from '../classes';
+import { BOT_REGROUP_DIST, BOT_REGROUP_DONE_DIST, COMPANION_EDGE_NDC, COMPANION_WARP_DIST, FROST_MAGE, HERO_CLASSES, HUNTER, UpgradeKind } from '../classes';
 import { findGridPath, gridToWorld, hasLineOfSight, isTileWalkable, worldToGrid, worldToWalkableGrid } from '../dungeon';
-import { isGuardianEnemy, isSwarmEnemy } from './data';
+import { BOSS_AI, BOSS_VOLLEY, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, EnemyEntity, LootEntity } from './entities';
 import { _projVec } from './scratch';
 import { Hero } from '../hero';
@@ -215,7 +215,9 @@ export const aiMethods = {
       return null;
     };
 
-    if (closest && closestDist < 3) {
+    // An enraged boss is fast: kite from further away so it never gets on top of us
+    const kiteDist = this.aiEnragedBossNear() ? BOSS_AI.enragedKiteDist : 3;
+    if (closest && closestDist < kiteDist) {
       this.hero.ai.status = 'Kiting';
       const ax = this.hero.x - closest.x;
       const az = this.hero.z - closest.z;
@@ -252,6 +254,134 @@ export const aiMethods = {
       moveX: (-dz / l) * 0.3 * this.hero.ai.strafeSign,
       moveZ: (dx / l) * 0.3 * this.hero.ai.strafeSign,
     };
+  },
+
+  /** Walk speed of the actor, same formula as the movement step in `updateHeroFrame`. */
+  aiMoveSpeed(this: EmbervaultEngine): number {
+    return (
+      4.65 *
+      HERO_CLASSES[this.hero.classId].moveSpeedMult *
+      (1 + this.hero.relicStats.moveSpeedPct / 100)
+    );
+  },
+
+  /** True when a living enraged boss is within 13 of the actor: ranged heroes then keep a larger distance. */
+  aiEnragedBossNear(this: EmbervaultEngine): boolean {
+    return this.enemies.some(
+      (e) => !e.dead && e.isBoss && e.bossEnraged && Math.hypot(e.x - this.hero.x, e.z - this.hero.z) < 13
+    );
+  },
+
+  /**
+   * Boss dodge for the actor: leave a skill telegraph circle as soon as it shows (dash when walking cannot make it),
+   * step out of a locked volley fan, and sidestep boss projectiles on their way. Returns the move, or null.
+   * Basic attacks have no telegraph and cannot be dodged by reading the ground.
+   */
+  aiBossDodge(this: EmbervaultEngine): { moveX: number; moveZ: number } | null {
+    const hx = this.hero.x;
+    const hz = this.hero.z;
+    const speed = this.aiMoveSpeed();
+    const margin = BOSS_AI.circleMargin;
+
+    const stepAway = (escX: number, escZ: number): { moveX: number; moveZ: number } => {
+      this.hero.facing = Math.atan2(escX, escZ);
+      if (this.canMoveTo(hx + escX * 0.7, hz + escZ * 0.7, 0.4)) return { moveX: escX, moveZ: escZ };
+      const perpX = -escZ * this.hero.ai.strafeSign;
+      const perpZ = escX * this.hero.ai.strafeSign;
+      if (this.canMoveTo(hx + perpX * 0.7, hz + perpZ * 0.7, 0.4)) return { moveX: perpX, moveZ: perpZ };
+      return { moveX: -perpX, moveZ: -perpZ };
+    };
+
+    for (const e of this.enemies) {
+      if (e.dead || !e.isBoss || e.bossState !== 'windup' || e.bossAction === 'basic') continue;
+      const remaining = e.bossStateTimer ?? 0;
+      const dur = e.bossStateDuration || 1;
+
+      if (e.bossSkill === 'ranged_volley') {
+        const bdx = hx - e.x;
+        const bdz = hz - e.z;
+        const bDist = Math.hypot(bdx, bdz);
+        const progress = 1 - remaining / dur;
+        if (progress < BOSS_VOLLEY.aimTrackFraction) {
+          // The boss still tracks us: only get out of the small ring under it
+          const ring = (e.telegraphRadius ?? 1.45) + margin;
+          if (bDist < ring) {
+            this.hero.ai.status = 'Evading Boss Strike';
+            const ex = bDist > 0.05 ? bdx / bDist : 1;
+            const ez = bDist > 0.05 ? bdz / bDist : 0;
+            return stepAway(ex, ez);
+          }
+          continue;
+        }
+        // Aim locked: leave the fan (3 shots, +-0.28 rad around the facing direction)
+        const fx = Math.sin(e.facing);
+        const fz = Math.cos(e.facing);
+        const along = bdx * fx + bdz * fz;
+        const lateral = bdx * -fz + bdz * fx;
+        const fanHalfWidth = Math.max(0, along) * Math.tan(0.28) + 1.05;
+        if (along > 0 && bDist < 10 && Math.abs(lateral) < fanHalfWidth) {
+          this.hero.ai.status = 'Strafing Boss Volley';
+          const side = lateral === 0 ? this.hero.ai.strafeSign : Math.sign(lateral);
+          const mv = stepAway(-fz * side, fx * side);
+          if (this.hero.dashCooldown <= 0 && remaining < BOSS_AI.dashLeadTime + 0.1) this.performDash();
+          return mv;
+        }
+        continue;
+      }
+
+      const tx = e.telegraphX ?? e.x;
+      const tz = e.telegraphZ ?? e.z;
+      const rad = e.telegraphRadius ?? 2.8;
+      const cdx = hx - tx;
+      const cdz = hz - tz;
+      const cDist = Math.hypot(cdx, cdz);
+      if (cDist < rad + margin) {
+        this.hero.ai.status = 'Evading Boss Strike';
+        const escX = cDist > 0.05 ? cdx / cDist : Math.cos(this.elapsed);
+        const escZ = cDist > 0.05 ? cdz / cDist : Math.sin(this.elapsed);
+        const left = rad + margin * 0.5 - cDist;
+        // Walking out takes left / speed; if the windup ends before that (or nearly has), burn the dash (it also grants i-frames)
+        if (
+          this.hero.dashCooldown <= 0 &&
+          (left > speed * remaining * 0.9 || (remaining < BOSS_AI.dashLeadTime && cDist < rad + 0.2))
+        ) {
+          this.hero.facing = Math.atan2(escX, escZ);
+          this.performDash();
+        }
+        return stepAway(escX, escZ);
+      }
+    }
+
+    // Boss projectiles (volley shots, basic shots, nova orbs): leave the line of every one that is about to reach us
+    let sideX = 0;
+    let sideZ = 0;
+    let imminent = false;
+    for (const p of this.projectiles) {
+      if (!this.enemies.some((e) => !e.dead && e.isBoss && (e.bossName ?? '地城頭目') === p.sourceLabel)) continue;
+      const ps = Math.hypot(p.vx, p.vz);
+      if (ps < 0.01) continue;
+      const ux = p.vx / ps;
+      const uz = p.vz / ps;
+      const rx = hx - p.x;
+      const rz = hz - p.z;
+      const along = rx * ux + rz * uz;
+      if (along < -0.2 || along > ps * 1.4) continue;
+      const lateral = rx * -uz + rz * ux;
+      if (Math.abs(lateral) > 1.25) continue;
+      const side = Math.abs(lateral) < 0.05 ? this.hero.ai.strafeSign : Math.sign(lateral);
+      const w = 1 / (Math.abs(lateral) + 0.25);
+      sideX += -uz * side * w;
+      sideZ += ux * side * w;
+      if (along / ps < 0.28 && Math.abs(lateral) < 0.75) imminent = true;
+    }
+    const sideLen = Math.hypot(sideX, sideZ);
+    if (sideLen > 0.001) {
+      this.hero.ai.status = 'Dodging Boss Shots';
+      const mv = stepAway(sideX / sideLen, sideZ / sideLen);
+      if (imminent && this.hero.dashCooldown <= 0) this.performDash();
+      return mv;
+    }
+    return null;
   },
 
   /**
@@ -324,52 +454,9 @@ export const aiMethods = {
       this.usePotion();
     }
 
-    // 1b. Boss Telegraph Dodge! Step or dash outside the Boss's danger zone or strafe away from ranged volley
-    for (const e of this.enemies) {
-      if (e.dead || !e.isBoss || e.bossState !== 'windup') continue;
-      if (e.bossSkill === 'ranged_volley') {
-        const bdx = this.hero.x - e.x;
-        const bdz = this.hero.z - e.z;
-        const bDist = Math.hypot(bdx, bdz);
-        if (bDist < 8.5 && (e.bossStateTimer ?? 1) < 0.45) {
-          this.hero.ai.status = 'Strafing Boss Volley';
-          const dirX = bDist > 0.05 ? bdx / bDist : 1;
-          const dirZ = bDist > 0.05 ? bdz / bDist : 0;
-          const perpX = -dirZ * this.hero.ai.strafeSign;
-          const perpZ = dirX * this.hero.ai.strafeSign;
-          if (this.canMoveTo(this.hero.x + perpX * 0.7, this.hero.z + perpZ * 0.7, 0.4)) {
-            return { moveX: perpX, moveZ: perpZ };
-          }
-          return { moveX: -perpX, moveZ: -perpZ };
-        }
-        continue;
-      }
-
-      const tx = e.telegraphX ?? e.x;
-      const tz = e.telegraphZ ?? e.z;
-      const rad = e.telegraphRadius ?? 2.8;
-      const dx = this.hero.x - tx;
-      const dz = this.hero.z - tz;
-      const dist = Math.hypot(dx, dz);
-      if (dist < rad + 0.65) {
-        this.hero.ai.status = 'Evading Boss Strike';
-        const escX = dist > 0.05 ? dx / dist : Math.cos(this.elapsed);
-        const escZ = dist > 0.05 ? dz / dist : Math.sin(this.elapsed);
-        this.hero.facing = Math.atan2(escX, escZ);
-        if (this.hero.dashCooldown <= 0 && (e.bossStateTimer ?? 1) < 0.52) {
-          this.performDash();
-        }
-        if (this.canMoveTo(this.hero.x + escX * 0.7, this.hero.z + escZ * 0.7, 0.4)) {
-          return { moveX: escX, moveZ: escZ };
-        }
-        const perpX = -escZ * this.hero.ai.strafeSign;
-        const perpZ = escX * this.hero.ai.strafeSign;
-        if (this.canMoveTo(this.hero.x + perpX * 0.7, this.hero.z + perpZ * 0.7, 0.4)) {
-          return { moveX: perpX, moveZ: perpZ };
-        }
-        return { moveX: -perpX, moveZ: -perpZ };
-      }
-    }
+    // 1b. Boss dodge (docs/boss-spec.md section 9): react the moment a telegraph appears (windups are only 0.5-0.8 s now)
+    const bossDodge = this.aiBossDodge();
+    if (bossDodge) return bossDodge;
 
     // 1b-2. Rescue a downed teammate: ranks above fighting, below the potion check and boss dodging above
     const rescueMove = this.aiRescueStep(dt);
@@ -582,8 +669,8 @@ export const aiMethods = {
           this.hero.facing = Math.atan2(dx, dz);
           if (this.hero.attackCooldown <= 0) this.performHunterAttack();
           const len = nearestEnemyDist || 1;
-          if (nearestEnemyDist < 3.6) {
-            // Kite backward while shooting
+          if (nearestEnemyDist < (this.aiEnragedBossNear() ? BOSS_AI.enragedKiteDist : 3.6)) {
+            // Kite backward while shooting (further away from an enraged boss)
             return { moveX: -dx / len, moveZ: -dz / len };
           }
           if (nearestEnemyDist > 7.5) {
