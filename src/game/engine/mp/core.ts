@@ -381,6 +381,7 @@ export const coreMpMethods = {
     this.mpApplyViewGroupsForRemotes();
     this.buildLevel(startDepth);
     this.loadingRun = false;
+    this.requestSave('floor'); // the first floor's treasure room roll moved the host's pity counter
     this.mpReleaseHold();
   },
 
