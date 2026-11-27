@@ -249,21 +249,32 @@ export const guestMpMethods = {
     if (s.ps) {
       for (const [pid, kind, x, z, vx, vz] of s.ps) {
         if (g.projs.has(pid)) continue;
-        const mesh = createProjectileMesh(kind as ProjectileKind);
-        mesh.position.set(x / 100, 0.85, z / 100);
+        const px = x / 100;
+        const pz = z / 100;
+        const isBossHeavy = g.enemyList.some(
+          (e) =>
+            !e.dead &&
+            e.isBoss &&
+            e.bossSkill === 'ranged_volley' &&
+            Math.hypot(e.x - px, e.z - pz) < 2.6
+        );
+        const mesh = createProjectileMesh(kind as ProjectileKind, isBossHeavy);
+        if (isBossHeavy) mesh.scale.setScalar(1.08);
+        mesh.position.set(px, 0.85, pz);
         mesh.rotation.y = Math.atan2(vx, vz);
         this.dynamicGroup.add(mesh);
         const ent: ProjectileEntity = {
           kind: kind as ProjectileKind,
           mesh,
-          x: x / 100,
-          z: z / 100,
+          x: px,
+          z: pz,
           vx: vx / 100,
           vz: vz / 100,
           damage: 0,
           sourceLabel: '',
           life: 0,
           maxLife: 3.2,
+          isBossHeavy,
           pid,
         };
         this.projectiles.push(ent);
@@ -1018,7 +1029,50 @@ export const guestMpMethods = {
       p.z += p.vz * dt;
       p.life += dt;
       p.mesh.position.set(p.x, 0.85, p.z);
+      if (p.isBossHeavy) {
+        const ringA = p.mesh.userData.heavyRingA as THREE.Mesh | undefined;
+        const ringB = p.mesh.userData.heavyRingB as THREE.Mesh | undefined;
+        if (ringA) ringA.rotation.z += dt * 14;
+        if (ringB) ringB.rotation.z -= dt * 18;
+        if (!this.isSoftwareGl && Math.random() < dt * 52) {
+          const col =
+            p.kind === 'plasma_bolt'
+              ? 0x39ff7a
+              : p.kind === 'bone_dart'
+              ? 0xff5a2a
+              : p.kind === 'bio_orb'
+              ? 0x36f5d4
+              : p.kind === 'ion_orb'
+              ? 0xff4785
+              : 0x3be8ff;
+          this.spawnParticle(
+            p.x + (Math.random() - 0.5) * 0.25,
+            0.85,
+            p.z + (Math.random() - 0.5) * 0.25,
+            -p.vx * 0.14,
+            0,
+            -p.vz * 0.14,
+            Math.random() < 0.4 ? 0xffffff : col,
+            0.9,
+            0.28,
+            0
+          );
+        }
+      }
       if (p.life >= p.maxLife || this.isPointInWall(p.x, p.z)) {
+        if (p.isBossHeavy) {
+          const col =
+            p.kind === 'plasma_bolt'
+              ? 0x39ff7a
+              : p.kind === 'bone_dart'
+              ? 0xff5a2a
+              : p.kind === 'bio_orb'
+              ? 0x36f5d4
+              : p.kind === 'ion_orb'
+              ? 0xff4785
+              : 0x3be8ff;
+          this.spawnBossProjectileImpactVfx(p.x, p.z, col);
+        }
         if (p.pid !== undefined) g.projs.delete(p.pid);
         this.removeProjectileAt(i);
       }

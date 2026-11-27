@@ -1,10 +1,11 @@
 import type { EmbervaultEngine } from '../engine';
-import { TILE_SIZE, hasLineOfSight, worldToGrid } from '../dungeon';
+import { TILE_SIZE, findGridPath, gridToWorld, hasLineOfSight, worldToGrid, worldToWalkableGrid } from '../dungeon';
 import {
   BOSS_ACTION,
   BOSS_BASIC,
   BOSS_CASTER_BASIC_SPEED_MULT,
   BOSS_CHARGE,
+  BOSS_CHASE_WAKE_RANGE,
   BOSS_CONFIGS,
   BOSS_COOLDOWN,
   BOSS_ENGAGE_RANGE,
@@ -198,7 +199,10 @@ export const enemiesMethods = {
       // Find farthest unobstructed landing spot along line toward hero
       const dirX = dx / (dist || 1);
       const dirZ = dz / (dist || 1);
-      const maxLunge = Math.min(BOSS_CHARGE.maxLunge, Math.max(BOSS_CHARGE.minLunge, dist + 0.35));
+      const desiredLunge = e.bossWarpChained
+        ? Math.max(BOSS_CHARGE.minLunge + 1.5, dist + 1.6)
+        : Math.max(BOSS_CHARGE.minLunge, dist + 0.55);
+      const maxLunge = Math.min(BOSS_CHARGE.maxLunge, desiredLunge);
       let bestX = e.x;
       let bestZ = e.z;
       const steps = 10;
@@ -270,10 +274,11 @@ export const enemiesMethods = {
         : dist <= BOSS_BASIC.caster.range && hasLOS;
 
     const findWarpTarget = (): Hero | null => {
+      const maxWarpRange = e.bossAggroed ? BOSS_WARP.aggroMaxRange : BOSS_ENGAGE_RANGE;
       const candidates = this.heroes.filter((h) => {
         if (h.isDead || h.inTown) return false;
         const d = Math.hypot(h.x - e.x, h.z - e.z);
-        return d > cfg.triggerRange && d <= BOSS_ENGAGE_RANGE;
+        return d > cfg.triggerRange && d <= maxWarpRange;
       });
       if (candidates.length === 0) return null;
       return candidates[Math.floor(Math.random() * candidates.length)];
@@ -552,6 +557,11 @@ export const enemiesMethods = {
       }
     }
 
+    // Wake boss once player comes within wake range, deals damage, or enters Boss Test Arena -> pursues indefinitely!
+    if (!e.bossAggroed && (this.bossArenaMode || dist < BOSS_CHASE_WAKE_RANGE || e.hp < e.maxHp)) {
+      e.bossAggroed = true;
+    }
+
     let moveX = 0;
     let moveZ = 0;
 
@@ -559,15 +569,43 @@ export const enemiesMethods = {
       if (e.telegraph) e.telegraph.group.visible = false;
       this.hideBossWindupVfx(e.id);
 
-      if (dist < 12.5 && dist > 1.35) {
-        const dirX = dx / (dist || 1);
-        const dirZ = dz / (dist || 1);
+      if ((e.bossAggroed || dist < BOSS_CHASE_WAKE_RANGE) && dist > 1.35) {
+        const directLOS =
+          dist < 3.0 || hasLineOfSight(this.dungeon, e.x, e.z, this.hero.x, this.hero.z, this.doorUnlocked, 0.35);
+        let dirX = dx / (dist || 1);
+        let dirZ = dz / (dist || 1);
+        if (directLOS) {
+          e.bossPath = undefined;
+        } else {
+          // Navigate cleanly around room corners/doorways when chasing an aggroed target out of LOS
+          e.bossPathTimer = (e.bossPathTimer ?? 0) - dt;
+          if (!e.bossPath || e.bossPath.length === 0 || e.bossPathTimer <= 0) {
+            e.bossPathTimer = 0.45;
+            const bg = worldToWalkableGrid(this.dungeon, e.x, e.z, this.doorUnlocked);
+            const hg = worldToWalkableGrid(this.dungeon, this.hero.x, this.hero.z, this.doorUnlocked);
+            e.bossPath = findGridPath(this.dungeon, bg.gx, bg.gz, hg.gx, hg.gz, this.doorUnlocked);
+          }
+          while (e.bossPath && e.bossPath.length > 0) {
+            const wp = gridToWorld(e.bossPath[0].gx, e.bossPath[0].gz);
+            const wdx = wp.x - e.x;
+            const wdz = wp.z - e.z;
+            const wd = Math.hypot(wdx, wdz);
+            if (wd < 0.45) {
+              e.bossPath.shift();
+            } else {
+              dirX = wdx / wd;
+              dirZ = wdz / wd;
+              break;
+            }
+          }
+        }
         moveX = dirX * e.speed;
         moveZ = dirZ * e.speed;
         e.facing = Math.atan2(dirX, dirZ);
       }
 
-      if (e.attackCooldown <= 0 && dist < BOSS_ENGAGE_RANGE) {
+      const engageRange = e.bossAggroed ? BOSS_WARP.aggroMaxRange : BOSS_ENGAGE_RANGE;
+      if (e.attackCooldown <= 0 && dist < engageRange) {
         this.bossTryStartAction(e, cfg, dx, dz, dist, dt);
       }
     } else if (state === 'windup') {
@@ -619,6 +657,7 @@ export const enemiesMethods = {
         e.bossStateTimer = strikeDur;
         e.bossHitApplied = false;
         if (!isBasic && skill === 'charge_slam') {
+          e.bossChargeHitIds = new Set<string>();
           this.spawnBossChargeDashVfx(
             e.bossChargeStartX ?? e.x,
             e.bossChargeStartZ ?? e.z,
@@ -721,8 +760,13 @@ export const enemiesMethods = {
             this.doorUnlocked,
             0.35
           );
-          const followSkill: BossSkillKind =
-            fDist <= cfg.triggerRange ? 'slam' : followLOS ? 'charge_slam' : 'slam';
+          const followSkill: BossSkillKind = !followLOS
+            ? 'slam'
+            : fDist > cfg.triggerRange
+            ? 'charge_slam'
+            : Math.random() < 0.5
+            ? 'charge_slam'
+            : 'slam';
           e.bossWarpChained = true;
           this.startBossSkillWindup(e, cfg, followSkill, fdx, fdz, fDist);
           e.rig.root.position.set(e.x, 0, e.z);
@@ -730,17 +774,53 @@ export const enemiesMethods = {
           return;
         }
       } else if (skill === 'charge_slam') {
-        // Dash rapidly from start to locked landing point, leaving a glowing trail, then slam on arrival
+        // Dash rapidly from start to locked landing point, damaging targets along the corridor AND at landing (once per target!)
         const dur = e.bossStateDuration || BOSS_SKILLS.charge_slam.strike;
         const p = THREE.MathUtils.clamp(1 - (e.bossStateTimer ?? 0) / dur, 0, 1);
         const sx = e.bossChargeStartX ?? e.x;
         const sz = e.bossChargeStartZ ?? e.z;
+        const prevX = e.x;
+        const prevZ = e.z;
         const nx = THREE.MathUtils.lerp(sx, tx, p);
         const nz = THREE.MathUtils.lerp(sz, tz, p);
         if (this.canMoveTo(nx, nz, 0.48)) {
           e.x = nx;
           e.z = nz;
         }
+        const dmg = this.bossDamage(e, BOSS_SKILLS.charge_slam.damage);
+        const hitIds = (e.bossChargeHitIds = e.bossChargeHitIds ?? new Set<string>());
+        const label = this.getEnemyLabel(e);
+
+        // Swept corridor hit check along (prevX, prevZ) -> (e.x, e.z) so standing in the charge path deals damage!
+        const segX = e.x - prevX;
+        const segZ = e.z - prevZ;
+        const segLenSq = segX * segX + segZ * segZ;
+        const distToStep = (px: number, pz: number): number => {
+          if (segLenSq < 1e-6) return Math.hypot(px - e.x, pz - e.z);
+          const proj = THREE.MathUtils.clamp(((px - prevX) * segX + (pz - prevZ) * segZ) / segLenSq, 0, 1);
+          return Math.hypot(px - (prevX + segX * proj), pz - (prevZ + segZ * proj));
+        };
+        const corrHitRad = BOSS_CHARGE.corridorHalfWidth + 0.25;
+        this.forEachLiveHero(() => {
+          const key = `h:${this.hero.id}`;
+          if (hitIds.has(key)) return;
+          if (distToStep(this.hero.x, this.hero.z) <= corrHitRad) {
+            hitIds.add(key);
+            this.damageHero(dmg, e.x, e.z, label);
+          }
+        });
+        for (const pet of this.pets.values()) {
+          if (pet.hp <= 0) continue;
+          const owner = this.heroById(pet.ownerId);
+          if (!owner || owner.isDead || owner.inTown) continue;
+          const key = `p:${pet.ownerId}`;
+          if (hitIds.has(key)) continue;
+          if (distToStep(pet.x, pet.z) <= corrHitRad + 0.08) {
+            hitIds.add(key);
+            this.damagePet(pet, dmg, e.x, e.z);
+          }
+        }
+
         if (Math.random() < dt * 45) {
           this.spawnParticle(
             e.x,
@@ -760,7 +840,6 @@ export const enemiesMethods = {
           e.bossHitApplied = true;
           if (e.telegraph) e.telegraph.group.visible = false;
           this.hideBossWindupVfx(e.id);
-          const dmg = this.bossDamage(e, BOSS_SKILLS.charge_slam.damage);
           this.audio.playBossChargeImpact();
           this.forEachLiveHero(() => this.addScreenShake(0.66, 0.34));
           this.spawnBossChargeImpactVfx(
@@ -773,14 +852,27 @@ export const enemiesMethods = {
           );
 
           this.forEachLiveHero(() => {
+            const key = `h:${this.hero.id}`;
+            if (hitIds.has(key)) return;
             const heroDistToImpact = Math.hypot(this.hero.x - e.x, this.hero.z - e.z);
             if (heroDistToImpact <= rad) {
-              this.damageHero(dmg, e.x, e.z, this.getEnemyLabel(e));
+              hitIds.add(key);
+              this.damageHero(dmg, e.x, e.z, label);
             } else if (heroDistToImpact <= rad + 3.2) {
               this.emitFloatingText(this.hero.x, 1.95, this.hero.z, 'DODGED!', 'info');
             }
           });
-          this.damagePetsInRadius(e.x, e.z, rad, dmg);
+          for (const pet of Array.from(this.pets.values())) {
+            if (pet.hp <= 0) continue;
+            const owner = this.heroById(pet.ownerId);
+            if (!owner || owner.isDead || owner.inTown) continue;
+            const key = `p:${pet.ownerId}`;
+            if (hitIds.has(key)) continue;
+            if (Math.hypot(pet.x - e.x, pet.z - e.z) <= rad) {
+              hitIds.add(key);
+              this.damagePet(pet, dmg, e.x, e.z);
+            }
+          }
         }
       } else if (!e.bossHitApplied) {
         e.bossHitApplied = true;
@@ -1118,8 +1210,10 @@ export const enemiesMethods = {
     customDamage?: number,
     scaleMult = 1
   ): void {
-    const mesh = createProjectileMesh(kind);
-    if (scaleMult !== 1) mesh.scale.setScalar(scaleMult);
+    const isBossHeavy = scaleMult >= 1.8;
+    const mesh = createProjectileMesh(kind, isBossHeavy);
+    if (isBossHeavy) mesh.scale.setScalar(1.08);
+    else if (scaleMult !== 1) mesh.scale.setScalar(scaleMult);
     const isFastShot =
       kind === 'arrow' ||
       kind === 'crystal_shard' ||
@@ -1141,6 +1235,7 @@ export const enemiesMethods = {
       sourceLabel: sourceLabel ?? (isFastShot ? '遠程射手' : '遠程術士'),
       life: 0,
       maxLife: 2.8,
+      isBossHeavy,
     });
   },
 
@@ -1174,7 +1269,12 @@ export const enemiesMethods = {
         p.kind === 'spore_orb' ||
         p.kind === 'bio_orb' ||
         p.kind === 'ion_orb';
-      if (isOrb) {
+      if (p.isBossHeavy) {
+        const ringA = p.mesh.userData.heavyRingA as THREE.Mesh | undefined;
+        const ringB = p.mesh.userData.heavyRingB as THREE.Mesh | undefined;
+        if (ringA) ringA.rotation.z += dt * 14;
+        if (ringB) ringB.rotation.z -= dt * 18;
+      } else if (isOrb) {
         p.mesh.rotation.y += dt * 7;
         p.mesh.rotation.x += dt * 4;
       }
@@ -1204,8 +1304,23 @@ export const enemiesMethods = {
             : 0xb866ff
           : 0xffe484;
 
-      // Subtle flight trail sparks
-      if (Math.random() < dt * (isOrb ? 28 : 16)) {
+      // Subtle flight trail sparks (heavy Boss railgun shells emit intense blazing plasma trails!)
+      if (p.isBossHeavy) {
+        if (!this.isSoftwareGl && Math.random() < dt * 58) {
+          this.spawnParticle(
+            p.x + (Math.random() - 0.5) * 0.28,
+            0.85 + (Math.random() - 0.5) * 0.24,
+            p.z + (Math.random() - 0.5) * 0.28,
+            -p.vx * 0.14 + (Math.random() - 0.5) * 1.2,
+            (Math.random() - 0.5) * 0.9,
+            -p.vz * 0.14 + (Math.random() - 0.5) * 1.2,
+            Math.random() < 0.4 ? 0xffffff : trailCol,
+            0.95,
+            0.3,
+            0
+          );
+        }
+      } else if (Math.random() < dt * (isOrb ? 28 : 16)) {
         this.spawnParticle(
           p.x,
           0.85,
@@ -1231,19 +1346,23 @@ export const enemiesMethods = {
       }
 
       if (hitSolid) {
-        for (let k = 0; k < 6; k++) {
-          this.spawnParticle(
-            p.x,
-            0.85,
-            p.z,
-            (Math.random() - 0.5) * 3.8,
-            1.2 + Math.random() * 1.5,
-            (Math.random() - 0.5) * 3.8,
-            trailCol,
-            0.72,
-            0.3,
-            5
-          );
+        if (p.isBossHeavy) {
+          this.spawnBossProjectileImpactVfx(p.x, p.z, trailCol);
+        } else {
+          for (let k = 0; k < 6; k++) {
+            this.spawnParticle(
+              p.x,
+              0.85,
+              p.z,
+              (Math.random() - 0.5) * 3.8,
+              1.2 + Math.random() * 1.5,
+              (Math.random() - 0.5) * 3.8,
+              trailCol,
+              0.72,
+              0.3,
+              5
+            );
+          }
         }
         this.removeProjectileAt(i);
         continue;
@@ -1255,26 +1374,30 @@ export const enemiesMethods = {
         if (pet.hp <= 0) continue;
         const owner = this.heroById(pet.ownerId);
         if (!owner || owner.isDead || owner.inTown) continue;
-        if (Math.hypot(p.x - pet.x, p.z - pet.z) < 0.62) {
+        if (Math.hypot(p.x - pet.x, p.z - pet.z) < (p.isBossHeavy ? 0.78 : 0.62)) {
           hitPet = pet;
           break;
         }
       }
       if (hitPet) {
         this.damagePet(hitPet, p.damage, p.x - p.vx * 0.05, p.z - p.vz * 0.05);
-        for (let k = 0; k < 6; k++) {
-          this.spawnParticle(
-            p.x,
-            0.85,
-            p.z,
-            (Math.random() - 0.5) * 3.8,
-            1.2 + Math.random() * 1.4,
-            (Math.random() - 0.5) * 3.8,
-            trailCol,
-            0.72,
-            0.28,
-            4
-          );
+        if (p.isBossHeavy) {
+          this.spawnBossProjectileImpactVfx(p.x, p.z, trailCol);
+        } else {
+          for (let k = 0; k < 6; k++) {
+            this.spawnParticle(
+              p.x,
+              0.85,
+              p.z,
+              (Math.random() - 0.5) * 3.8,
+              1.2 + Math.random() * 1.4,
+              (Math.random() - 0.5) * 3.8,
+              trailCol,
+              0.72,
+              0.28,
+              4
+            );
+          }
         }
         this.removeProjectileAt(i);
         continue;
@@ -1282,25 +1405,29 @@ export const enemiesMethods = {
 
       // Hero collision (any standing hero; heroes can dash through projectiles!)
       const struck = this.heroes.find(
-        (h) => !h.isDead && !h.inTown && h.dashTimer <= 0 && Math.hypot(p.x - h.x, p.z - h.z) < 0.58
+        (h) => !h.isDead && !h.inTown && h.dashTimer <= 0 && Math.hypot(p.x - h.x, p.z - h.z) < (p.isBossHeavy ? 0.72 : 0.58)
       );
       if (struck) {
         this.setActor(struck);
         this.damageHero(p.damage, p.x - p.vx * 0.05, p.z - p.vz * 0.05, p.sourceLabel);
         this.setActor(this.localHero);
-        for (let k = 0; k < 8; k++) {
-          this.spawnParticle(
-            p.x,
-            0.9,
-            p.z,
-            (Math.random() - 0.5) * 4.2,
-            1.4 + Math.random() * 1.6,
-            (Math.random() - 0.5) * 4.2,
-            trailCol,
-            0.82,
-            0.32,
-            4
-          );
+        if (p.isBossHeavy) {
+          this.spawnBossProjectileImpactVfx(p.x, p.z, trailCol);
+        } else {
+          for (let k = 0; k < 8; k++) {
+            this.spawnParticle(
+              p.x,
+              0.9,
+              p.z,
+              (Math.random() - 0.5) * 4.2,
+              1.4 + Math.random() * 1.6,
+              (Math.random() - 0.5) * 4.2,
+              trailCol,
+              0.82,
+              0.32,
+              4
+            );
+          }
         }
         this.removeProjectileAt(i);
       }

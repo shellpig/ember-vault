@@ -4162,8 +4162,109 @@ export function createPotionShop(glowMap: THREE.Texture): {
   return { root, crystal, ring, halo };
 }
 
-export function createProjectileMesh(kind: ProjectileKind): THREE.Group {
+export function createProjectileMesh(kind: ProjectileKind, heavy = false): THREE.Group {
   const g = new THREE.Group();
+  if (heavy) {
+    // Upgraded Boss Railgun / Heavy Volley Shell: blazing white core + themed glow shell + twin spinning voxel rings + comet tail!
+    const themeHex =
+      kind === 'crystal_shard'
+        ? 0x3be8ff
+        : kind === 'spore_orb'
+        ? 0x4ef58a
+        : kind === 'bone_dart'
+        ? 0xff5a2a
+        : kind === 'bio_orb'
+        ? 0x36f5d4
+        : kind === 'plasma_bolt'
+        ? 0x39ff7a
+        : kind === 'ion_orb'
+        ? 0xff4785
+        : kind === 'mage_orb'
+        ? 0xc85cff
+        : 0xffd24a;
+
+    // 1. Blazing white-hot elongated spearhead / core
+    const core = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.24, 0),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    core.scale.set(0.85, 0.85, 2.2);
+    g.add(core);
+
+    // 2. Luminous outer plasma/crystal jacket
+    const jacket = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.36, 0),
+      new THREE.MeshBasicMaterial({
+        color: themeHex,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    jacket.scale.set(0.92, 0.92, 2.35);
+    g.add(jacket);
+
+    // 3. Twin counter-rotating voxel energy accelerator rings around the warhead
+    const ringA = new THREE.Mesh(
+      new THREE.TorusGeometry(0.42, 0.045, 6, 12),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.92,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    ringA.position.z = 0.05;
+    ringA.rotation.x = 0.35;
+    g.add(ringA);
+
+    const ringB = new THREE.Mesh(
+      new THREE.TorusGeometry(0.52, 0.05, 6, 12),
+      new THREE.MeshBasicMaterial({
+        color: themeHex,
+        transparent: true,
+        opacity: 0.88,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    ringB.position.z = -0.18;
+    ringB.rotation.x = -0.35;
+    g.add(ringB);
+
+    // 4. Tapered blazing voxel comet tail-bar trailing behind
+    const tailOuter = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.24, 1.35),
+      new THREE.MeshBasicMaterial({
+        color: themeHex,
+        transparent: true,
+        opacity: 0.56,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    tailOuter.position.z = -0.82;
+    g.add(tailOuter);
+
+    const tailCore = new THREE.Mesh(
+      new THREE.BoxGeometry(0.11, 0.11, 1.15),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    tailCore.position.z = -0.68;
+    g.add(tailCore);
+
+    g.userData.heavyRingA = ringA;
+    g.userData.heavyRingB = ringB;
+    return g;
+  }
   if (kind === 'arrow') {
     const shaft = new THREE.Mesh(
       new THREE.BoxGeometry(0.045, 0.045, 0.56),

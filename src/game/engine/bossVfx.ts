@@ -1481,9 +1481,10 @@ export const bossVfxMethods = {
           volleyGroup.add(mesh);
           volleyLines.push({ mesh, mat });
         }
-        // 3 lanes x 2 tandem hexagonal railgun accelerator gates (6 floating gates total!)
+        // 3 lanes x 4 tandem hexagonal railgun accelerator gates spanning the full laser track (12 gates total!)
+        const gatesPerLane = this.isSoftwareGl ? 2 : 4;
         const volleyGates: THREE.Mesh[] = [];
-        for (let i = 0; i < BOSS_VOLLEY.spread.length * 2; i++) {
+        for (let i = 0; i < BOSS_VOLLEY.spread.length * gatesPerLane; i++) {
           const gateMat = new THREE.MeshBasicMaterial({
             color: i % 2 === 0 ? cfg.telegraphColor : 0xffffff,
             transparent: true,
@@ -1814,6 +1815,8 @@ export const bossVfxMethods = {
     } else if (skill === 'ranged_volley' && rig.volleyLines && rig.volleyGates) {
       const aimAngle = e.facing;
       const locked = progress >= BOSS_VOLLEY.aimTrackFraction;
+      const compress = progress > 0.78 ? (progress - 0.78) / 0.22 : 0;
+      const gatesPerLane = Math.max(1, Math.floor(rig.volleyGates.length / BOSS_VOLLEY.spread.length));
       for (let i = 0; i < BOSS_VOLLEY.spread.length; i++) {
         const ang = aimAngle + BOSS_VOLLEY.spread[i];
         const dx = Math.sin(ang);
@@ -1821,38 +1824,47 @@ export const bossVfxMethods = {
         const hit = this.raycastBossBeam(tx, tz, dx, dz, 10.5);
         const bl = rig.volleyLines[i];
         bl.mesh.rotation.y = ang;
-        bl.mesh.scale.set(locked ? 0.62 : 0.76, hit.dist, 1);
+        const laneW = compress > 0 ? THREE.MathUtils.lerp(0.62, 0.34, compress) : locked ? 0.62 : 0.76;
+        bl.mesh.scale.set(laneW, hit.dist, 1);
         bl.mesh.position.set(dx * (hit.dist * 0.5), 0.065, dz * (hit.dist * 0.5));
         bl.mat.uniforms.uTime.value = this.elapsed;
         bl.mat.uniforms.uProgress.value = locked ? Math.min(1, 0.55 + progress * 0.45) : progress * 0.55;
 
-        // 2 tandem floating hexagonal railgun accelerator gates per lane (distances 1.15 & 2.25)
-        for (let g = 0; g < 2; g++) {
-          const gate = rig.volleyGates[i * 2 + g];
-          const gDist = g === 0 ? 1.15 : 2.25;
-          const appear = THREE.MathUtils.clamp((progress - g * 0.14) / 0.28, 0, 1);
-          gate.visible = appear > 0.01;
+        // 4 tandem floating hexagonal railgun accelerator gates evenly distributed along the FULL track length!
+        const usableLen = Math.max(0, hit.dist - 1.5);
+        const step = gatesPerLane > 1 ? Math.min(2.45, usableLen / (gatesPerLane - 1)) : 0;
+        for (let g = 0; g < gatesPerLane; g++) {
+          const gate = rig.volleyGates[i * gatesPerLane + g];
+          const gDist = 1.15 + g * step;
+          const appear = THREE.MathUtils.clamp((progress - g * 0.085) / 0.24, 0, 1);
+          gate.visible = appear > 0.01 && gDist < hit.dist - 0.35;
+          if (!gate.visible) continue;
           gate.position.set(dx * gDist, 1.05, dz * gDist);
           gate.rotation.y = ang;
-          gate.rotation.z = this.elapsed * (locked ? 7.5 : 2.8) * (g === 0 ? 1 : -1);
-          const gs = appear * (g === 0 ? 0.72 + progress * 0.35 : 0.55 + progress * 0.28);
-          gate.scale.setScalar(gs);
-          (gate.material as THREE.MeshBasicMaterial).color.setHex(locked ? 0xffffff : cfg.telegraphColor);
+          gate.rotation.z = this.elapsed * (locked ? 9.5 : 3.2) * (g % 2 === 0 ? 1 : -1);
+          const baseScale = THREE.MathUtils.lerp(0.84, 0.58, g / Math.max(1, gatesPerLane - 1));
+          const pinch = compress > 0 ? THREE.MathUtils.lerp(1.0, 0.72, compress * compress) : 1.0;
+          gate.scale.setScalar(appear * (baseScale + progress * 0.26) * pinch);
+          (gate.material as THREE.MeshBasicMaterial).color.setHex(
+            compress > 0.2 || (locked && g % 2 === 0) ? 0xffffff : cfg.telegraphColor
+          );
         }
       }
-      if (!this.isSoftwareGl && Math.random() < 0.7) {
+      if (!this.isSoftwareGl && Math.random() < 0.85) {
         const lane = BOSS_VOLLEY.spread[Math.floor(Math.random() * BOSS_VOLLEY.spread.length)];
         const ang = aimAngle + lane;
-        const dist = 1.1 + Math.random() * 1.4;
+        const dx = Math.sin(ang);
+        const dz = Math.cos(ang);
+        const dist = 1.0 + Math.random() * 6.5;
         this.spawnParticle(
-          tx + Math.sin(ang) * dist + (Math.random() - 0.5) * 0.4,
-          1.05 + (Math.random() - 0.5) * 0.4,
-          tz + Math.cos(ang) * dist + (Math.random() - 0.5) * 0.4,
-          Math.sin(ang) * 3.0,
+          tx + dx * dist + (Math.random() - 0.5) * 0.35,
+          1.05 + (Math.random() - 0.5) * 0.35,
+          tz + dz * dist + (Math.random() - 0.5) * 0.35,
+          dx * (5.5 + progress * 4.5),
           0,
-          Math.cos(ang) * 3.0,
-          locked ? 0xffffff : cfg.telegraphColor,
-          0.65,
+          dz * (5.5 + progress * 4.5),
+          locked || compress > 0 ? 0xffffff : cfg.telegraphColor,
+          0.72,
           0.22,
           0
         );
@@ -3409,7 +3421,8 @@ export const bossVfxMethods = {
 
     const mx = Math.sin(baseAngle) * 1.4;
     const mz = Math.cos(baseAngle) * 1.4;
-    this.triggerBossBurstLight(ox + mx, 1.5, oz + mz, colorHex, 150, 0.42);
+    this.triggerBossBurstLight(ox + mx, 1.5, oz + mz, colorHex, 185, 0.48);
+    this.triggerBossImpactFlash(ox + mx, oz + mz, colorHex, 0.78, 0.14);
 
     // 1. Intense muzzle flash flare
     const flashMat = new THREE.ShaderMaterial({
@@ -3427,22 +3440,40 @@ export const bossVfxMethods = {
     const flashMesh = new THREE.Mesh(_unitPlaneGeo, flashMat);
     flashMesh.position.set(mx, 1.05, mz);
     flashMesh.rotation.x = -Math.PI / 2;
-    flashMesh.scale.setScalar(2.6);
+    flashMesh.scale.setScalar(3.1);
     group.add(flashMesh);
 
-    // 2. Per-lane railgun flash lance + 2 Mach shock-cone rings + scorched floor trench
-    const lances: Array<{ core: THREE.Mesh; coreMat: THREE.MeshBasicMaterial; sheath: THREE.Mesh; sheathMat: THREE.ShaderMaterial }> = [];
-    const machRings: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; dirX: number; dirZ: number; baseDist: number; delay: number }> = [];
+    // 2. Per-lane full-length railgun flash lance + 4 full-track Mach shock rings + wall impact flare + scorched trench
+    const lances: Array<{
+      core: THREE.Mesh;
+      coreMat: THREE.MeshBasicMaterial;
+      sheath: THREE.Mesh;
+      sheathMat: THREE.ShaderMaterial;
+      dirX: number;
+      dirZ: number;
+      fullLen: number;
+    }> = [];
+    const machRings: Array<{
+      mesh: THREE.Mesh;
+      mat: THREE.MeshBasicMaterial;
+      dirX: number;
+      dirZ: number;
+      maxDist: number;
+      delay: number;
+    }> = [];
+    const wallFlares: Array<{ mesh: THREE.Mesh; mat: THREE.ShaderMaterial }> = [];
     const trails: THREE.ShaderMaterial[] = [];
 
+    const ringsPerLane = this.isSoftwareGl ? 2 : 4;
     for (const off of BOSS_VOLLEY.spread) {
       const ang = baseAngle + off;
       const dx = Math.sin(ang);
       const dz = Math.cos(ang);
       const hit = this.raycastBossBeam(ox, oz, dx, dz, 10.5);
-      const lanceLen = Math.min(hit.dist, 7.5);
-      const midX = dx * (lanceLen * 0.5 + 0.5);
-      const midZ = dz * (lanceLen * 0.5 + 0.5);
+      // Full-length plasma lance matching the ENTIRE 10.5-tile railgun sightline (never truncated at 7.5!)
+      const lanceLen = Math.max(0.8, hit.dist - 0.35);
+      const midX = dx * (lanceLen * 0.5 + 0.35);
+      const midZ = dz * (lanceLen * 0.5 + 0.35);
 
       // Blazing white-hot railgun muzzle lance
       const coreMat = new THREE.MeshBasicMaterial({
@@ -3457,7 +3488,7 @@ export const bossVfxMethods = {
       core.rotation.y = ang;
       core.rotation.x = Math.PI / 2;
       core.position.set(midX, 1.05, midZ);
-      core.scale.set(0.16, lanceLen, 0.16);
+      core.scale.set(0.18, lanceLen, 0.18);
       group.add(core);
 
       const sheathMat = new THREE.ShaderMaterial({
@@ -3478,26 +3509,73 @@ export const bossVfxMethods = {
       sheath.rotation.y = ang;
       sheath.rotation.x = Math.PI / 2;
       sheath.position.set(midX, 1.05, midZ);
-      sheath.scale.set(0.36, lanceLen, 0.36);
+      sheath.scale.set(0.42, lanceLen, 0.42);
       group.add(sheath);
-      lances.push({ core, coreMat, sheath, sheathMat });
+      lances.push({ core, coreMat, sheath, sheathMat, dirX: dx, dirZ: dz, fullLen: lanceLen });
 
-      // 2 Mach shock-cone rings blasting forward at each gate
-      for (let g = 0; g < 2; g++) {
+      // 4 supersonic Mach shock-cone rings blasting all the way down the full track!
+      for (let g = 0; g < ringsPerLane; g++) {
         const ringMat = new THREE.MeshBasicMaterial({
-          color: g === 0 ? 0xffffff : colorHex,
+          color: g % 2 === 0 ? 0xffffff : colorHex,
           transparent: true,
-          opacity: 0.95,
+          opacity: 0.96,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
         });
         const ring = new THREE.Mesh(_unitTorusGeo, ringMat);
-        const baseDist = g === 0 ? 1.15 : 2.35;
-        ring.position.set(dx * baseDist, 1.05, dz * baseDist);
+        ring.position.set(dx * 1.0, 1.05, dz * 1.0);
         ring.rotation.y = ang;
-        ring.scale.setScalar(0.45);
+        ring.scale.setScalar(0.48);
+        ring.visible = false;
         group.add(ring);
-        machRings.push({ mesh: ring, mat: ringMat, dirX: dx, dirZ: dz, baseDist, delay: g * 0.035 });
+        machRings.push({
+          mesh: ring,
+          mat: ringMat,
+          dirX: dx,
+          dirZ: dz,
+          maxDist: Math.max(1.8, hit.dist),
+          delay: g * 0.042,
+        });
+      }
+
+      // Wall impact flash + sparks when the railgun beam slams into a wall
+      if (hit.hitWall) {
+        const wfMat = new THREE.ShaderMaterial({
+          vertexShader: QUAD_VERT,
+          fragmentShader: CORE_FLASH_FRAG,
+          uniforms: {
+            uIntensity: { value: 1.0 },
+            uColor: { value: color.clone() },
+          },
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+        });
+        const wf = new THREE.Mesh(_unitPlaneGeo, wfMat);
+        wf.position.set(dx * hit.dist, 1.05, dz * hit.dist);
+        wf.rotation.x = -Math.PI / 2;
+        wf.scale.setScalar(1.8);
+        group.add(wf);
+        wallFlares.push({ mesh: wf, mat: wfMat });
+        if (!this.isSoftwareGl) {
+          for (let s = 0; s < 8; s++) {
+            const ba = ang + Math.PI + (Math.random() - 0.5) * 1.6;
+            const spd = 2.8 + Math.random() * 4.2;
+            this.spawnParticle(
+              ox + dx * hit.dist,
+              1.05,
+              oz + dz * hit.dist,
+              Math.sin(ba) * spd,
+              1.2 + Math.random() * 2.2,
+              Math.cos(ba) * spd,
+              s % 2 === 0 ? 0xffffff : colorHex,
+              0.95,
+              0.38,
+              6.5
+            );
+          }
+        }
       }
 
       // Scorched plasma floor trench
@@ -3522,17 +3600,41 @@ export const bossVfxMethods = {
       strip.rotation.order = 'YXZ';
       strip.rotation.y = ang;
       strip.rotation.x = Math.PI / 2;
-      strip.scale.set(0.95, hit.dist, 1);
+      strip.scale.set(1.05, hit.dist, 1);
       strip.position.set(dx * (hit.dist * 0.5), 0.06, dz * (hit.dist * 0.5));
       group.add(strip);
       trails.push(mat);
     }
 
+    // 3. 18 High-speed velocity-stretched voxel energy bars blasting down the 3 railgun lanes!
+    const streakCount = this.isSoftwareGl ? 6 : 18;
+    const streaks: Array<{ mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; dirX: number; dirZ: number; spd: number }> = [];
+    for (let i = 0; i < streakCount; i++) {
+      const laneOff = BOSS_VOLLEY.spread[i % BOSS_VOLLEY.spread.length];
+      const a = baseAngle + laneOff + (Math.random() - 0.5) * 0.14;
+      const sxDir = Math.sin(a);
+      const szDir = Math.cos(a);
+      const mat = new THREE.MeshBasicMaterial({
+        color: i % 2 === 0 ? 0xffffff : colorHex,
+        transparent: true,
+        opacity: 0.96,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(_unitCubeGeo, mat);
+      mesh.rotation.order = 'YXZ';
+      mesh.rotation.y = a;
+      mesh.scale.set(0.06, 0.06, 0.95 + Math.random() * 0.85);
+      mesh.position.set(sxDir * 0.8 + (Math.random() - 0.5) * 0.35, 1.05 + (Math.random() - 0.5) * 0.35, szDir * 0.8 + (Math.random() - 0.5) * 0.35);
+      group.add(mesh);
+      streaks.push({ mesh, mat, dirX: sxDir, dirZ: szDir, spd: 14.5 + Math.random() * 8.5 });
+    }
+
     // Heavy supersonic spark jet
     if (!this.isSoftwareGl) {
-      for (let i = 0; i < 28; i++) {
+      for (let i = 0; i < 32; i++) {
         const a = baseAngle + (Math.random() - 0.5) * 0.95;
-        const spd = 5.0 + Math.random() * 6.5;
+        const spd = 5.5 + Math.random() * 7.5;
         this.spawnParticle(
           ox + Math.sin(a) * 1.1,
           1.05 + (Math.random() - 0.5) * 0.35,
@@ -3541,7 +3643,7 @@ export const bossVfxMethods = {
           0.6 + Math.random() * 1.8,
           Math.cos(a) * spd,
           i % 2 === 0 ? 0xffffff : colorHex,
-          1.15,
+          1.2,
           0.42,
           3.2
         );
@@ -3549,36 +3651,43 @@ export const bossVfxMethods = {
     }
 
     this.dynamicGroup.add(group);
-    const maxLife = 0.95;
+    const maxLife = 0.98;
     this.bossVfxItems.push({
       group,
       life: 0,
       maxLife,
       update: (dt, t, elapsed) => {
         const age = (group.userData.age = (group.userData.age ?? 0) + dt);
-        const ft = Math.min(1, age / 0.2);
+        const ft = Math.min(1, age / 0.22);
         flashMesh.visible = ft < 1;
         if (ft < 1) {
           flashMat.uniforms.uIntensity.value = Math.pow(1 - ft, 1.4);
-          flashMesh.scale.setScalar(2.0 + ft * 1.8);
+          flashMesh.scale.setScalar(2.4 + ft * 2.1);
         }
 
-        const lt = Math.min(1, age / 0.28);
+        // Explosive 50ms forward shoot-out extension all the way down the full track!
+        const ext = Math.min(1, age / 0.05);
+        const extEase = 1 - Math.pow(1 - ext, 2.4);
+        const lt = Math.min(1, age / 0.32);
         for (const ln of lances) {
           ln.core.visible = lt < 1;
           ln.sheath.visible = lt < 1;
           if (lt < 1) {
-            const w = age < 0.05 ? THREE.MathUtils.lerp(0.6, 1.45, age / 0.05) : Math.max(0.02, 1.45 * (1 - lt));
-            ln.core.scale.x = 0.16 * w;
-            ln.core.scale.z = 0.16 * w;
+            const curLen = Math.max(0.2, ln.fullLen * extEase);
+            const midX = ln.dirX * (curLen * 0.5 + 0.35);
+            const midZ = ln.dirZ * (curLen * 0.5 + 0.35);
+            const w = age < 0.055 ? THREE.MathUtils.lerp(0.65, 1.55, age / 0.055) : Math.max(0.02, 1.55 * (1 - lt));
+            ln.core.position.set(midX, 1.05, midZ);
+            ln.core.scale.set(0.18 * w, curLen, 0.18 * w);
             ln.coreMat.opacity = Math.pow(1 - lt, 1.15);
-            ln.sheath.scale.x = 0.38 * w;
-            ln.sheath.scale.z = 0.38 * w;
+            ln.sheath.position.set(midX, 1.05, midZ);
+            ln.sheath.scale.set(0.42 * w, curLen, 0.42 * w);
             ln.sheathMat.uniforms.uTime.value = elapsed;
             ln.sheathMat.uniforms.uIntensity.value = 1 - lt;
           }
         }
 
+        // Mach shock rings blast the ENTIRE track length!
         for (const mr of machRings) {
           const ma = age - mr.delay;
           const mDur = 0.34;
@@ -3588,21 +3697,119 @@ export const bossVfxMethods = {
           }
           mr.mesh.visible = true;
           const mt = ma / mDur;
-          const ease = 1 - Math.pow(1 - mt, 2.2);
-          mr.mesh.scale.setScalar(0.5 + ease * 1.65);
-          mr.mesh.position.set(
-            mr.dirX * (mr.baseDist + ease * 2.2),
-            1.05,
-            mr.dirZ * (mr.baseDist + ease * 2.2)
-          );
-          mr.mat.opacity = (1 - mt) * 0.95;
+          const ease = 1 - Math.pow(1 - mt, 1.8);
+          const dist = THREE.MathUtils.lerp(0.9, mr.maxDist, ease);
+          mr.mesh.scale.setScalar(0.55 + ease * 1.45);
+          mr.mesh.position.set(mr.dirX * dist, 1.05, mr.dirZ * dist);
+          mr.mat.opacity = (1 - mt) * 0.96;
+        }
+
+        const wft = Math.min(1, age / 0.28);
+        for (const wf of wallFlares) {
+          wf.mesh.visible = wft < 1 && ext >= 0.8;
+          if (wf.mesh.visible) {
+            wf.mat.uniforms.uIntensity.value = Math.pow(1 - wft, 1.4);
+            wf.mesh.scale.setScalar(1.5 + wft * 1.5);
+          }
+        }
+
+        const stT = Math.min(1, age / 0.34);
+        for (const st of streaks) {
+          st.mesh.visible = stT < 1;
+          if (stT < 1) {
+            st.mesh.position.x += st.dirX * st.spd * dt;
+            st.mesh.position.z += st.dirZ * st.spd * dt;
+            st.mesh.scale.z = Math.max(0.12, (1 - stT) * 1.45);
+            st.mat.opacity = Math.pow(1 - stT, 1.25);
+          }
         }
 
         for (const tm of trails) {
           tm.uniforms.uTime.value = elapsed;
-          tm.uniforms.uIntensity.value = Math.pow(1 - t, 1.25) * 0.85;
+          tm.uniforms.uIntensity.value = Math.pow(1 - t, 1.25) * 0.9;
           tm.uniforms.uScorch.value = age < 0.25 ? 0.15 : 0.85;
         }
+      },
+      dispose: () => {
+        this.dynamicGroup.remove(group);
+        disposeOwnedMaterials(group);
+      },
+    });
+  },
+
+  /** Compact punchy energy explosion when a heavy Boss `ranged_volley` railgun shell impacts a wall/hero/pet. */
+  spawnBossProjectileImpactVfx(
+    this: EmbervaultEngine,
+    x: number,
+    z: number,
+    colorHex: number
+  ): void {
+    if (this.bgSim) return;
+    const color = new THREE.Color(colorHex);
+    const group = new THREE.Group();
+    group.position.set(x, 0, z);
+
+    const flashMat = new THREE.ShaderMaterial({
+      vertexShader: QUAD_VERT,
+      fragmentShader: CORE_FLASH_FRAG,
+      uniforms: {
+        uIntensity: { value: 1.0 },
+        uColor: { value: color.clone() },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    });
+    const flash = new THREE.Mesh(_unitPlaneGeo, flashMat);
+    flash.position.y = 0.85;
+    flash.rotation.x = -Math.PI / 2;
+    flash.scale.setScalar(1.65);
+    group.add(flash);
+
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.92,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(_unitTorusGeo, ringMat);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.85;
+    ring.scale.setScalar(0.35);
+    group.add(ring);
+
+    if (!this.isSoftwareGl) {
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2 + Math.random() * 0.25;
+        const spd = 2.8 + Math.random() * 4.4;
+        this.spawnParticle(
+          x,
+          0.85,
+          z,
+          Math.cos(a) * spd,
+          1.2 + Math.random() * 2.2,
+          Math.sin(a) * spd,
+          i % 2 === 0 ? 0xffffff : colorHex,
+          1.05,
+          0.38,
+          6.5
+        );
+      }
+    }
+
+    this.dynamicGroup.add(group);
+    this.bossVfxItems.push({
+      group,
+      life: 0,
+      maxLife: 0.34,
+      update: (_dt, t) => {
+        const ease = 1 - Math.pow(1 - t, 2.2);
+        flashMat.uniforms.uIntensity.value = Math.pow(1 - t, 1.5);
+        flash.scale.setScalar(1.2 + ease * 1.4);
+        ring.scale.setScalar(0.35 + ease * 1.45);
+        ringMat.opacity = (1 - t) * 0.92;
       },
       dispose: () => {
         this.dynamicGroup.remove(group);

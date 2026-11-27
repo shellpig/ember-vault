@@ -362,6 +362,8 @@ export const BOSS_WARP = {
   liftHeight: 5.4,
   color: 0x246bff,
   telegraphRadius: 2.2,
+  /** Extended warp ambush range once the boss is aggroed (so kiting past 12.5 tiles gets punished!). */
+  aggroMaxRange: 18,
 } as const;
 
 export const BOSS_SKILLS: Record<BossSkillKind, BossSkillSpec> = {
@@ -408,7 +410,13 @@ export const BOSS_NOVA = {
 } as const;
 
 /** charge_slam geometry (the dash itself lasts `BOSS_SKILLS.charge_slam.strike`). */
-export const BOSS_CHARGE = { maxLunge: 4.6, minLunge: 1.5, impactProgress: 0.88 } as const;
+export const BOSS_CHARGE = {
+  maxLunge: 4.6,
+  minLunge: 1.5,
+  impactProgress: 0.88,
+  /** Half-width of the damaging dash corridor (aligned with the glowing trench fissure). */
+  corridorHalfWidth: 1.05,
+} as const;
 
 /** ranged_volley: 3 fan shots, aim follows the hero for the first part of the windup then locks. */
 export const BOSS_VOLLEY = { spread: [-0.28, 0, 0.28], projectileSpeed: 6.6, boneDartSpeed: 7.8, aimTrackFraction: 0.6 } as const;
@@ -416,6 +424,8 @@ export const BOSS_VOLLEY = { spread: [-0.28, 0, 0.28], projectileSpeed: 6.6, bon
 /** Every action (skill or basic) ends with: strike -> recovery (stiffness) -> cooldown -> next action. */
 export const BOSS_RECOVER = 0.5;
 export const BOSS_COOLDOWN = 0.5;
+/** Distance at which an un-aggroed boss wakes up and begins chasing; once aggroed it pursues indefinitely. */
+export const BOSS_CHASE_WAKE_RANGE = 12.5;
 /** A boss starts looking for an action when the target hero is closer than this. */
 export const BOSS_ENGAGE_RANGE = 11.5;
 

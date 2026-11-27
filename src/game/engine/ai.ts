@@ -1,7 +1,7 @@
 import type { EmbervaultEngine } from '../engine';
 import { BOT_REGROUP_DIST, BOT_REGROUP_DONE_DIST, COMPANION_EDGE_NDC, COMPANION_WARP_DIST, FROST_MAGE, HERO_CLASSES, HUNTER, UpgradeKind } from '../classes';
 import { findGridPath, gridToWorld, hasLineOfSight, isTileWalkable, worldToGrid, worldToWalkableGrid } from '../dungeon';
-import { BOSS_AI, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, BOSS_WARP, isGuardianEnemy, isSwarmEnemy } from './data';
+import { BOSS_AI, BOSS_CHARGE, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, BOSS_WARP, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, EnemyEntity, LootEntity } from './entities';
 import { _projVec } from './scratch';
 import { Hero } from '../hero';
@@ -398,6 +398,35 @@ export const aiMethods = {
           this.performDash();
         }
         return stepAway(escX, escZ);
+      }
+
+      // charge_slam: also sidestep out of the damaging dash corridor (start -> landing)
+      if (e.bossSkill === 'charge_slam') {
+        const sx = e.bossChargeStartX ?? e.x;
+        const sz = e.bossChargeStartZ ?? e.z;
+        const ldx = tx - sx;
+        const ldz = tz - sz;
+        const lLen = Math.hypot(ldx, ldz);
+        if (lLen > 0.35) {
+          const ux = ldx / lLen;
+          const uz = ldz / lLen;
+          const rx = hx - sx;
+          const rz = hz - sz;
+          const along = rx * ux + rz * uz;
+          const lateral = rx * -uz + rz * ux;
+          const corrHalf = BOSS_CHARGE.corridorHalfWidth + margin;
+          if (along >= -0.4 && along <= lLen + 0.4 && Math.abs(lateral) < corrHalf) {
+            this.hero.ai.status = 'Evading Boss Charge';
+            const side = Math.abs(lateral) < 0.05 ? this.hero.ai.strafeSign : Math.sign(lateral);
+            const escX = -uz * side;
+            const escZ = ux * side;
+            if (this.hero.dashCooldown <= 0 && remaining < BOSS_AI.dashLeadTime + 0.08) {
+              this.hero.facing = Math.atan2(escX, escZ);
+              this.performDash();
+            }
+            return stepAway(escX, escZ);
+          }
+        }
       }
 
       // nova_ring: also sidestep out of the N directional laser telegraph lanes into the safe gap

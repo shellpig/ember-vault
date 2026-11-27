@@ -170,6 +170,13 @@ export interface EnemyEntity {
   bossSkillIndex?: number;
   bossChargeStartX?: number;
   bossChargeStartZ?: number;
+  /** Shared single-hit target set across the dash corridor + landing circle of one `charge_slam`. */
+  bossChargeHitIds?: Set<string>;
+  /** Once woken (within wake range, damaged, or in Boss Test Arena), the boss pursues indefinitely. */
+  bossAggroed?: boolean;
+  /** Cached A* path used by an aggroed boss when pursuing around corners/doorways. */
+  bossPath?: Array<{ gx: number; gz: number }>;
+  bossPathTimer?: number;
   /** What the current windup / strike / recover belongs to: a skill (ground telegraph) or a basic attack (no telegraph). */
   bossAction?: BossActionType;
   /** The type decided for the next action (section 5); rolled once when the previous action finishes. */
@@ -305,6 +312,8 @@ export interface ProjectileEntity {
   sourceLabel: string;
   life: number;
   maxLife: number;
+  /** True for boss `ranged_volley` railgun heavy shells (enhanced rings, trail & impact burst). */
+  isBossHeavy?: boolean;
   /** Teammate view only: id of the host's projectile this one mirrors (moved by the snapshot stream). */
   pid?: number;
 }
