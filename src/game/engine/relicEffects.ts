@@ -205,7 +205,7 @@ export const relicEffectMethods = {
       this.spawnRelicRing(h.x, h.z, 0x9fe8ff, 4, 0.4);
       for (const e of this.enemies) {
         if (e.dead || e.bossWarpUntargetable) continue;
-        if (Math.hypot(e.x - h.x, e.z - h.z) > 4) continue;
+        if (Math.hypot(e.x - h.x, e.z - h.z) > 4 || this.isCcImmune(e)) continue;
         e.stunTimer = Math.max(e.stunTimer, 1);
         for (let i = 0; i < 8; i++) {
           this.spawnParticle(

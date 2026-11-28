@@ -465,7 +465,7 @@ export const skillVfxMethods = {
 
   /** Host-side burn: ignite (or refresh) on an enemy. `tickDmg` is the raw per-second damage before reduction. */
   applyBurn(this: EmbervaultEngine, e: EnemyEntity, tickDmg: number): void {
-    if (e.dead || e.bossWarpUntargetable) return;
+    if (e.dead || e.bossWarpUntargetable || this.isCcImmune(e)) return;
     const fresh = (e.burnTimer ?? 0) <= 0;
     e.burnTimer = HUNTER.burnDuration;
     e.burnDmg = Math.max(fresh ? 0 : e.burnDmg ?? 0, tickDmg);

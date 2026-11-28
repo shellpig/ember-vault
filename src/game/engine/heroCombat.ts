@@ -1,6 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
 import { ACT_DASH, ACT_POMMEL, ACT_POTION } from '../../../shared/game';
-import { FROST_MAGE, HERO_CLASSES, HUNTER, WARRIOR } from '../classes';
+import { DASH_COOLDOWN, FROST_MAGE, HERO_CLASSES, HUNTER, MOBILITY_MIN_COOLDOWN, WARRIOR } from '../classes';
 import { hasLineOfSight } from '../dungeon';
 import { ENEMY_AURA_DR_MULT, getBossDamageTakenMult, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
 import { EnemyEntity, HeroHitParams } from './entities';
@@ -85,7 +85,7 @@ export const heroCombatMethods = {
       return;
     }
     this.hero.dashTimer = 0.16;
-    this.hero.dashCooldown = Math.max(0.35, 1.1 * (1 - this.hero.relicStats.dashCdPct / 100));
+    this.hero.dashCooldown = Math.max(MOBILITY_MIN_COOLDOWN, DASH_COOLDOWN * (1 - this.hero.relicStats.dashCdPct / 100));
     this.hero.invuln = Math.max(this.hero.invuln, 0.28);
     if (this.hero.hasUnique('phantom_dash_crit')) {
       this.hero.phantomCritTimer = 2.0;
@@ -698,8 +698,9 @@ export const heroCombatMethods = {
       enemy.hp -= dmg;
       enemy.hitFlash = 0.18;
 
-      // Interrupt active attacks / casts / boss windups
+      // Interrupt active attacks / casts / boss windups (still works on an enraged boss; only the stun is ignored)
       let interrupted = false;
+      const ccImmune = this.isCcImmune(enemy);
       if (enemy.isBoss && (enemy.bossState === 'windup' || enemy.bossState === 'strike')) {
         enemy.bossState = 'chase';
         enemy.bossStateTimer = 0;
@@ -723,7 +724,8 @@ export const heroCombatMethods = {
         : enemy.isElite || isGuardianEnemy(enemy.kind)
         ? 1.5
         : 2.5;
-      enemy.stunTimer = Math.max(enemy.stunTimer, stunDur + (this.hero.hasUnique('ember_hilt_burst') ? 0.3 : 0));
+      if (!ccImmune) enemy.stunTimer = Math.max(enemy.stunTimer, stunDur + (this.hero.hasUnique('ember_hilt_burst') ? 0.3 : 0));
+      else if (!interrupted) this.emitFloatingText(enemy.x, 3.0, enemy.z, '免疫暈眩', 'info');
 
       // Lazily attach orbiting 3D stun stars above enemy head
       if (!enemy.rig.stunStars) {
@@ -748,7 +750,7 @@ export const heroCombatMethods = {
         enemy.rig.root.add(stars);
         enemy.rig.stunStars = stars;
       }
-      enemy.rig.stunStars.visible = true;
+      enemy.rig.stunStars.visible = !ccImmune;
 
       // Crisp outward shockwave knockback
       const nx = dist > 0.01 ? dx / dist : Math.sin(this.hero.facing);
@@ -761,7 +763,13 @@ export const heroCombatMethods = {
         enemy.x,
         enemy.isBoss ? 2.45 : enemy.isElite ? 2.15 : 1.65,
         enemy.z,
-        interrupted ? `中斷! 暈眩 -${dmg}` : `暈眩 -${dmg}`,
+        ccImmune
+          ? interrupted
+            ? `中斷! -${dmg}`
+            : `-${dmg}`
+          : interrupted
+          ? `中斷! 暈眩 -${dmg}`
+          : `暈眩 -${dmg}`,
         'stun'
       );
 
@@ -833,8 +841,13 @@ export const heroCombatMethods = {
     return 1.05;
   },
 
+  /** Enraged floor bosses ignore slow, burn, stun and freeze; Pommel Strike / Frost Nova still interrupt their windups. */
+  isCcImmune(this: EmbervaultEngine, e: EnemyEntity): boolean {
+    return e.isBoss && e.bossEnraged === true;
+  },
+
   applySlow(this: EmbervaultEngine, e: EnemyEntity): void {
-    if (e.dead || e.bossWarpUntargetable) return;
+    if (e.dead || e.bossWarpUntargetable || this.isCcImmune(e)) return;
     const factor = e.isBoss
       ? FROST_MAGE.bossSlowFactor
       : e.isElite || isGuardianEnemy(e.kind)
@@ -859,18 +872,25 @@ export const heroCombatMethods = {
 
   applyFreeze(this: EmbervaultEngine, e: EnemyEntity, duration: number): void {
     if (e.dead || e.bossWarpUntargetable) return;
-    e.frozenTimer = Math.max(e.frozenTimer ?? 0, duration);
-    // Freezing interrupts boss windups / ranged casts, exactly like Pommel Strike
+    // Freezing interrupts boss windups / ranged casts, exactly like Pommel Strike (an enraged boss too)
+    let interrupted = false;
     if (e.isBoss && (e.bossState === 'windup' || e.bossState === 'strike')) {
       e.bossState = 'chase';
       e.bossStateTimer = 0;
       e.bossHitApplied = false;
       e.attackCooldown = Math.max(e.attackCooldown, 0.75);
       if (e.telegraph) e.telegraph.group.visible = false;
+      interrupted = true;
     } else if (e.isRanged && e.windupTimer > 0) {
       e.windupTimer = 0;
       e.attackCooldown = Math.max(e.attackCooldown, 0.6);
     }
+    // An enraged boss is interrupted but not frozen
+    if (this.isCcImmune(e)) {
+      if (!interrupted) this.emitFloatingText(e.x, 3.0, e.z, '免疫冰凍', 'info');
+      return;
+    }
+    e.frozenTimer = Math.max(e.frozenTimer ?? 0, duration);
     if (!e.rig.frozenShell) {
       const shell = createFrozenShell();
       shell.scale.setScalar(this.getFrozenShellScale(e));

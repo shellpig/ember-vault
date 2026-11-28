@@ -115,6 +115,11 @@ export const HERO_CLASSES: Record<HeroClassId, HeroClassDef> = {
   },
 };
 
+/** Warrior Dash / Hunter Swift Step cooldown in seconds (relic dash-CD% applies). The Frost Mage uses FROST_MAGE.blinkCooldown. */
+export const DASH_COOLDOWN = 1.5;
+/** No relic can push a mobility cooldown below this. */
+export const MOBILITY_MIN_COOLDOWN = 0.35;
+
 export const SELECTABLE_CLASS_IDS: HeroClassId[] = ['warrior', 'frost_mage', 'hunter'];
 
 // ---------------------------------------------------------------------------
@@ -138,7 +143,7 @@ export const FROST_MAGE = {
   // Ice spike cycle (shot index 0, 1, 2). Cycle never resets on idle.
   shotCooldown: [0.36, 0.36, 0.55] as const,
   /** Damage multiplier relative to warrior normal-hit base (11–16). */
-  shotDamageMult: [0.85, 0.85, 1.6] as const,
+  shotDamageMult: [0.75, 0.75, 1.2] as const,
   shotBaseCrit: [0.08, 0.08, 0.3] as const,
   shotSlowChance: [0.25, 0.25, 0.5] as const,
   shotExplosionRadius: [1.0, 1.0, 2.2] as const,
@@ -160,6 +165,7 @@ export const FROST_MAGE = {
 
   // Blink (replaces Dash)
   blinkDistance: 5,
+  blinkCooldown: 2.0, // seconds; relic dash-CD% applies, floor MOBILITY_MIN_COOLDOWN
 
   // Shield
   shieldDelayBase: 3.0, // seconds without taking damage before regen starts

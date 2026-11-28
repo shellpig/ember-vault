@@ -2,6 +2,7 @@ import type { EmbervaultEngine } from '../engine';
 import { TILE_SIZE, findGridPath, gridToWorld, hasLineOfSight, worldToGrid, worldToWalkableGrid } from '../dungeon';
 import {
   BOSS_ACTION,
+  FIRST_BOSS,
   BOSS_BASIC,
   BOSS_CASTER_BASIC_SPEED_MULT,
   BOSS_CHARGE,
@@ -209,9 +210,17 @@ export const enemiesMethods = {
     if (e.hp > e.maxHp * BOSS_ENRAGE.hpFraction) return;
     const cfg = BOSS_CONFIGS[e.kind];
     e.bossEnraged = true;
-    e.speed = cfg.speed * BOSS_ENRAGE.speedMult;
+    e.speed = e.kind === FIRST_BOSS ? BOSS_ENRAGE.firstBossEnragedSpeed : cfg.speed * BOSS_ENRAGE.speedMult;
+    // Enraged bosses are immune to crowd control: shed whatever is on them now
+    e.slowTimer = 0;
+    e.frozenTimer = 0;
+    e.stunTimer = 0;
+    e.burnTimer = 0;
+    if (e.rig.slowMarker) e.rig.slowMarker.visible = false;
+    if (e.rig.frozenShell) e.rig.frozenShell.visible = false;
+    if (e.rig.stunStars) e.rig.stunStars.visible = false;
     this.audio.playBossSlam();
-    this.pushBanner(`${e.bossName ?? 'BOSS'} 狂暴化！`, '移動加快 · 傷害提升', true);
+    this.pushBanner(`${e.bossName ?? 'BOSS'} 狂暴化！`, '移動加快 · 傷害提升 · 免疫控場', true);
     // Every hero in the dungeon feels one shake (teammates get it as a private event)
     this.forEachLiveHero(() => this.addScreenShake(BOSS_ENRAGE.shakeMagnitude, BOSS_ENRAGE.shakeDuration));
     for (let i = 0; i < 40; i++) {

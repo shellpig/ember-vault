@@ -465,6 +465,11 @@ export const BOSS_ACTION = {
 export const BOSS_ENRAGE = {
   hpFraction: 0.5,
   speedMult: 1.5,
+  /**
+   * The first boss (FIRST_BOSS) moves at this absolute speed once enraged instead of speed x speedMult: faster than any
+   * class's starting move speed (4.65 base, Hunter x1.2 = 5.58), so it cannot simply be kited; its skills keep their CDs.
+   */
+  firstBossEnragedSpeed: 6.0,
   damageMult: 1.25,
   color: 0xff2a1a,
   shakeMagnitude: 0.6,

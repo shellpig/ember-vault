@@ -1,6 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
 import { ACT_POMMEL } from '../../../shared/game';
-import { FROST_MAGE, HUNTER, PET_NAMES, PET_SPECIES_LIST, getHunterPetMaxHp } from '../classes';
+import { FROST_MAGE, HUNTER, MOBILITY_MIN_COOLDOWN, PET_NAMES, PET_SPECIES_LIST, getHunterPetMaxHp } from '../classes';
 import { hasLineOfSight } from '../dungeon';
 import { EnemyEntity, PetEntity } from './entities';
 import { PetRig, createHunterArrowMesh, createHunterPetModel, createIceSpikeMesh } from '../models';
@@ -989,7 +989,7 @@ export const classSkillsMethods = {
       endZ = tz;
     }
 
-    this.hero.dashCooldown = Math.max(0.35, 1.1 * (1 - this.hero.relicStats.dashCdPct / 100));
+    this.hero.dashCooldown = Math.max(MOBILITY_MIN_COOLDOWN, FROST_MAGE.blinkCooldown * (1 - this.hero.relicStats.dashCdPct / 100));
     this.hero.invuln = Math.max(this.hero.invuln, 0.28);
     if (this.hero.hasUnique('phantom_dash_crit')) this.hero.phantomCritTimer = 2.0;
     this.audio.playBlink();
