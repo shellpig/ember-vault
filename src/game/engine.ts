@@ -279,10 +279,12 @@ export class EmbervaultEngine {
   bossImpactFlashMesh: THREE.Mesh | null = null;
   bossImpactFlashTimer = 0;
   bossImpactFlashDur = 0;
-  /** Single-player brief dramatic slow-motion on colossal boss impacts (e.g. slam). */
+  /** Brief dramatic slow-motion on colossal boss impacts (single player) and boss deaths (also room games). */
   slowMoTimer = 0;
   slowMoDur = 0;
   slowMoScale = 1;
+  /** Unscaled seconds of the current frame (network send cadence keeps real time during slow motion). */
+  frameRealDt = 0;
 
   // Game state shared by everyone in the run (per-hero state lives in `hero`, see hero.ts)
   depth = 1;
@@ -767,9 +769,10 @@ export class EmbervaultEngine {
     const realDt = Math.min(0.05, Math.max(0.001, (now - this.lastTime) / 1000));
     this.lastTime = now;
 
-    // Brief single-player slow-motion time dilation for massive Boss impact beats
+    // Brief slow-motion time dilation for massive Boss impact beats (single player) and boss deaths (also room games)
     let dt = realDt;
-    if (this.slowMoTimer > 0 && !this.mp) {
+    this.frameRealDt = realDt;
+    if (this.slowMoTimer > 0) {
       this.slowMoTimer = Math.max(0, this.slowMoTimer - realDt);
       const frac = this.slowMoDur > 0 ? 1 - this.slowMoTimer / this.slowMoDur : 1;
       // Hold slowest speed for the first 60%, then smoothly accelerate back to 1.0x

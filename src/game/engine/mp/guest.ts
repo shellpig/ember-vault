@@ -2,7 +2,7 @@ import { EmbervaultEngine } from '../../engine';
 import type { DoorSnap, EnemyStatic, GameEvent, InputPayload, LevelPayload, PrivatePayload, SnapshotPayload, WorldSnap } from '../../../../shared/game';
 import { EF_BOSS_SHIFT, EF_BURN, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
 import { HeroClassId, PET_SPECIES_LIST, PetSpecies } from '../../classes';
-import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_PRISM, BOSS_SKILL_LIST, BOSS_WARP, ENEMY_AURA_DEFS, ENEMY_AURA_INTERVAL, MP_BREAK_CONFIRM_MS, auraTypeFromKey, isFloorBoss, isRangedEnemy } from '../data';
+import { BOSS_CONFIGS, BOSS_DEATH_SLOWMO, BOSS_ENRAGE, BOSS_PRISM, BOSS_SKILL_LIST, BOSS_WARP, ENEMY_AURA_DEFS, ENEMY_AURA_INTERVAL, MP_BREAK_CONFIRM_MS, auraTypeFromKey, isFloorBoss, isRangedEnemy } from '../data';
 import { BreakableEntity, EnemyEntity, HeroProjectileEntity, LootEntity, MpGuestState, MpSample, ProjectileEntity } from '../entities';
 import { Hero } from '../../hero';
 import { AuraHolderFx, BossTelegraphRig, applyEliteVisuals, createBossTelegraph, createEnemyModel, createHunterArrowMesh, createHunterPetModel, createIceSpikeMesh, createLootMesh, createProjectileMesh, createRelicLootMesh } from '../../models';
@@ -703,7 +703,9 @@ export const guestMpMethods = {
     } else if (t === 'x') {
       const x = Number(ev[1]) / 100;
       const z = Number(ev[2]) / 100;
-      const big = Number(ev[3]) === 1;
+      const big = Number(ev[3]) >= 1;
+      // 2 = a boss died and the host slowed down: slow my prediction and effects for the same beat
+      if (Number(ev[3]) === 2) this.triggerBossSlowMo(BOSS_DEATH_SLOWMO.duration, BOSS_DEATH_SLOWMO.scale, true);
       for (let i = 0; i < (big ? 22 : 9); i++) {
         const a = (i / (big ? 22 : 9)) * Math.PI * 2;
         this.spawnParticle(x, 0.6, z, Math.cos(a) * 3.2, 1.6 + Math.random() * 2, Math.sin(a) * 3.2, big ? 0xffd24a : 0xcfd6e6, 1.1, 0.5, 6);

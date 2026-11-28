@@ -217,7 +217,8 @@ export interface WorldSnap {
  *  ['s', soundName, originId, toId?]            sound
  *  ['b', title, subtitle, toId?]                banner
  *  ['k', mag100, dur100, toId]                  screen shake (private)
- *  ['x', x100, z100, big]                       an enemy died here (burst)
+ *  ['x', x100, z100, big]                       an enemy died here (burst; big 1 = elite / boss, 2 = boss and the
+ *                                               host started the boss-death slow motion: teammates slow down too)
  *  ['m', kind, x100, z100, a100, b100, originId]  Frost Mage VFX: 'n' nova (a = radius), 'i' ice burst
  *                                               (a = radius, b = empowered 0/1), 'k' blink (x/z = start, a/b = end);
  *                                               skill VFX: 'w' pommel strike (a = radius), 'h' pet summon

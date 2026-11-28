@@ -1106,9 +1106,12 @@ export const bossVfxMethods = {
     }
   },
 
-  /** Trigger a brief dramatic slow-motion impact beat (single-player only, never desyncs multiplayer). */
-  triggerBossSlowMo(this: EmbervaultEngine, realDuration: number, scale = 0.22): void {
-    if (this.bgSim || this.inTown || this.mp) return;
+  /**
+   * Trigger a brief dramatic slow-motion beat. Single player only unless `allowMp` (boss death: the host and every
+   * teammate slow down together, see the 'x' event). Returns whether it started.
+   */
+  triggerBossSlowMo(this: EmbervaultEngine, realDuration: number, scale = 0.22, allowMp = false): boolean {
+    if (this.bgSim || this.inTown || (this.mp && !allowMp)) return false;
     this.slowMoTimer = Math.max(this.slowMoTimer, realDuration);
     this.slowMoDur = Math.max(this.slowMoDur, realDuration);
     this.slowMoScale = Math.min(this.slowMoScale, scale);
@@ -1116,6 +1119,7 @@ export const bossVfxMethods = {
       this.slowMoDur = realDuration;
       this.slowMoScale = scale;
     }
+    return true;
   },
 
   /** Raycast along (dirX, dirZ) from (ox, oz) until hitting a dungeon wall or maxRange. */

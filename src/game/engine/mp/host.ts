@@ -207,7 +207,7 @@ export const hostMpMethods = {
       host.handbacks = [];
       for (const hb of hbs) this.mpHostOnHandback(hb.from, hb.hb);
     }
-    host.sendAcc += dt;
+    host.sendAcc += this.frameRealDt || dt;
     if (host.sendAcc >= 1 / SNAPSHOT_HZ) {
       host.sendAcc = host.sendAcc % (1 / SNAPSHOT_HZ);
       this.mpHostSendSnapshot();

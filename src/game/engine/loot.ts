@@ -1,6 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
 import { q100 } from '../../../shared/game';
-import { BOSS_LOOT, isGuardianEnemy, isSwarmEnemy } from './data';
+import { BOSS_DEATH_SLOWMO, BOSS_LOOT, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, BreakableEntity, EnemyEntity, LootEntity, SavedLoot } from './entities';
 import { Hero } from '../hero';
 import { createLootMesh, createRelicLootMesh } from '../models';
@@ -77,7 +77,9 @@ export const lootMethods = {
     this.resetBossWarpVisual(enemy);
     this.hideBossWindupVfx(enemy.id);
     enemy.rig.root.visible = false;
-    if (this.mp?.role === 'host') this.mpEmit(['x', q100(enemy.x), q100(enemy.z), enemy.isBoss || enemy.isElite ? 1 : 0]);
+    // Boss death: whole-screen slow motion; in a room the host only tells teammates to slow down when it did too
+    const slowMo = enemy.isBoss && this.triggerBossSlowMo(BOSS_DEATH_SLOWMO.duration, BOSS_DEATH_SLOWMO.scale, true);
+    if (this.mp?.role === 'host') this.mpEmit(['x', q100(enemy.x), q100(enemy.z), slowMo ? 2 : enemy.isBoss || enemy.isElite ? 1 : 0]);
     if (enemy.telegraph) {
       enemy.telegraph.group.visible = false;
     }
