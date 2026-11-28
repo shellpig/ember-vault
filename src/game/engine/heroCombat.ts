@@ -2,7 +2,7 @@ import type { EmbervaultEngine } from '../engine';
 import { ACT_DASH, ACT_POMMEL, ACT_POTION } from '../../../shared/game';
 import { FROST_MAGE, HERO_CLASSES, HUNTER } from '../classes';
 import { hasLineOfSight } from '../dungeon';
-import { getBossDamageTakenMult, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
+import { ENEMY_AURA_DR_MULT, getBossDamageTakenMult, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
 import { EnemyEntity, HeroHitParams } from './entities';
 import { createFrozenShell, createSlowMarker, createStunStars } from '../models';
 import { FloatingLabelData } from '../types';
@@ -150,6 +150,8 @@ export const heroCombatMethods = {
    * floating text is built, so the number shown is the HP that was really removed.
    */
   scaleEnemyDamageTaken(this: EmbervaultEngine, enemy: EnemyEntity, dmg: number): number {
+    // Named-elite "dr" aura: regular monsters inside it take 20% less damage (bosses never carry an aura flag)
+    if (enemy.fxDr && !enemy.isBoss) return Math.max(1, Math.round(dmg * ENEMY_AURA_DR_MULT));
     if (!enemy.isBoss || !isFloorBoss(enemy.kind)) return dmg;
     return Math.max(1, Math.round(dmg * getBossDamageTakenMult(enemy.kind, this.depth)));
   },
@@ -914,7 +916,8 @@ export const heroCombatMethods = {
     sourceZ: number,
     sourceLabel = '地城怪物',
     attacker?: EnemyEntity,
-    invulnOverride?: number
+    invulnOverride?: number,
+    enemyCrit = false
   ): void {
     if (this.hero.isDead || this.hero.invuln > 0 || this.transitionState !== 'none') return;
 
@@ -1011,12 +1014,13 @@ export const heroCombatMethods = {
     const labelJitterX = isSwarmHit ? (Math.random() - 0.5) * 0.55 : 0;
     const labelJitterZ = isSwarmHit ? (Math.random() - 0.5) * 0.55 : 0;
     const labelY = isSwarmHit ? 1.6 + Math.random() * 0.35 : 1.8;
+    const critTag = enemyCrit ? '爆擊 ' : '';
     if (shieldAbsorbed > 0) {
       this.emitFloatingText(
         this.hero.x + labelJitterX - 0.15,
         labelY + (hpDamage > 0 ? 0.3 : 0),
         this.hero.z + labelJitterZ,
-        `-${shieldAbsorbed}`,
+        `${critTag}-${shieldAbsorbed}`,
         'shieldHit'
       );
     }
@@ -1025,7 +1029,7 @@ export const heroCombatMethods = {
         this.hero.x + labelJitterX,
         labelY,
         this.hero.z + labelJitterZ,
-        `-${hpDamage}`,
+        `${critTag}-${hpDamage}`,
         'playerHit'
       );
     }

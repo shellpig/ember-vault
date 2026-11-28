@@ -208,6 +208,8 @@ export class EmbervaultEngine {
   // Level data & entities
   dungeon!: DungeonData;
   enemies: EnemyEntity[] = [];
+  /** Seconds until the next named-elite aura membership refresh (see updateEnemyAuras). */
+  enemyAuraTimer = 0;
   projectiles: ProjectileEntity[] = [];
   loots: LootEntity[] = [];
   breakables: BreakableEntity[] = [];

@@ -20,7 +20,18 @@ import {
   BossActionType,
   BossConfig,
   BossSkillKind,
+  ENEMY_AURA_ATKSPD_MULT,
+  ENEMY_AURA_DEFS,
+  ENEMY_AURA_TYPES,
+  EnemyAuraType,
+  ENEMY_AURA_ATK_MULT,
+  ENEMY_AURA_CRIT_BONUS,
+  ENEMY_AURA_INTERVAL,
+  ENEMY_AURA_MOVE_MULT,
+  ENEMY_AURA_RADIUS,
+  ENEMY_CRIT_MULT,
   FloorBossKind,
+  getEnemyDepthTier,
   getRangedProjectileKind,
   isArcherLikeRanged,
   isFloorBoss,
@@ -29,11 +40,157 @@ import {
 } from './data';
 import { EnemyEntity, PetEntity } from './entities';
 import type { Hero } from '../hero';
-import { createBossRageAura, createProjectileMesh } from '../models';
+import { AURA_BAND_RADIUS, createAuraPool, createBossRageAura, createProjectileMesh } from '../models';
 import { ProjectileKind } from '../types';
 import * as THREE from 'three';
 
+const AURA_POOL_FADE = 0.2;
+/** Seconds each aura colour is held (then cross-faded) when several auras cover the same enemy. */
+const AURA_COLOR_CYCLE = 1.2;
+const _auraColA = new THREE.Color();
+const _auraColB = new THREE.Color();
+
+/** Colour of a pool covered by several auras: slow cross-fade through the aura colours in `types`. */
+function cycleAuraColor(out: THREE.Color, types: EnemyAuraType[], t: number): void {
+  out.setHex(ENEMY_AURA_DEFS[types[0]].color);
+  if (types.length < 2) return;
+  const phase = t / AURA_COLOR_CYCLE;
+  const i = Math.floor(phase) % types.length;
+  const f = phase - Math.floor(phase);
+  const k = f < 0.6 ? 0 : (f - 0.6) / 0.4;
+  out.setHex(ENEMY_AURA_DEFS[types[i]].color);
+  _auraColB.setHex(ENEMY_AURA_DEFS[types[(i + 1) % types.length]].color);
+  out.lerp(_auraColB, k * k * (3 - 2 * k));
+}
+
 export const enemiesMethods = {
+  /**
+   * Basic-attack cooldown divisor of a regular monster: elite 1.25x, depth tier bonus, named-elite attack-speed aura (all
+   * multiplied). Only the cooldown uses it: the windup (telegraph) is never shortened by tier or aura.
+   */
+  getEnemyAtkSpeedDiv(this: EmbervaultEngine, e: EnemyEntity): number {
+    const tier = getEnemyDepthTier(this.getEffectiveSimDepth());
+    return (e.isElite ? 1.25 : 1) * (1 + tier.atkSpeedBonus) * (e.fxAtkSpd ? ENEMY_AURA_ATKSPD_MULT : 1);
+  },
+
+  /** Damage multiplier the named-elite "atk" aura gives a regular monster's basic attack. */
+  getEnemyAuraDamageMult(this: EmbervaultEngine, e: EnemyEntity): number {
+    return e.fxAtk ? ENEMY_AURA_ATK_MULT : 1;
+  },
+
+  /** Rolls the enemy crit for one basic attack (base chance + the crit aura). */
+  rollEnemyCrit(this: EmbervaultEngine, e: EnemyEntity): boolean {
+    const chance = Math.min(1, e.critChance + (e.fxCrit ? ENEMY_AURA_CRIT_BONUS : 0));
+    return chance > 0 && Math.random() < chance;
+  },
+
+  /** Holder light: breathing band, slowly orbiting glyph marks, drifting motes, +-5% pulse (host and teammate clients). */
+  animateAuraRing(this: EmbervaultEngine, e: EnemyEntity, dt: number): void {
+    const fx = e.auraHolderFx;
+    if (!fx) return;
+    const t = this.elapsed + e.id * 0.7;
+    fx.group.scale.setScalar(1 + Math.sin(t * 1.7) * 0.05);
+    (fx.band.material as THREE.MeshBasicMaterial).opacity = 0.45 + Math.sin(t * 2.1) * 0.1;
+    fx.glyphPivot.rotation.y += dt * 0.35;
+    fx.glyphMat.opacity = 0.7 + Math.sin(t * 2.1 + 1) * 0.12;
+    for (const m of fx.motes) {
+      const f = (t * 0.32 + (m.userData.phase as number)) % 1;
+      const ang = (m.userData.ang as number) + t * 0.25;
+      const r = AURA_BAND_RADIUS * (0.35 + 0.55 * ((m.userData.phase as number) * 1.7 % 1));
+      m.position.set(Math.cos(ang) * r, 0.1 + f * 1.5, Math.sin(ang) * r);
+      m.scale.setScalar(Math.sin(f * Math.PI) * 0.3);
+    }
+  },
+
+  /**
+   * Ground light (host and teammate clients, purely visual). A covered regular monster gets one soft glow pool under its
+   * feet; with several auras it cross-fades slowly between their colours. A holder keeps its band, and its inner glow
+   * cycles through the OTHER auras covering it. Pools fade in/out over AURA_POOL_FADE s and are disposed when gone.
+   */
+  updateAuraRings(this: EmbervaultEngine, list: EnemyEntity[], dt: number): void {
+    const types: EnemyAuraType[] = [];
+    for (const e of list) {
+      if (e.isBoss) continue;
+      if (e.auraHolderFx && !e.dead) this.animateAuraRing(e, dt);
+      if (!e.auraPool && !(e.auraMask && !e.dead) && !e.auraHolderFx) continue;
+      const mask = e.dead ? 0 : (e.auraMask ?? 0);
+      types.length = 0;
+      for (let i = 0; i < ENEMY_AURA_TYPES.length; i++) {
+        if ((mask & (1 << i)) !== 0 && e.aura !== ENEMY_AURA_TYPES[i]) types.push(ENEMY_AURA_TYPES[i]);
+      }
+      const t = this.elapsed + e.id * 0.37;
+      if (e.auraHolderFx) {
+        // Holder: inner glow shows its own colour, cross-fading through other covering auras when there are any
+        const own = e.aura!;
+        const cyc = types.length > 0 ? [own, ...types] : [own];
+        cycleAuraColor(_auraColA, cyc, t);
+        const inner = e.auraHolderFx.inner.material as THREE.MeshBasicMaterial;
+        inner.color.copy(_auraColA);
+        inner.opacity = 0.22 + Math.sin(t * 1.9) * 0.05;
+        continue;
+      }
+      const wanted = types.length > 0;
+      let pool = e.auraPool;
+      if (!pool) {
+        if (!wanted) continue;
+        const mesh = createAuraPool(ENEMY_AURA_DEFS[types[0]].color);
+        e.rig.root.add(mesh);
+        pool = { mesh, alpha: 0 };
+        e.auraPool = pool;
+      }
+      pool.alpha = wanted ? Math.min(1, pool.alpha + dt / AURA_POOL_FADE) : Math.max(0, pool.alpha - dt / AURA_POOL_FADE);
+      if (pool.alpha <= 0 && !wanted) {
+        e.rig.root.remove(pool.mesh);
+        pool.mesh.geometry.dispose();
+        (pool.mesh.material as THREE.Material).dispose();
+        e.auraPool = undefined;
+        continue;
+      }
+      const mat = pool.mesh.material as THREE.MeshBasicMaterial;
+      if (wanted) cycleAuraColor(mat.color, types, t);
+      mat.opacity = pool.alpha * (0.62 + Math.sin(t * 2.1) * 0.1);
+      pool.mesh.scale.setScalar(1 + Math.sin(t * 1.6) * 0.04);
+    }
+  },
+
+  /**
+   * Recomputes `auraMask` (bit per ENEMY_AURA_TYPES index) for every regular monster within ENEMY_AURA_RADIUS of a living
+   * holder (the holder included). Swarm critters never get the move bit. `applyFx` (host / single player only) also
+   * mirrors the mask into the cached gameplay `fx*` flags; a teammate client passes false and only draws.
+   */
+  refreshAuraMask(this: EmbervaultEngine, list: EnemyEntity[], applyFx: boolean): void {
+    const holders = list.filter((e) => e.aura && !e.dead && !e.isBoss);
+    for (const e of list) {
+      if (e.isBoss) continue;
+      let mask = 0;
+      if (!e.dead && (e.rig.root.position.y > -10 || applyFx)) {
+        for (const h of holders) {
+          if (Math.hypot(e.x - h.x, e.z - h.z) > ENEMY_AURA_RADIUS) continue;
+          if (h.aura === 'move' && isSwarmEnemy(e.kind)) continue;
+          mask |= 1 << ENEMY_AURA_TYPES.indexOf(h.aura!);
+        }
+      }
+      e.auraMask = mask;
+      if (applyFx) {
+        e.fxAtkSpd = (mask & 1) !== 0;
+        e.fxAtk = (mask & 2) !== 0;
+        e.fxDr = (mask & 4) !== 0;
+        e.fxMove = (mask & 8) !== 0;
+        e.fxCrit = (mask & 16) !== 0;
+      }
+    }
+  },
+
+  /** Named-elite auras (host / single player): refresh membership + gameplay flags on a timer, rings every frame. */
+  updateEnemyAuras(this: EmbervaultEngine, dt: number): void {
+    this.enemyAuraTimer -= dt;
+    if (this.enemyAuraTimer <= 0) {
+      this.enemyAuraTimer = ENEMY_AURA_INTERVAL;
+      this.refreshAuraMask(this.enemies, true);
+    }
+    this.updateAuraRings(this.enemies, dt);
+  },
+
   /** Damage of one boss hit: `fraction` of the boss's base damage at this depth, x enrage multiplier (docs/boss-spec.md). */
   bossDamage(this: EmbervaultEngine, e: EnemyEntity, fraction: number): number {
     const cfg = BOSS_CONFIGS[e.kind as FloorBossKind];
@@ -1453,7 +1610,7 @@ export const enemiesMethods = {
       );
       if (struck) {
         this.setActor(struck);
-        this.damageHero(p.damage, p.x - p.vx * 0.05, p.z - p.vz * 0.05, p.sourceLabel);
+        this.damageHero(p.damage, p.x - p.vx * 0.05, p.z - p.vz * 0.05, p.sourceLabel, undefined, undefined, p.crit);
         this.setActor(this.localHero);
         if (p.isBossHeavy) {
           this.spawnBossProjectileImpactVfx(p.x, p.z, trailCol);
@@ -1483,6 +1640,7 @@ export const enemiesMethods = {
     const fireRange = isArcher ? 9.2 : 8.6;
     const minKeepDist = isArcher ? 3.5 : 3.2;
     const aggroRange = 11.5;
+    const moveSpeed = e.speed * (e.fxMove ? ENEMY_AURA_MOVE_MULT : 1);
 
     let moveX = 0;
     let moveZ = 0;
@@ -1500,22 +1658,25 @@ export const enemiesMethods = {
         e.windupTimer -= dt;
         if (e.windupTimer <= 0) {
           // Release terrain-matched projectile!
+          // Crit is rolled at fire time and rides on the projectile (damage already includes the multiplier)
+          const crit = this.rollEnemyCrit(e);
           this.spawnProjectile(
             getRangedProjectileKind(e.kind),
             e.x + dirX * 0.48,
             e.z + dirZ * 0.48,
             dirX,
             dirZ,
-            e.damageMult,
+            e.damageMult * this.getEnemyAuraDamageMult(e) * (crit ? ENEMY_CRIT_MULT : 1),
             this.getEnemyLabel(e)
           );
-          const eliteAtkSpeed = e.isElite ? 1.25 : 1;
+          if (crit) this.projectiles[this.projectiles.length - 1].crit = true;
+          const atkSpeedDiv = this.getEnemyAtkSpeedDiv(e);
           if (isArcher) {
             this.audio.playBowShot();
-            e.attackCooldown = (1.55 + Math.random() * 0.25) / eliteAtkSpeed;
+            e.attackCooldown = (1.55 + Math.random() * 0.25) / atkSpeedDiv;
           } else {
             this.audio.playMageCast();
-            e.attackCooldown = (1.85 + Math.random() * 0.25) / eliteAtkSpeed;
+            e.attackCooldown = (1.85 + Math.random() * 0.25) / atkSpeedDiv;
           }
         }
       } else if (clearLOS && dist <= fireRange && e.attackCooldown <= 0) {
@@ -1525,15 +1686,15 @@ export const enemiesMethods = {
       } else if (!clearLOS) {
         // Flank sideways around pillars/corners so ranged enemies don't glue themselves behind cover
         const side = e.id % 2 === 0 ? 1 : -1;
-        moveX = (dirX * 0.55 - dirZ * 0.84 * side) * e.speed;
-        moveZ = (dirZ * 0.55 + dirX * 0.84 * side) * e.speed;
+        moveX = (dirX * 0.55 - dirZ * 0.84 * side) * moveSpeed;
+        moveZ = (dirZ * 0.55 + dirX * 0.84 * side) * moveSpeed;
       } else if (dist > fireRange * 0.85) {
-        moveX = dirX * e.speed;
-        moveZ = dirZ * e.speed;
+        moveX = dirX * moveSpeed;
+        moveZ = dirZ * moveSpeed;
       } else if (dist < minKeepDist) {
         // Gently kite backward if hero closes in
-        moveX = -dirX * e.speed * 0.72;
-        moveZ = -dirZ * e.speed * 0.72;
+        moveX = -dirX * moveSpeed * 0.72;
+        moveZ = -dirZ * moveSpeed * 0.72;
       }
 
       // Soft separation from other enemies
@@ -1637,6 +1798,7 @@ export const enemiesMethods = {
   },
 
   updateEnemies(this: EmbervaultEngine, dt: number): void {
+    this.updateEnemyAuras(dt);
     for (const e of this.enemies) {
       if (e.dead) continue;
 
@@ -1741,8 +1903,9 @@ export const enemiesMethods = {
       if (dist < aggroRange && dist > stopDist) {
         const dirX = dx / dist;
         const dirZ = dz / dist;
-        moveX = dirX * e.speed;
-        moveZ = dirZ * e.speed;
+        const chaseSpeed = e.speed * (e.fxMove ? ENEMY_AURA_MOVE_MULT : 1);
+        moveX = dirX * chaseSpeed;
+        moveZ = dirZ * chaseSpeed;
         e.facing = Math.atan2(dirX, dirZ);
 
         // Soft separation between enemies so packs fan around the hero instead of stacking identically
@@ -1777,16 +1940,16 @@ export const enemiesMethods = {
       const isGuard = isGuardianEnemy(e.kind);
       const attackReach = isGuard ? 1.45 : e.isElite ? 1.4 : isSwarm ? 1.05 : 1.12;
       if (dist < attackReach && e.attackCooldown <= 0) {
-        const eliteAtkSpeed = e.isElite ? 1.25 : 1;
-        e.attackCooldown = (isSwarm ? 0.5 : isGuard ? 1.15 : 1.05) / eliteAtkSpeed; // Swarm bites 2 times per second!
+        e.attackCooldown = (isSwarm ? 0.5 : isGuard ? 1.15 : 1.05) / this.getEnemyAtkSpeedDiv(e); // Swarm bites 2 times per second!
         const baseMelee = isGuard ? 9 : isSwarm ? 1.25 + Math.random() * 0.65 : 5;
         // Swarm critters scale gentler with depth (+6%/floor instead of +12%)
         const depthScale = isSwarm ? this.getSwarmDepthDamageScale() : this.getDepthDamageScale();
-        const dmg = baseMelee * depthScale * e.damageMult;
+        const dmg = baseMelee * depthScale * e.damageMult * this.getEnemyAuraDamageMult(e);
         if (targetPet) {
           this.damagePet(targetPet, dmg, e.x, e.z);
         } else {
-          this.damageHero(dmg, e.x, e.z, this.getEnemyLabel(e));
+          const crit = this.rollEnemyCrit(e);
+          this.damageHero(crit ? dmg * ENEMY_CRIT_MULT : dmg, e.x, e.z, this.getEnemyLabel(e), undefined, undefined, crit);
         }
       }
 

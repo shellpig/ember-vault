@@ -4606,7 +4606,15 @@ export function createProjectileMesh(kind: ProjectileKind, heavy = false): THREE
   return g;
 }
 
-export function createEliteNameSprite(label: string, isSpecial = false): THREE.Sprite {
+/** Named-elite aura shown on the name tag (`[label]` in the aura colour) and as a ground ring. */
+export interface EliteAuraVisual {
+  label: string;
+  /** CSS colour of the label. */
+  css: string;
+  color: number;
+}
+
+export function createEliteNameSprite(label: string, isSpecial = false, aura?: EliteAuraVisual): THREE.Sprite {
   const canvas = document.createElement('canvas');
   canvas.width = 560;
   canvas.height = 128;
@@ -4615,9 +4623,21 @@ export function createEliteNameSprite(label: string, isSpecial = false): THREE.S
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const displayLabel = isSpecial ? `★ ${label}` : label;
-    // Measure text so plate hugs the Chinese name cleanly at 1.5x larger scale
-    ctx.font = '700 46px "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif';
-    const textWidth = Math.min(492, Math.ceil(ctx.measureText(displayLabel).width));
+    const auraText = aura ? `[${aura.label}]` : '';
+    const auraGap = aura ? 14 : 0;
+    // Measure text so plate hugs the Chinese name cleanly at 1.5x larger scale (name + aura tag shrink together to fit)
+    let fontPx = 46;
+    const setFont = (): void => {
+      ctx.font = `700 ${fontPx}px "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif`;
+    };
+    setFont();
+    while (fontPx > 28 && ctx.measureText(displayLabel).width + auraGap + ctx.measureText(auraText).width > 492) {
+      fontPx -= 2;
+      setFont();
+    }
+    const nameWidth = Math.ceil(ctx.measureText(displayLabel).width);
+    const auraWidth = aura ? Math.ceil(ctx.measureText(auraText).width) : 0;
+    const textWidth = Math.min(492, nameWidth + auraGap + auraWidth);
     const padX = 32;
     const boxW = Math.min(548, Math.max(220, textWidth + padX * 2));
     const boxH = 82;
@@ -4639,13 +4659,22 @@ export function createEliteNameSprite(label: string, isSpecial = false): THREE.S
     ctx.strokeRect(bx + 7, by + 7, boxW - 14, boxH - 14);
 
     // Crisp text with strong drop shadow
-    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
     ctx.shadowBlur = 6;
     ctx.shadowOffsetY = 2;
-    ctx.fillStyle = isSpecial ? '#ffd17a' : '#ffe58a';
-    ctx.fillText(displayLabel, canvas.width / 2, canvas.height / 2 + 1, 492);
+    if (aura) {
+      ctx.textAlign = 'left';
+      const startX = Math.round((canvas.width - textWidth) / 2);
+      ctx.fillStyle = isSpecial ? '#ffd17a' : '#ffe58a';
+      ctx.fillText(displayLabel, startX, canvas.height / 2 + 1);
+      ctx.fillStyle = aura.css;
+      ctx.fillText(auraText, startX + nameWidth + auraGap, canvas.height / 2 + 1);
+    } else {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = isSpecial ? '#ffd17a' : '#ffe58a';
+      ctx.fillText(displayLabel, canvas.width / 2, canvas.height / 2 + 1, 492);
+    }
   }
 
   const tex = new THREE.CanvasTexture(canvas);
@@ -4719,11 +4748,133 @@ export function createStunStars(): THREE.Group {
   return group;
 }
 
+/** Shared soft textures for the aura light pools (generated once; additive, tinted by the material colour). */
+let auraSoftTextures: { glow: THREE.CanvasTexture; band: THREE.CanvasTexture; diamond: THREE.CanvasTexture } | null = null;
+function getAuraSoftTextures(): { glow: THREE.CanvasTexture; band: THREE.CanvasTexture; diamond: THREE.CanvasTexture } {
+  if (auraSoftTextures) return auraSoftTextures;
+  const make = (size: number, draw: (ctx: CanvasRenderingContext2D, s: number) => void): THREE.CanvasTexture => {
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    draw(c.getContext('2d')!, size);
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    return tex;
+  };
+  const radial = (ctx: CanvasRenderingContext2D, s: number, stops: Array<[number, number]>): void => {
+    const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    for (const [at, alpha] of stops) g.addColorStop(at, `rgba(255,255,255,${alpha})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, s, s);
+  };
+  const glow = make(128, (ctx, s) =>
+    radial(ctx, s, [[0, 0.85], [0.35, 0.55], [0.7, 0.18], [1, 0]])
+  );
+  // Soft-edged band (peak at 86% of the radius) with a faint filled core
+  const band = make(256, (ctx, s) =>
+    radial(ctx, s, [[0, 0.1], [0.5, 0.08], [0.68, 0.22], [0.8, 0.7], [0.86, 0.95], [0.92, 0.5], [0.97, 0.1], [1, 0]])
+  );
+  const diamond = make(64, (ctx, s) => {
+    ctx.translate(s / 2, s / 2);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, s / 2);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.6, 'rgba(255,255,255,0.9)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(0, -s * 0.46);
+    ctx.lineTo(s * 0.2, 0);
+    ctx.lineTo(0, s * 0.46);
+    ctx.lineTo(-s * 0.2, 0);
+    ctx.closePath();
+    ctx.fill();
+  });
+  auraSoftTextures = { glow, band, diamond };
+  return auraSoftTextures;
+}
+
+const _auraAdditive = {
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  side: THREE.DoubleSide,
+} as const;
+
+/** Radius (world units) of the glowing band under a named elite (the aura's gameplay radius is larger). */
+export const AURA_BAND_RADIUS = 1.4;
+const AURA_GLYPH_COUNT = 5;
+const AURA_MOTE_COUNT = 5;
+
+/** Ground light under a named elite: soft band, orbiting glyph marks, inner glow and a few rising motes. */
+export interface AuraHolderFx {
+  group: THREE.Group;
+  band: THREE.Mesh;
+  inner: THREE.Mesh;
+  glyphPivot: THREE.Group;
+  glyphMat: THREE.MeshBasicMaterial;
+  motes: THREE.Sprite[];
+  moteMat: THREE.SpriteMaterial;
+}
+
+export function createAuraHolderFx(color: number): AuraHolderFx {
+  const tex = getAuraSoftTextures();
+  const group = new THREE.Group();
+  group.position.y = 0.04;
+  const flat = (geo: THREE.BufferGeometry, mat: THREE.Material): THREE.Mesh => {
+    const m = new THREE.Mesh(geo, mat);
+    m.rotation.x = -Math.PI / 2;
+    return m;
+  };
+  const inner = flat(
+    new THREE.PlaneGeometry(2.3, 2.3),
+    new THREE.MeshBasicMaterial({ map: tex.glow, color, opacity: 0.3, ..._auraAdditive })
+  );
+  const bandSize = (AURA_BAND_RADIUS / 0.86) * 2;
+  const band = flat(
+    new THREE.PlaneGeometry(bandSize, bandSize),
+    new THREE.MeshBasicMaterial({ map: tex.band, color, opacity: 0.55, ..._auraAdditive })
+  );
+  band.position.y = 0.004;
+  const glyphMat = new THREE.MeshBasicMaterial({ map: tex.diamond, color, opacity: 0.9, ..._auraAdditive });
+  const glyphPivot = new THREE.Group();
+  glyphPivot.position.y = 0.008;
+  const glyphGeo = new THREE.PlaneGeometry(0.3, 0.5);
+  for (let i = 0; i < AURA_GLYPH_COUNT; i++) {
+    const ang = (i / AURA_GLYPH_COUNT) * Math.PI * 2;
+    const g = flat(glyphGeo, glyphMat);
+    g.position.set(Math.cos(ang) * AURA_BAND_RADIUS, 0, Math.sin(ang) * AURA_BAND_RADIUS);
+    g.rotation.z = -ang + Math.PI / 2; // long axis points along the ring tangent... radial: keep diamond pointing outward
+    glyphPivot.add(g);
+  }
+  const moteMat = new THREE.SpriteMaterial({ map: tex.glow, color, opacity: 0.75, ..._auraAdditive });
+  const motes: THREE.Sprite[] = [];
+  for (let i = 0; i < AURA_MOTE_COUNT; i++) {
+    const s = new THREE.Sprite(moteMat);
+    s.userData.phase = i / AURA_MOTE_COUNT;
+    s.userData.ang = (i * 2.4) % (Math.PI * 2);
+    motes.push(s);
+  }
+  group.add(inner, band, glyphPivot, ...motes);
+  return { group, band, inner, glyphPivot, glyphMat, motes, moteMat };
+}
+
+/** Soft ground glow pool under an enemy covered by an aura (own material, shared texture + geometry cache by caller). */
+export function createAuraPool(color: number): THREE.Mesh {
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.2, 1.2),
+    new THREE.MeshBasicMaterial({ map: getAuraSoftTextures().glow, color, opacity: 0, ..._auraAdditive })
+  );
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = 0.034;
+  return mesh;
+}
+
 export function applyEliteVisuals(
   rig: EnemyRig,
   label?: string,
-  isSpecial = false
-): void {
+  isSpecial = false,
+  aura?: EliteAuraVisual
+): AuraHolderFx | undefined {
   rig.body.scale.multiplyScalar(isSpecial ? 1.38 : 1.32);
 
   const auraRing = new THREE.Mesh(
@@ -4743,10 +4894,18 @@ export function applyEliteVisuals(
   rig.auraRing = auraRing;
 
   if (label) {
-    const nameTag = createEliteNameSprite(label, isSpecial);
+    const nameTag = createEliteNameSprite(label, isSpecial, aura);
     rig.root.add(nameTag);
     rig.nameTag = nameTag;
   }
+  if (aura) {
+    // One coherent colour under a named elite: the generic orange elite marker is replaced by the aura light
+    if (rig.auraRing) rig.auraRing.visible = false;
+    const fx = createAuraHolderFx(aura.color);
+    rig.root.add(fx.group);
+    return fx;
+  }
+  return undefined;
 }
 
 export interface RelicLootRig {
