@@ -2,9 +2,9 @@ import type { CommandPayload, GameEvent, GameKind, HandbackPayload, LoadoutPaylo
 import type { RoomMember } from '../../../shared/room';
 import { HeroClassId, PetSpecies } from '../classes';
 import type { BossBeamSpec } from './bossVfx';
-import { BossActionType, BossSkillKind } from './data';
+import { BossActionType, BossSkillKind, EnemyAuraType } from './data';
 import type { CharacterLoadout } from '../hero';
-import { BossTelegraphRig, EnemyRig, GateRig, PetRig, RelicLootRig, SpikeTrapRig, TownPortalRig, TreasureChestRig } from '../models';
+import { AuraHolderFx, BossTelegraphRig, EnemyRig, GateRig, PetRig, RelicLootRig, SpikeTrapRig, TownPortalRig, TreasureChestRig } from '../models';
 import { RelicItem } from '../relics';
 import { DungeonTextureSet } from '../textures';
 import { BossAttackState, DungeonData, EnemyKind, ProjectileKind } from '../types';
@@ -155,6 +155,22 @@ export interface EnemyEntity {
   isSpecialElite?: boolean;
   customName?: string;
   damageMult: number;
+  /** Chance (0-1) that a basic attack crits for ENEMY_CRIT_MULT x damage (base ENEMY_BASE_CRIT, set at spawn). */
+  critChance: number;
+  /** Named-elite aura this enemy carries (host / single player: gameplay + visuals; teammate: visuals only). */
+  aura?: EnemyAuraType;
+  /** Ground ring under an aura holder (child of rig.root, disposed with the level). */
+  auraHolderFx?: AuraHolderFx;
+  /** Cached effect of the auras currently covering this enemy (host / single player, refreshed every ENEMY_AURA_INTERVAL). */
+  fxAtkSpd?: boolean;
+  fxAtk?: boolean;
+  fxDr?: boolean;
+  fxMove?: boolean;
+  fxCrit?: boolean;
+  /** Visual (all clients): bit per ENEMY_AURA_TYPES index of the auras currently covering this enemy. */
+  auraMask?: number;
+  /** Thin ground rings per covering aura type, fading in/out (see updateAuraRings). */
+  auraPool?: { mesh: THREE.Mesh; alpha: number };
   bossName?: string;
   bossTitle?: string;
   bossState?: BossAttackState;
@@ -314,6 +330,8 @@ export interface ProjectileEntity {
   maxLife: number;
   /** True for boss `ranged_volley` railgun heavy shells (enhanced rings, trail & impact burst). */
   isBossHeavy?: boolean;
+  /** Enemy crit rolled when the shot was fired (damage already includes ENEMY_CRIT_MULT). */
+  crit?: boolean;
   /** Teammate view only: id of the host's projectile this one mirrors (moved by the snapshot stream). */
   pid?: number;
 }

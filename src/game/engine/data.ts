@@ -572,3 +572,77 @@ export function getRangedProjectileKind(kind: EnemyKind): ProjectileKind {
 
 /** A teammate's predicted crate break is undone if the host's snapshot has not confirmed it after this long (ms). */
 export const MP_BREAK_CONFIRM_MS = 1500;
+
+// ---------------------------------------------------------------------------------------------------------
+// Difficulty tuning (docs/multiplayer-spec.md section 4.1): regular monsters and elites only, bosses are never affected.
+// ---------------------------------------------------------------------------------------------------------
+
+export interface EnemyDepthTier {
+  /** First depth of the tier (inclusive). */
+  fromDepth: number;
+  /** Basic-attack cooldown divisor bonus (+0.05 = attacks 5% faster). The telegraph (windup) is never shortened. */
+  atkSpeedBonus: number;
+  /** Move speed bonus applied to `speed` at spawn (swarm critters are excluded). */
+  moveSpeedBonus: number;
+  /** Extra non-elite normal monsters added to every room that already spawns small monsters. */
+  extraMobsPerRoom: number;
+}
+
+/** Ascending by `fromDepth`; looked up with the effective sim depth (same depth as damage scaling). */
+export const ENEMY_DEPTH_TIERS: readonly EnemyDepthTier[] = [
+  { fromDepth: 1, atkSpeedBonus: 0.05, moveSpeedBonus: 0.05, extraMobsPerRoom: 0 },
+  { fromDepth: 11, atkSpeedBonus: 0.1, moveSpeedBonus: 0.1, extraMobsPerRoom: 1 },
+  { fromDepth: 16, atkSpeedBonus: 0.15, moveSpeedBonus: 0.15, extraMobsPerRoom: 1 },
+  { fromDepth: 21, atkSpeedBonus: 0.2, moveSpeedBonus: 0.2, extraMobsPerRoom: 2 },
+  { fromDepth: 26, atkSpeedBonus: 0.25, moveSpeedBonus: 0.2, extraMobsPerRoom: 2 },
+  { fromDepth: 31, atkSpeedBonus: 0.3, moveSpeedBonus: 0.2, extraMobsPerRoom: 3 },
+  { fromDepth: 36, atkSpeedBonus: 0.35, moveSpeedBonus: 0.2, extraMobsPerRoom: 3 },
+];
+
+export function getEnemyDepthTier(depth: number): EnemyDepthTier {
+  let tier = ENEMY_DEPTH_TIERS[0];
+  for (const t of ENEMY_DEPTH_TIERS) {
+    if (depth >= t.fromDepth) tier = t;
+  }
+  return tier;
+}
+
+/** Enemy crit: every enemy has a `critChance` (spawn-time value, so per-kind crit only needs a number here). */
+export const ENEMY_BASE_CRIT = 0;
+export const ENEMY_CRIT_MULT = 1.5;
+
+/** Named-elite aura (every named elite carries exactly one; two named elites in the same room never share a type). */
+export type EnemyAuraType = 'atkspd' | 'atk' | 'dr' | 'move' | 'crit';
+
+export interface EnemyAuraDef {
+  /** Short key sent in `EnemyStatic.a` (multiplayer). */
+  key: string;
+  label: string;
+  color: number;
+  /** CSS colour of the name-tag label. */
+  css: string;
+}
+
+export const ENEMY_AURA_TYPES: readonly EnemyAuraType[] = ['atkspd', 'atk', 'dr', 'move', 'crit'];
+
+export const ENEMY_AURA_DEFS: Record<EnemyAuraType, EnemyAuraDef> = {
+  atkspd: { key: 'A', label: '迅捷', color: 0xff9a2e, css: '#ffab4d' },
+  atk: { key: 'B', label: '狂暴', color: 0xff3b3b, css: '#ff6b6b' },
+  dr: { key: 'C', label: '堅韌', color: 0x3d8bff, css: '#6fa8ff' },
+  move: { key: 'D', label: '疾風', color: 0x3ddc6b, css: '#6ff09a' },
+  crit: { key: 'E', label: '致命', color: 0xb44dff, css: '#c986ff' },
+};
+
+export function auraTypeFromKey(key: string | undefined): EnemyAuraType | undefined {
+  return ENEMY_AURA_TYPES.find((t) => ENEMY_AURA_DEFS[t].key === key);
+}
+
+/** World-unit radius of a named elite's aura (affects every non-boss enemy in range, the holder included). */
+export const ENEMY_AURA_RADIUS = 5;
+/** Seconds between aura membership re-evaluations (flags are cached on each enemy). */
+export const ENEMY_AURA_INTERVAL = 0.25;
+export const ENEMY_AURA_ATKSPD_MULT = 1.2;
+export const ENEMY_AURA_ATK_MULT = 1.2;
+export const ENEMY_AURA_DR_MULT = 0.8;
+export const ENEMY_AURA_MOVE_MULT = 1.2;
+export const ENEMY_AURA_CRIT_BONUS = 0.2;

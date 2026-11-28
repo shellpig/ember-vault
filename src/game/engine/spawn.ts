@@ -1,7 +1,8 @@
 import type { EmbervaultEngine } from '../engine';
-import { findGridPath, gridToWorld } from '../dungeon';
-import { BOSS_ACTION, BOSS_ARENA_WAVES, BOSS_CONFIGS, SPECIAL_ELITE_NAMES, getBossBaseMaxHp, getBossDepthTier, getBossesForDepth, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isMageLikeRanged, isRangedEnemy, isSwarmEnemy } from './data';
-import { applyEliteVisuals, createBossTelegraph, createEnemyModel } from '../models';
+import { findGridPath, gridToWorld, worldToGrid } from '../dungeon';
+import { BOSS_ACTION, BOSS_ARENA_WAVES, BOSS_CONFIGS, ENEMY_AURA_DEFS, ENEMY_AURA_TYPES, ENEMY_BASE_CRIT, EnemyAuraType, SPECIAL_ELITE_NAMES, getBossBaseMaxHp, getBossDepthTier, getBossesForDepth, getEnemyDepthTier, isArcherLikeRanged, isFloorBoss, isGuardianEnemy, isMageLikeRanged, isRangedEnemy, isSwarmEnemy } from './data';
+import { AuraHolderFx, applyEliteVisuals, createBossTelegraph, createEnemyModel } from '../models';
+
 import { DungeonData, EnemyKind, TerrainTheme } from '../types';
 
 export const spawnMethods = {
@@ -118,6 +119,22 @@ export const spawnMethods = {
     };
 
     let swarmPacksSpawned = 0;
+
+    // Depth-tier extra normal monsters (ENEMY_DEPTH_TIERS): non-elite, non-swarm, non-guardian, from the theme pool.
+    const extraMobPool = themePool.filter((k) => k !== themeSwarm);
+    const extraMobsPerRoom = getEnemyDepthTier(this.getEffectiveSimDepth()).extraMobsPerRoom;
+    const spawnExtraMobs = (room: (typeof this.dungeon.rooms)[number]): void => {
+      for (let i = 0; i < extraMobsPerRoom; i++) {
+        const kind = extraMobPool[Math.floor(Math.random() * extraMobPool.length)];
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const gx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
+          const gz = room.z + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+          if (this.dungeon.tiles[gz]?.[gx] !== 1) continue;
+          this.addEnemy(kind, gx, gz, biome, false);
+          break;
+        }
+      }
+    };
 
     for (const room of this.dungeon.rooms) {
       if (room.role === 'start' || room.id === treasureRoomId) continue;
@@ -247,6 +264,7 @@ export const spawnMethods = {
         // 1 melee + 1 ranged terrain-matched guard inside the sealed stairwell chamber
         this.addEnemy(themeMeleeGuard, room.cx - 1, room.cz + 1, biome);
         this.addEnemy(this.depth % 2 === 0 ? themeArcher : themeMage, room.cx + 1, room.cz - 1, biome);
+        spawnExtraMobs(room);
         continue;
       }
 
@@ -267,6 +285,7 @@ export const spawnMethods = {
         if (isElite) elitesSpawned += 1;
         this.addEnemy(kind, gx, gz, biome, isElite);
       }
+      spawnExtraMobs(room);
     }
 
     // Guarantee at least one fast swarm pack appears on every floor
@@ -403,6 +422,27 @@ export const spawnMethods = {
     return Math.pow(1.065, Math.max(0, this.depth - 1));
   },
 
+  /**
+   * Random aura type for a new named elite at grid (gx, gz): never one already carried by another named elite standing
+   * in the same room (falls back to any type when the room already holds all five).
+   */
+  pickNamedEliteAura(this: EmbervaultEngine, gx: number, gz: number): EnemyAuraType {
+    const inRoom = (r: { x: number; z: number; w: number; h: number }, tx: number, tz: number): boolean =>
+      tx >= r.x && tx < r.x + r.w && tz >= r.z && tz < r.z + r.h;
+    const room = this.dungeon.rooms.find((r) => inRoom(r, gx, gz));
+    const taken = new Set<EnemyAuraType>();
+    if (room) {
+      for (const e of this.enemies) {
+        if (!e.aura || e.dead) continue;
+        const g = worldToGrid(e.x, e.z);
+        if (inRoom(room, g.gx, g.gz)) taken.add(e.aura);
+      }
+    }
+    const free = ENEMY_AURA_TYPES.filter((t) => !taken.has(t));
+    const pool = free.length > 0 ? free : ENEMY_AURA_TYPES;
+    return pool[Math.floor(Math.random() * pool.length)];
+  },
+
   addEnemy(
     this: EmbervaultEngine,
     kind: EnemyKind,
@@ -484,6 +524,7 @@ export const spawnMethods = {
         isRanged: false,
         isElite: false,
         damageMult: 1,
+        critChance: ENEMY_BASE_CRIT,
         bossName: cfg.name,
         bossTitle: cfg.title,
         bossState: 'chase',
@@ -508,11 +549,15 @@ export const spawnMethods = {
     const eliteEligible = isElite && !isGuardianEnemy(kind) && !isSwarmEnemy(kind);
     const isSpecialElite = eliteEligible && (forceNamedElite || Math.random() < 0.25);
     let customName: string | undefined;
+    let aura: EnemyAuraType | undefined;
+    let auraHolderFx: AuraHolderFx | undefined;
     if (eliteEligible) {
       if (isSpecialElite) {
         customName =
           SPECIAL_ELITE_NAMES[Math.floor(Math.random() * SPECIAL_ELITE_NAMES.length)];
-        applyEliteVisuals(rig, customName, true);
+        aura = this.pickNamedEliteAura(gx, gz);
+        const def = ENEMY_AURA_DEFS[aura];
+        auraHolderFx = applyEliteVisuals(rig, customName, true, { label: def.label, css: def.css, color: def.color });
       } else {
         applyEliteVisuals(rig, `菁英 ${this.getEnemyBaseLabel(kind)}`, false);
       }
@@ -539,7 +584,7 @@ export const spawnMethods = {
       : 18; // ranged mobs have slightly less HP than melee mobs
     const eliteHpMult = eliteEligible ? (isSpecialElite ? 4 * 1.25 : 4) : 1;
     const maxHp = Math.round(baseHp * depthScale * eliteHpMult * this.getEnemyHpScale());
-    const speed = isSwarmEnemy(kind)
+    const baseSpeed = isSwarmEnemy(kind)
       ? 8.4 // 3x normal melee speed (2.8 * 3)
       : kind === 'wisp' ||
         kind === 'cavern_bat' ||
@@ -558,6 +603,9 @@ export const spawnMethods = {
       : isGuardianEnemy(kind) || kind === 'cavern_golem' || kind === 'alien_probe'
       ? 2.3
       : 2.1;
+    // Depth-tier move speed bonus (swarm critters are already 3x fast and are excluded)
+    const enemyTier = getEnemyDepthTier(this.getEffectiveSimDepth());
+    const speed = isSwarmEnemy(kind) ? baseSpeed : baseSpeed * (1 + enemyTier.moveSpeedBonus);
 
     this.enemies.push({
       id: this.nextId++,
@@ -587,6 +635,9 @@ export const spawnMethods = {
       isSpecialElite,
       customName,
       damageMult: eliteEligible ? 1.5 : 1,
+      critChance: ENEMY_BASE_CRIT,
+      aura,
+      auraHolderFx,
     });
   },
 };

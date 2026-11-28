@@ -165,6 +165,8 @@ export interface EnemyStatic {
   /** 0 normal, 1 elite, 2 special elite */
   e: 0 | 1 | 2;
   n?: string;
+  /** Named-elite aura key: A atkspd, B atk, C dr, D move, E crit (absent = no aura). Teammates only draw it. */
+  a?: string;
   bn?: string;
   bt?: string;
 }

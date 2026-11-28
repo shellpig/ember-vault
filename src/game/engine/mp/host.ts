@@ -6,7 +6,7 @@ import type { RoomMember } from '../../../../shared/room';
 import { HeroClassId, UpgradeKind } from '../../classes';
 import { gridToWorld } from '../../dungeon';
 import { TREASURE_CONFIG } from '../../treasure';
-import { BOSS_SKILL_LIST } from '../data';
+import { BOSS_SKILL_LIST, ENEMY_AURA_DEFS } from '../data';
 import { EnemyEntity, MpHostState, SavedDungeonSnapshot } from '../entities';
 import { Hero } from '../../hero';
 
@@ -698,6 +698,7 @@ export const hostMpMethods = {
       if (full || !known) {
         const st: EnemyStatic = { i: e.id, k: e.kind, m: e.maxHp, e: e.isSpecialElite ? 2 : e.isElite ? 1 : 0 };
         if (e.customName) st.n = e.customName;
+        if (e.aura) st.a = ENEMY_AURA_DEFS[e.aura].key;
         if (e.bossName) st.bn = e.bossName;
         if (e.bossTitle) st.bt = e.bossTitle;
         en.push(st);

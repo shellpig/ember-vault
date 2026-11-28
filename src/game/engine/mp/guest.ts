@@ -2,10 +2,10 @@ import { EmbervaultEngine } from '../../engine';
 import type { DoorSnap, EnemyStatic, GameEvent, InputPayload, LevelPayload, PrivatePayload, SnapshotPayload, WorldSnap } from '../../../../shared/game';
 import { EF_BOSS_SHIFT, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
 import { HeroClassId, PetSpecies } from '../../classes';
-import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_PRISM, BOSS_SKILL_LIST, BOSS_WARP, MP_BREAK_CONFIRM_MS, isFloorBoss, isRangedEnemy } from '../data';
+import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_PRISM, BOSS_SKILL_LIST, BOSS_WARP, ENEMY_AURA_DEFS, ENEMY_AURA_INTERVAL, MP_BREAK_CONFIRM_MS, auraTypeFromKey, isFloorBoss, isRangedEnemy } from '../data';
 import { BreakableEntity, EnemyEntity, HeroProjectileEntity, LootEntity, MpGuestState, MpSample, ProjectileEntity } from '../entities';
 import { Hero } from '../../hero';
-import { BossTelegraphRig, applyEliteVisuals, createBossTelegraph, createEnemyModel, createHunterArrowMesh, createHunterPetModel, createIceSpikeMesh, createLootMesh, createProjectileMesh, createRelicLootMesh } from '../../models';
+import { AuraHolderFx, BossTelegraphRig, applyEliteVisuals, createBossTelegraph, createEnemyModel, createHunterArrowMesh, createHunterPetModel, createIceSpikeMesh, createLootMesh, createProjectileMesh, createRelicLootMesh } from '../../models';
 import { EnemyKind, FloatingLabelData, ProjectileKind } from '../../types';
 import * as THREE from 'three';
 
@@ -466,8 +466,17 @@ export const guestMpMethods = {
       telegraph = createBossTelegraph(BOSS_CONFIGS[kind].telegraphColor);
       this.dynamicGroup.add(telegraph.group);
     }
+    // Named-elite aura (host decides; teammates only draw the name tag label and the ground ring)
+    const aura = isBoss ? undefined : auraTypeFromKey(st.a);
+    let auraHolderFx: AuraHolderFx | undefined;
     if (st.e > 0 && !isBoss) {
-      applyEliteVisuals(rig, st.n ?? `菁英 ${this.getEnemyBaseLabel(kind)}`, st.e === 2);
+      const def = aura ? ENEMY_AURA_DEFS[aura] : undefined;
+      auraHolderFx = applyEliteVisuals(
+        rig,
+        st.n ?? `菁英 ${this.getEnemyBaseLabel(kind)}`,
+        st.e === 2,
+        def ? { label: def.label, css: def.css, color: def.color } : undefined
+      );
     }
     const e: EnemyEntity = {
       id: st.i,
@@ -493,6 +502,9 @@ export const guestMpMethods = {
       isSpecialElite: st.e === 2,
       customName: st.n,
       damageMult: 1,
+      critChance: 0,
+      aura,
+      auraHolderFx,
       bossName: st.bn,
       bossTitle: st.bt,
       bossState: 'chase',
@@ -1022,6 +1034,13 @@ export const guestMpMethods = {
         }
       }
     }
+    // Aura rings only: membership from the interpolated positions + the host's `a` field. No gameplay flags are set here.
+    this.enemyAuraTimer -= dt;
+    if (this.enemyAuraTimer <= 0) {
+      this.enemyAuraTimer = ENEMY_AURA_INTERVAL;
+      this.refreshAuraMask(g.enemyList, false);
+    }
+    this.updateAuraRings(g.enemyList, dt);
     // Monster projectiles and the other heroes' ice spikes fly in a straight line until the host says they ended
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
