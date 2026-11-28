@@ -1215,7 +1215,8 @@ export default function App() {
   };
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#090a0f]">
+    // 100dvh = the height actually visible (mobile / iPad Safari toolbars shown); 100vh fallback for older browsers
+    <div className="relative w-screen h-screen supports-[height:100dvh]:h-dvh overflow-hidden bg-[#090a0f]">
       {/* Isolated WebGL Canvas Host */}
       <div
         ref={mountRef}
