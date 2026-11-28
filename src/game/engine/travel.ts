@@ -2,6 +2,7 @@ import { EmbervaultEngine } from '../engine';
 import { HeroClassId } from '../classes';
 import { gridToWorld, worldToGrid } from '../dungeon';
 import { SavedDungeonSnapshot } from './entities';
+import { DEATH_RETURN_COST_MULT } from './data';
 import { _camTarget } from './scratch';
 import { Hero, STASH_CAP } from '../hero';
 import type { CharacterLoadout } from '../hero';
@@ -116,8 +117,8 @@ export const travelMethods = {
   },
 
   /**
-   * Death flow, step 2 (the player pressed 回到城鎮 on the death screen): pay the portal toll
-   * (`depth * 10`, floored at 0 gold), refill HP/shield and go through the portal opened at the downed spot.
+   * Death flow, step 2 (the player pressed 回到城鎮 on the death screen): pay the rescue toll
+   * (`getDeathReturnCost()`, floored at 0 gold), refill HP/shield and go through the portal opened at the downed spot.
    */
   confirmDeathReturn(this: EmbervaultEngine): void {
     if (!this.hero.isDead || this.inTown || this.transitionState !== 'none') return;
@@ -128,7 +129,7 @@ export const travelMethods = {
     }
     const portal = this.hero.portal ?? { x: this.hero.x, z: this.hero.z, depth: this.depth };
     this.hero.portal = portal;
-    const cost = this.getTownReturnCost();
+    const cost = this.getDeathReturnCost();
     this.hero.gold = Math.max(0, this.hero.gold - cost);
     this.audio.playPortal();
     this.hero.input.keys.clear();
@@ -173,6 +174,11 @@ export const travelMethods = {
 
   getTownReturnCost(this: EmbervaultEngine): number {
     return this.depth * 10;
+  },
+
+  /** Death toll ("rescue team"): the portal toll x DEATH_RETURN_COST_MULT, a small death penalty. */
+  getDeathReturnCost(this: EmbervaultEngine): number {
+    return this.getTownReturnCost() * DEATH_RETURN_COST_MULT;
   },
 
   /** Removes a hero's dungeon portal data and 3D rig (used when the owner returns from town). */

@@ -359,6 +359,8 @@ export interface HudState {
   dungeonRunning: boolean;
   nearAngel: boolean;
   townReturnCost: number;
+  /** Gold the death screen's 回到城鎮 costs (rescue team): townReturnCost x DEATH_RETURN_COST_MULT. */
+  deathReturnCost: number;
   angelBuff: AngelBuff | null;
   // --- Hero class (added for multi-class support) ---
   heroClass: HeroClassId;

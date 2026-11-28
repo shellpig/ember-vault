@@ -35,6 +35,8 @@ export const BOSS_SKILL_LIST: readonly BossSkillKind[] = [
 
 /** Special start-depth sentinel for the hidden PC Boss Test Arena (Boss Rush) mode. */
 export const BOSS_ARENA_DEPTH = 99;
+/** Death screen 回到城鎮 ("rescue team") costs the portal toll (`depth * 10`) times this. */
+export const DEATH_RETURN_COST_MULT = 5;
 /** Ordered wave depths spawned in the Boss Test Arena (5F..40F dual-boss, then loops). */
 export const BOSS_ARENA_WAVES: readonly number[] = [5, 10, 15, 20, 25, 30, 35, 40];
 

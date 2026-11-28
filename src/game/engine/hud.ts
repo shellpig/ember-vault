@@ -146,6 +146,7 @@ export const hudMethods = {
       dungeonRunning: this.inTown && this.dungeonCtx !== null,
       nearAngel: this.isHeroNearAngel(),
       townReturnCost: this.getTownReturnCost(),
+      deathReturnCost: this.getDeathReturnCost(),
       angelBuff: lh.angelBuff ? { ...lh.angelBuff } : null,
       controlMode: lh.controlMode,
       autoAttack: this.autoAttackEnabled,

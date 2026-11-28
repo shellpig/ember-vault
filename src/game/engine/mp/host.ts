@@ -349,7 +349,7 @@ export const hostMpMethods = {
   /** `h` (a remote hero) goes to the town: it leaves the simulation and receives its final state. */
   mpHostSendToTown(this: EmbervaultEngine, h: Hero, fromDeath: boolean, viaExistingPortal = false): void {
     const mp = this.mp!;
-    const cost = viaExistingPortal ? 0 : this.getTownReturnCost();
+    const cost = viaExistingPortal ? 0 : fromDeath ? this.getDeathReturnCost() : this.getTownReturnCost();
     const spent = Math.min(h.gold, cost);
     h.gold = Math.max(0, h.gold - cost);
     void spent;

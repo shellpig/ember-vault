@@ -198,6 +198,7 @@ const INITIAL_HUD: HudState = {
   dungeonRunning: false,
   nearAngel: false,
   townReturnCost: 10,
+  deathReturnCost: 50,
   angelBuff: null,
   controlMode: 'auto',
   autoAttack: false,
@@ -2548,19 +2549,7 @@ export default function App() {
               </span>
             </div>
 
-            {/* Portal toll + return-to-town (death no longer ends the run) */}
-            <div
-              data-testid="death-toll"
-              className="mb-3 border border-[#3a3428] bg-[#12141c] px-3 py-2 text-center font-hud text-xs text-[#b9b4a4]"
-            >
-              傳送門已在倒下處開啟。回城將扣除{' '}
-              <span className="font-bold text-[#ffd479] tabular-nums">
-                {Math.min(hud.gold, hud.townReturnCost).toLocaleString()} G
-              </span>
-              {hud.gold < hud.townReturnCost && (
-                <span className="text-[#8d93a6]">（金幣不足，最多扣到 0；原價 {hud.townReturnCost} G）</span>
-              )}
-            </div>
+            {/* Return-to-town (death no longer ends the run); the rescue toll line sits under the button */}
             <button
               type="button"
               data-testid="death-return-town"
@@ -2570,6 +2559,19 @@ export default function App() {
               <Home className="w-4 h-4 shrink-0" />
               <span>回到城鎮</span>
             </button>
+            <p
+              data-testid="death-toll"
+              className="mt-1.5 text-center font-hud text-[11px] text-[#9ea4b5] tabular-nums"
+            >
+              救援隊將拯救你，花費{' '}
+              <span className="font-bold text-[#ffd479]">
+                {Math.min(hud.gold, hud.deathReturnCost).toLocaleString()}
+              </span>{' '}
+              金幣
+              {hud.gold < hud.deathReturnCost && (
+                <span className="text-[#8d93a6]">（金幣不足，扣到 0；原價 {hud.deathReturnCost.toLocaleString()}）</span>
+              )}
+            </p>
             <button
               type="button"
               onClick={() => void leaveGame()}
