@@ -1,6 +1,28 @@
+// Output chain (shared by every sound):
+//   voice (per-emitter distance gain + stereo pan) -> sfxBus -> dry ---------------> outGain -> compressor -> makeup -> speakers
+//                                                          \-> convolver reverb -> wet /
+// The ambient drone feeds outGain directly (no reverb, no panning).
+
+/** World units: full volume within NEAR, fading to FAR_GAIN at FAR and beyond. */
+const SPATIAL_NEAR = 6;
+const SPATIAL_FAR = 30;
+const SPATIAL_FAR_GAIN = 0.18;
+/** World units of sideways offset for a full pan, and the pan clamp (never hard left / right). */
+const SPATIAL_PAN_SPAN = 14;
+const SPATIAL_PAN_MAX = 0.75;
+/** Screen-right direction of the isometric camera (it sits at +x +z looking toward -x -z). */
+const SCREEN_RIGHT_X = Math.SQRT1_2;
+const SCREEN_RIGHT_Z = -Math.SQRT1_2;
+const REVERB_SECONDS = 1.6;
+const REVERB_WET = 0.2;
+const MASTER_VOLUME = 0.42;
+
 export class DungeonAudio {
   private ctx: AudioContext | null = null;
-  private masterGain: GainNode | null = null;
+  /** Master volume / mute, before the compressor. */
+  private outGain: GainNode | null = null;
+  /** Every sound effect ends here (dry + reverb send). */
+  private sfxBus: GainNode | null = null;
   private droneGain: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
   private enabled = false;
@@ -18,7 +40,7 @@ export class DungeonAudio {
     }
     this.unlocked = true;
     this.enabled = true;
-    this.masterGain.gain.setTargetAtTime(0.42, this.ctx.currentTime, 0.06);
+    this.outGain!.gain.setTargetAtTime(MASTER_VOLUME, this.ctx.currentTime, 0.06);
   }
 
   public setEnabled(on: boolean): void {
@@ -26,8 +48,8 @@ export class DungeonAudio {
       this.unlockAndEnable();
     } else {
       this.enabled = false;
-      if (this.ctx && this.masterGain) {
-        this.masterGain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.05);
+      if (this.ctx && this.outGain) {
+        this.outGain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.05);
       }
     }
   }
@@ -46,7 +68,29 @@ export class DungeonAudio {
     const ctx = new AudioCtx();
     const master = ctx.createGain();
     master.gain.value = 0.0001;
-    master.connect(ctx.destination);
+
+    // Glue the mix and stop stacked hits from clipping, then make up the level the compressor takes away
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -18;
+    comp.knee.value = 12;
+    comp.ratio.value = 4;
+    comp.attack.value = 0.004;
+    comp.release.value = 0.18;
+    const makeup = ctx.createGain();
+    makeup.gain.value = 1.3;
+    master.connect(comp);
+    comp.connect(makeup);
+    makeup.connect(ctx.destination);
+
+    const sfxBus = ctx.createGain();
+    sfxBus.connect(master);
+    const reverb = ctx.createConvolver();
+    reverb.buffer = DungeonAudio.makeImpulse(ctx, REVERB_SECONDS);
+    const wet = ctx.createGain();
+    wet.gain.value = REVERB_WET;
+    sfxBus.connect(reverb);
+    reverb.connect(wet);
+    wet.connect(master);
 
     // Pre-generate 2s white noise buffer for filtered bursts & ambient wind
     const sampleRate = ctx.sampleRate;
@@ -87,7 +131,8 @@ export class DungeonAudio {
     windSrc.start();
 
     this.ctx = ctx;
-    this.masterGain = master;
+    this.outGain = master;
+    this.sfxBus = sfxBus;
     this.droneGain = droneGain;
     this.noiseBuffer = buffer;
   }
@@ -96,7 +141,82 @@ export class DungeonAudio {
   public suppressed = false;
 
   private canPlay(): boolean {
-    return !this.suppressed && this.enabled && this.unlocked && this.ctx !== null && this.masterGain !== null;
+    return !this.suppressed && this.enabled && this.unlocked && this.ctx !== null && this.sfxBus !== null;
+  }
+
+  /** Decaying stereo noise: a dark stone-hall room tail for the convolver. */
+  private static makeImpulse(ctx: AudioContext, seconds: number): AudioBuffer {
+    const len = Math.floor(ctx.sampleRate * seconds);
+    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      let lp = 0;
+      for (let i = 0; i < len; i++) {
+        const t = i / len;
+        // One-pole low-pass that darkens over time, so the tail loses its highs like a real room
+        const k = 0.55 - 0.4 * t;
+        lp += k * ((Math.random() * 2 - 1) - lp);
+        const preDelay = i < ctx.sampleRate * 0.012 ? 0 : 1;
+        d[i] = lp * Math.pow(1 - t, 2.6) * preDelay;
+      }
+    }
+    return buf;
+  }
+
+  // ---- Spatial positioning -------------------------------------------------------------------------------------
+  private listenerX = 0;
+  private listenerZ = 0;
+  private emitterX = 0;
+  private emitterZ = 0;
+  private hasEmitter = false;
+  private voiceNode: GainNode | null = null;
+  private voiceTime = -1;
+
+  /** Where the local player stands (the ears). Set every frame by the engine. */
+  public setListener(x: number, z: number): void {
+    this.listenerX = x;
+    this.listenerZ = z;
+  }
+
+  /** Position the following sounds at (x, z) in the world; `null` plays them centred again. */
+  public setEmitter(x: number | null, z = 0): void {
+    if (x === null) {
+      this.hasEmitter = false;
+    } else {
+      this.hasEmitter = true;
+      this.emitterX = x;
+      this.emitterZ = z;
+    }
+    this.voiceNode = null;
+  }
+
+  /**
+   * The node each sound connects its last gain to. Centred sounds go straight to the bus; positioned ones get a
+   * distance gain + stereo pan, shared by every sound started at the same instant from the same emitter.
+   */
+  private get masterGain(): AudioNode | null {
+    if (!this.ctx || !this.sfxBus) return null;
+    if (!this.hasEmitter) return this.sfxBus;
+    if (this.voiceNode && this.voiceTime === this.ctx.currentTime) return this.voiceNode;
+    const dx = this.emitterX - this.listenerX;
+    const dz = this.emitterZ - this.listenerZ;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1.5) return this.sfxBus;
+    const k = Math.min(1, Math.max(0, (dist - SPATIAL_NEAR) / (SPATIAL_FAR - SPATIAL_NEAR)));
+    const voice = this.ctx.createGain();
+    voice.gain.value = 1 - k * (1 - SPATIAL_FAR_GAIN);
+    if (typeof this.ctx.createStereoPanner === 'function') {
+      const side = dx * SCREEN_RIGHT_X + dz * SCREEN_RIGHT_Z;
+      const pan = this.ctx.createStereoPanner();
+      pan.pan.value = Math.max(-SPATIAL_PAN_MAX, Math.min(SPATIAL_PAN_MAX, side / SPATIAL_PAN_SPAN));
+      voice.connect(pan);
+      pan.connect(this.sfxBus);
+    } else {
+      voice.connect(this.sfxBus);
+    }
+    this.voiceNode = voice;
+    this.voiceTime = this.ctx.currentTime;
+    return voice;
   }
 
   public playFootstep(): void {

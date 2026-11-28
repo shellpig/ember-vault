@@ -674,7 +674,11 @@ export const guestMpMethods = {
       if (to && to !== mp.selfId) return;
       if (origin === mp.selfId && EmbervaultEngine.MP_PREDICTED_SOUNDS.has(name)) return;
       const fn = (this.audio as unknown as Record<string, unknown>)[name];
+      // A teammate's own attack / skill sounds come from where that teammate stands
+      const src = EmbervaultEngine.MP_PREDICTED_SOUNDS.has(name) ? this.heroes.find((h) => h.id === origin) : undefined;
+      if (src) this.audio.setEmitter(src.x, src.z);
       if (typeof fn === 'function') (fn as (...a: unknown[]) => void).apply(this.audio, ev.slice(4));
+      if (src) this.audio.setEmitter(null);
     } else if (t === 'b') {
       const to = String(ev[3] ?? '');
       if (to && to !== mp.selfId) return;

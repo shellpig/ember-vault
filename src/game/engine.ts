@@ -707,6 +707,9 @@ export class EmbervaultEngine {
     this.updateEnvironment(dt);
     this.updateWallOcclusion();
 
+    // Ears follow the local player for positioned sounds (enemies, teammates)
+    this.audio.setListener(this.localHero.x, this.localHero.z);
+
     // 8. Update Pooled Particles, Sword Slash Arcs & Boss Procedural VFX
     this.updateParticles(dt);
     this.updateBossVfx(dt);
