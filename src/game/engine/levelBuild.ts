@@ -868,6 +868,8 @@ export const levelBuildMethods = {
     // 4c. Treasure room chests (docs/treasure-room-spec.md; none on most floors)
     this.buildTreasureChests();
 
+    // 4d. Drops left on this floor when it froze (town trip) lie where they were
+    if (snap) this.restoreSavedLoots(snap.loots);
     // 5. Floating Golden Relic Key Pedestal (skipped in Boss Test Arena)
     if (!isBossArena) {
       const { x, z } = gridToWorld(this.dungeon.keyPos.gx, this.dungeon.keyPos.gz);

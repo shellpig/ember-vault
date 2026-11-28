@@ -2,7 +2,7 @@ import type { EmbervaultEngine } from '../engine';
 import { FROST_MAGE, HUNTER, UpgradeKind, UpgradeOptionView, WARRIOR } from '../classes';
 import { gridToWorld } from '../dungeon';
 import { STASH_CAP } from '../hero';
-import { RelicItem } from '../relics';
+import { RelicItem, getRelicDiscardValue } from '../relics';
 import type { StashMoveResult } from '../engine';
 
 export const economyMethods = {
@@ -77,6 +77,48 @@ export const economyMethods = {
     this.emitFloatingText(this.hero.x, 1.9, this.hero.z, `+${sold.sellValue} G`, 'gold');
     this.emitHud();
     return true;
+  },
+
+  /** Discards a bag relic anywhere (dungeon included) for half its sell value, freeing the slot. */
+  discardRelic(this: EmbervaultEngine, relicId: string): boolean {
+    if (this.hero.isDead || this.tradeLocked) return false;
+    if (this.mpGuestDungeon()) {
+      this.mpGuestCmd({ c: 'disc', id: relicId });
+      return true;
+    }
+    const bagIdx = this.hero.relicBag.findIndex((r) => r.id === relicId);
+    if (bagIdx === -1) return false;
+    const [dropped] = this.hero.relicBag.splice(bagIdx, 1);
+    const gained = getRelicDiscardValue(dropped);
+    this.hero.gold += gained;
+    this.hero.totalGoldEarned += gained;
+    this.audio.playRelicSell();
+    this.emitFloatingText(this.hero.x, 1.9, this.hero.z, `丟棄 +${gained} G`, 'gold');
+    this.emitHud();
+    return true;
+  },
+
+  /** Discards every blue relic in the bag at half value; returns the gold gained (0 for a teammate's request). */
+  discardBlueBagRelics(this: EmbervaultEngine): number {
+    if (this.hero.isDead || this.tradeLocked) return 0;
+    if (this.mpGuestDungeon()) {
+      this.mpGuestCmd({ c: 'discb' });
+      return 0;
+    }
+    let gained = 0;
+    const keep: RelicItem[] = [];
+    for (const r of this.hero.relicBag) {
+      if (r.rarity === 'blue') gained += getRelicDiscardValue(r);
+      else keep.push(r);
+    }
+    if (keep.length === this.hero.relicBag.length) return 0;
+    this.hero.relicBag = keep;
+    this.hero.gold += gained;
+    this.hero.totalGoldEarned += gained;
+    this.audio.playRelicSell();
+    this.emitFloatingText(this.hero.x, 1.9, this.hero.z, `丟棄藍色 +${gained} G`, 'gold');
+    this.emitHud();
+    return gained;
   },
 
   sellCommonBagRelics(this: EmbervaultEngine, includeYellow = true): number {

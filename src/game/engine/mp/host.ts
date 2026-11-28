@@ -310,6 +310,12 @@ export const hostMpMethods = {
         case 'sellc':
           this.sellCommonBagRelics(cmd.y !== 0);
           break;
+        case 'disc':
+          this.discardRelic(cmd.id);
+          break;
+        case 'discb':
+          this.discardBlueBagRelics();
+          break;
         case 'up':
           this.purchaseUpgrade(cmd.kind as UpgradeKind);
           break;
