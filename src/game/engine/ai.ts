@@ -1041,9 +1041,6 @@ export const aiMethods = {
     const canAutoUpgradeStat =
       this.hero.gold >= this.getUpgradeCost() &&
       this.getUpgradeOptions().some((o) => !o.maxed);
-    const hasSellableBagRelics = this.hero.relicBag.some(
-      (r) => r.rarity === 'blue' || r.rarity === 'yellow'
-    );
 
     if (!this.hero.isBot && this.dungeon.altarPos && (canAutoUpgradeStat || wantsMorePotions)) {
       const aw = gridToWorld(this.dungeon.altarPos.gx, this.dungeon.altarPos.gz);
@@ -1119,15 +1116,15 @@ export const aiMethods = {
     }
 
     // 4c. Dedicated Elixir Potion Shop visit on every 3rd floor (Depth 3, 6, 9, 12...)
-    // Auto sells all unused Blue & Yellow relics in bag and restocks potions when needed
-    if (!this.hero.isBot && this.dungeon.shopPos && (wantsMorePotions || hasSellableBagRelics)) {
+    // Restocks potions when needed. Auto never sells bag relics: the player decides what to sell or discard.
+    if (!this.hero.isBot && this.dungeon.shopPos && wantsMorePotions) {
       const sw = gridToWorld(this.dungeon.shopPos.gx, this.dungeon.shopPos.gz);
       const dx = sw.x - this.hero.x;
       const dz = sw.z - this.hero.z;
       const shopDist = Math.hypot(dx, dz);
 
       if (shopDist < 2.2) {
-        this.hero.ai.status = hasSellableBagRelics ? 'Selling Spare Relics' : 'Buying Elixirs';
+        this.hero.ai.status = 'Buying Elixirs';
         this.hero.ai.stuckTimer = 0;
         this.hero.ai.stuckCount = 0;
         this.hero.ai.noProgressTimer = 0;
@@ -1135,10 +1132,7 @@ export const aiMethods = {
         this.hero.ai.progressAnchorZ = this.hero.z;
         this.hero.ai.upgradeCooldown -= dt;
         if (this.hero.ai.upgradeCooldown <= 0) {
-          if (hasSellableBagRelics && this.sellCommonBagRelics(true) > 0) {
-            this.hero.ai.upgradeCooldown = 0.45;
-            this.hero.ai.path = [];
-          } else if (this.hero.potions < targetPotions && this.purchasePotion()) {
+          if (this.hero.potions < targetPotions && this.purchasePotion()) {
             this.hero.ai.upgradeCooldown = 0.42;
             this.hero.ai.path = [];
           }
