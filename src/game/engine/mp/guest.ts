@@ -1041,6 +1041,27 @@ export const guestMpMethods = {
       this.refreshAuraMask(g.enemyList, false);
     }
     this.updateAuraRings(g.enemyList, dt);
+    // Boss Test Arena: the host runs the wave state machine; mirror its countdown for display only
+    if (this.bossArenaMode) {
+      const anyAlive = g.enemyList.some((e) => !e.dead);
+      if (this.bossArenaActive) {
+        if (!anyAlive) {
+          this.bossArenaActive = false;
+          this.bossArenaWave += 1;
+          this.bossArenaCountdown = 5.0;
+          this.emitHud();
+        }
+      } else if (g.enemyList.some((e) => !e.dead && e.isBoss)) {
+        // The host's wave arrived (whatever our local countdown says): hide the countdown
+        this.bossArenaActive = true;
+        this.bossArenaCountdown = 0;
+        this.emitHud();
+      } else if (this.bossArenaCountdown > 0) {
+        const prevSec = Math.ceil(this.bossArenaCountdown);
+        this.bossArenaCountdown = Math.max(0, this.bossArenaCountdown - dt);
+        if (Math.ceil(this.bossArenaCountdown) !== prevSec) this.emitHud();
+      }
+    }
     // Monster projectiles and the other heroes' ice spikes fly in a straight line until the host says they ended
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
