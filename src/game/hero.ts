@@ -10,8 +10,10 @@ import {
 } from './classes';
 import type { HeroClassId, UpgradeKind } from './classes';
 import type { HeroRig, createHeroSetAura } from './models';
-import { computeRelicSummary, scaleRelicSummary } from './relics';
-import type { AngelBuff, RelicItem, RelicSetId, RelicSummaryStats, UniqueEffectId } from './relics';
+import { computeCodexBonus, computeRelicSummary, getUniqueEffectClassOnly, sanitizeCodexIds, scaleRelicSummary } from './relics';
+import type { EnemyAuraType } from './engine/data';
+import type { Object3D } from 'three';
+import type { AngelBuff, RelicItem, RelicSetId, RelicStat, RelicSummaryStats, UniqueEffectId } from './relics';
 
 /** Persistent per-character state a hero can load from / export to a cloud save. */
 export interface CharacterLoadout {
@@ -26,6 +28,8 @@ export interface CharacterLoadout {
   stash: RelicItem[];
   /** Treasure room pity counter: floors built in a row without a treasure room. Old saves / peers omit it (= 0). */
   treasurePity?: number;
+  /** Registered relic codex entries (template ids). Old saves / peers omit it (= none). */
+  codex?: string[];
 }
 
 /** Stash capacity (mirrors MAX_STASH in shared/character.ts). */
@@ -202,8 +206,14 @@ export class Hero {
   /** Town stash contents (oldest deposit first). The stash belongs to the character, so it travels with the hero. */
   public stash: RelicItem[] = [];
   public stashOpen = false;
+  /** The relic codex window (travelling merchant) is open: the hero stays put like with the stash. */
+  public codexOpen = false;
   /** Treasure room pity: floors built in a row without a treasure room (persisted per character, spec docs/treasure-room-spec.md). */
   public treasurePity = 0;
+  /** Relic codex: template ids registered with the travelling merchant (persisted per character). */
+  public codex = new Set<string>();
+  /** Codex max-HP bonus in percent points (already multiplied by relicScale). */
+  public codexHpPct = 0;
   public discoveredRelicIds = new Set<string>();
   public relicStats: RelicSummaryStats = computeRelicSummary([]);
   /** Multiplier applied to every numeric relic bonus (1 for players; bots run at BOT_RELIC_SCALE). */
@@ -215,6 +225,34 @@ export class Hero {
   public chronosUsedThisFloor = false;
   public bloodLeechAccum = 0;
   public catPawHitCounter = 0;
+
+  // Batch 2 unique / set state (all reset by resetForNewRun; per-floor ones also by levelBuild)
+  /** Ember Lantern: seconds until the next pulse. */
+  public lanternPulseTimer = 8;
+  /** Third Eye: seconds until the next mark, the marked enemy id, mark seconds left, first-hit crit pending, marker mesh. */
+  public markCycle = 0;
+  public markId: number | null = null;
+  public markLeft = 0;
+  public markCritPending = false;
+  public markMesh: Object3D | null = null;
+  /** Aura Thief: the stolen aura type and seconds left. */
+  public plunder: { type: EnemyAuraType; left: number } | null = null;
+  /** Selfie Stick: recent kill times (engine clock) and the attack buff seconds left. */
+  public killTimes: number[] = [];
+  public selfieLeft = 0;
+  /** Mom's Bento: used this floor. */
+  public bentoUsedThisFloor = false;
+  /** Low-battery phone: seconds into the 30 s cycle and seconds of shutdown left. */
+  public phoneCycle = 0;
+  public phoneOffLeft = 0;
+  /** Salted Fish: cooldown seconds. */
+  public fishCd = 0;
+  /** Courier 4pc: kills toward the next tip bag. */
+  public courierKills = 0;
+  /** Moon Bow: arrows fired (every 5th is the piercing moon arrow). */
+  public moonArrowCount = 0;
+  /** Signature of the temp buffs last folded into relicStats (see recomputeRelicStats). */
+  public buffKey = '';
 
   // Per-run statistics
   public totalGoldEarned = 0;
@@ -286,6 +324,20 @@ export class Hero {
     this.dashTimer = 0;
     this.invuln = 0;
     this.catPawHitCounter = 0;
+    this.lanternPulseTimer = 8;
+    this.markCycle = 0;
+    this.markId = null;
+    this.markLeft = 0;
+    this.markCritPending = false;
+    this.plunder = null;
+    this.killTimes = [];
+    this.selfieLeft = 0;
+    this.bentoUsedThisFloor = false;
+    this.phoneCycle = 0;
+    this.phoneOffLeft = 0;
+    this.fishCd = 0;
+    this.courierKills = 0;
+    this.moonArrowCount = 0;
     this.comboStep = 0;
     this.input.moveX = 0;
     this.input.moveZ = 0;
@@ -305,7 +357,10 @@ export class Hero {
     this.relicBag = [];
     this.stash = [];
     this.stashOpen = false;
+    this.codexOpen = false;
     this.treasurePity = 0;
+    this.codex.clear();
+    this.codexHpPct = 0;
     this.discoveredRelicIds.clear();
     this.phantomCritTimer = 0;
     this.alchemistShieldTimer = 0;
@@ -335,20 +390,28 @@ export class Hero {
       bag: this.relicBag.map((r) => ({ ...r })),
       stash: this.stash.map((r) => ({ ...r })),
       treasurePity: this.treasurePity,
+      codex: [...this.codex],
     };
   }
 
+  /**
+   * Max HP including relics and the codex bonus. The codex % multiplies the whole max HP (for the Frost Mage the HP
+   * part and the shield part alike, since both are her "血量" pool).
+   */
   public getEffectiveMaxHp(): number {
+    const mult = 1 + this.codexHpPct / 100;
     if (this.classId === 'frost_mage') {
-      return this.maxHp + splitRelicMaxHpForMage(this.relicStats.maxHp).hp;
+      return Math.round((this.maxHp + splitRelicMaxHpForMage(this.relicStats.maxHp).hp) * mult);
     }
-    return this.maxHp + this.relicStats.maxHp;
+    return Math.round((this.maxHp + this.relicStats.maxHp) * mult);
   }
 
   /** Effective max shield (Frost Mage only; 0 for classes without a shield). */
   public getEffectiveMaxShield(): number {
     if (this.classId !== 'frost_mage') return 0;
-    return this.baseMaxShield + splitRelicMaxHpForMage(this.relicStats.maxHp).shield;
+    return Math.round(
+      (this.baseMaxShield + splitRelicMaxHpForMage(this.relicStats.maxHp).shield) * (1 + this.codexHpPct / 100)
+    );
   }
 
   public isMage(): boolean {
@@ -374,8 +437,33 @@ export class Hero {
     return HUNTER.baseShotCooldown / (1 + this.atkSpeedUpgrades * HUNTER.atkSpeedStep);
   }
 
+  /** Class-exclusive uniques (templates with `classOnly`) are inactive for every other class; their stats still work. */
   public hasUnique(effectId: UniqueEffectId): boolean {
-    return this.relicStats.uniqueEffects.includes(effectId);
+    if (!this.relicStats.uniqueEffects.includes(effectId)) return false;
+    const only = getUniqueEffectClassOnly(effectId);
+    return !only || only === this.classId;
+  }
+
+  /** Temporary relic buffs (Selfie Stick, stolen aura) as extra relic stats. */
+  public getBuffStats(): RelicStat[] {
+    const out: RelicStat[] = [];
+    if (this.selfieLeft > 0) out.push({ key: 'atkPct', value: 20 });
+    if (this.plunder && this.plunder.left > 0) {
+      if (this.plunder.type === 'atk') out.push({ key: 'atkPct', value: 15 });
+      else if (this.plunder.type === 'crit') out.push({ key: 'critPct', value: 15 });
+      else if (this.plunder.type === 'move') out.push({ key: 'moveSpeedPct', value: 15 });
+    }
+    return out;
+  }
+
+  /** Attack-speed multiplier from a stolen "迅捷" aura (shortens the attack cooldown ticking). */
+  public getAttackSpeedMult(): number {
+    return this.plunder && this.plunder.left > 0 && this.plunder.type === 'atkspd' ? 1.15 : 1;
+  }
+
+  /** Damage-taken multiplier from a stolen "堅韌" aura. */
+  public getPlunderDrMult(): number {
+    return this.plunder && this.plunder.left > 0 && this.plunder.type === 'dr' ? 0.85 : 1;
   }
 
   public hasSet4pc(setId: RelicSetId): boolean {
@@ -385,10 +473,18 @@ export class Hero {
   public recomputeRelicStats(adjustHp = true): void {
     const prevEffMax = this.getEffectiveMaxHp();
     const prevMaxShield = this.getEffectiveMaxShield();
-    this.relicStats = scaleRelicSummary(
-      computeRelicSummary(this.equippedRelics, this.angelBuff?.stats),
-      this.relicScale
-    );
+    // Codex bonuses ride along as extra relic stats (so bots scale them with relicScale like any relic bonus);
+    // the max HP % is applied in getEffectiveMaxHp / getEffectiveMaxShield.
+    const codex = computeCodexBonus(this.codex);
+    const extraStats: RelicStat[] = [
+      ...(this.angelBuff?.stats ?? []),
+      ...this.getBuffStats(),
+      { key: 'atkPct', value: codex.atkPct },
+      { key: 'critPct', value: codex.critPct },
+      { key: 'goldPct', value: codex.goldPct },
+    ];
+    this.relicStats = scaleRelicSummary(computeRelicSummary(this.equippedRelics, extraStats), this.relicScale);
+    this.codexHpPct = codex.hpPct * this.relicScale;
     const nextEffMax = this.getEffectiveMaxHp();
     const nextMaxShield = this.getEffectiveMaxShield();
 
@@ -417,6 +513,9 @@ export class Hero {
         if (set4 === 'dragonfire') {
           this.setAura.outerMat.color.setHex(0xff5a1f);
           this.setAura.innerMat.color.setHex(0xffcf54);
+        } else if (set4 === 'courier') {
+          this.setAura.outerMat.color.setHex(0x7cf24a);
+          this.setAura.innerMat.color.setHex(0xfff06a);
         } else if (set4 === 'voidstalker') {
           this.setAura.outerMat.color.setHex(0x9b5cff);
           this.setAura.innerMat.color.setHex(0x5ef0ff);
@@ -619,6 +718,7 @@ export class Hero {
     this.relicBag = l.bag.slice(0, this.relicBagCap).map((r) => ({ ...r }));
     this.stash = (l.stash ?? []).slice(0, STASH_CAP).map((r) => ({ ...r }));
     this.treasurePity = Math.max(0, Math.min(MAX_TREASURE_PITY, Math.floor(Number(l.treasurePity) || 0)));
+    this.codex = new Set(sanitizeCodexIds(l.codex));
     for (const r of [...this.equippedRelics, ...this.relicBag, ...this.stash]) {
       this.discoveredRelicIds.add(r.templateId);
     }

@@ -1,8 +1,8 @@
 import type { EmbervaultEngine } from '../engine';
 import { TILE_SIZE, gridToWorld } from '../dungeon';
-import { TOWN_ALTAR_GRID, TOWN_SHOP_GRID, TOWN_STASH_GRID } from './data';
+import { TOWN_ALTAR_GRID, TOWN_CODEX_GRID, TOWN_SHOP_GRID, TOWN_STASH_GRID } from './data';
 import { _camTarget, _color, _mat4, _pos, _quat, _scale } from './scratch';
-import { createAngelModel, createCentralWell, createPotionShop, createStashChest, createTownHouse, createTownPortal, createUpgradeAltar, createVillageLampPost, createVillageTree } from '../models';
+import { createAngelModel, createCentralWell, createCodexMerchant, createPotionShop, createStashChest, createTownHouse, createTownPortal, createUpgradeAltar, createVillageLampPost, createVillageTree } from '../models';
 import { createDungeonTextures } from '../textures';
 import { BiomeConfig, TileType } from '../types';
 import * as THREE from 'three';
@@ -28,7 +28,12 @@ export const townMethods = {
     this.angelPos = null;
     this.stashPos = null;
     this.stashRig = null;
-    for (const h of this.heroes) h.stashOpen = false;
+    this.codexPos = null;
+    this.codexRig = null;
+    for (const h of this.heroes) {
+      h.stashOpen = false;
+      h.codexOpen = false;
+    }
     this.townBuilt = false;
   },
 
@@ -399,6 +404,30 @@ export const townMethods = {
         halo: chest.halo,
         decal: chest.glowRing,
         kind: 'stash',
+      });
+    }
+
+    // 8c. Mysterious travelling merchant (relic codex) at TOWN_CODEX_GRID: outside the right-hand house, to its lower right
+    {
+      const mg = TOWN_CODEX_GRID;
+      const mw = gridToWorld(mg.gx, mg.gz);
+      const merchant = createCodexMerchant(this.sharedShadowMap, this.textures.glowMap);
+      merchant.root.position.set(mw.x, 0, mw.z);
+      merchant.root.rotation.y = Math.PI / 4; // face the camera side
+      this.townGroup.add(merchant.root);
+      this.codexRig = merchant;
+      this.codexPos = { x: mw.x, z: mw.z };
+      tiles[mg.gz][mg.gx] = 2; // solid footprint so the hero walks around it
+      this.lightProps.push({
+        color: 0xffb45a, // warm lantern is the key light; the purple stays in the motes only
+        baseIntensity: 30,
+        distance: 7,
+        decay: 2.0,
+        phase: 4.2,
+        x: mw.x,
+        y: 2.4,
+        z: mw.z,
+        kind: 'merchant',
       });
     }
 

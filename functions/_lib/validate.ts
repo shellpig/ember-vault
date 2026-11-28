@@ -1,8 +1,10 @@
 import { SELECTABLE_CLASS_IDS } from '../../src/game/classes';
 import type { RelicItem } from '../../src/game/relics';
 import {
+  CODEX_ID_PATTERN,
   CharacterUpgrades,
   MAX_BAG,
+  MAX_CODEX_ENTRIES,
   MAX_EQUIPPED,
   MAX_NAME_LENGTH,
   MAX_STASH,
@@ -78,6 +80,8 @@ export interface ValidatedSave {
   stash: RelicItem[] | null;
   /** null = keep the stored treasure room pity counter. */
   treasurePity: number | null;
+  /** null = keep the stored codex. */
+  codex: string[] | null;
 }
 
 export function validateSaveBody(body: Record<string, unknown>): Validated<ValidatedSave> {
@@ -111,6 +115,17 @@ export function validateSaveBody(body: Record<string, unknown>): Validated<Valid
     treasurePity = body.treasure_pity;
   }
 
+  let codex: string[] | null = null;
+  if (body.codex !== undefined) {
+    if (!Array.isArray(body.codex) || body.codex.length > MAX_CODEX_ENTRIES) return fail('invalid_codex');
+    const seen = new Set<string>();
+    for (const id of body.codex) {
+      if (typeof id !== 'string' || !CODEX_ID_PATTERN.test(id) || seen.has(id)) return fail('invalid_codex');
+      seen.add(id);
+    }
+    codex = body.codex as string[];
+  }
+
   // An item may not appear in two containers at once.
   const ids = new Set<string>();
   for (const list of [equipped.value, bag.value, stash ?? []]) {
@@ -132,6 +147,7 @@ export function validateSaveBody(body: Record<string, unknown>): Validated<Valid
       bag: bag.value,
       stash,
       treasurePity,
+      codex,
     },
   };
 }

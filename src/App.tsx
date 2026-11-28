@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   Archive,
+  BookOpen,
   Crosshair,
   Coins,
   DoorOpen,
@@ -29,6 +30,7 @@ import { TouchControls, useTouchPrimary } from './components/TouchControls';
 import { EmbervaultEngine } from './game/engine';
 import { HERO_CLASSES, HeroClassId, UpgradeAccent } from './game/classes';
 import {
+  CODEX_ENTRIES,
   SET_RELIC_CATALOG,
   computeRelicSummary,
   formatMaxHpStatForClass,
@@ -45,6 +47,7 @@ import {
 } from './game/types';
 import { RelicCompendiumModal, RelicEquipmentModal } from './components/RelicModals';
 import { StashModal } from './components/StashModal';
+import { CodexModal } from './components/CodexModal';
 import { TradeModal } from './components/TradeModal';
 import { CharacterSelectScreen, LobbyScreen, LoginScreen } from './components/AccountScreens';
 import { RoomLobbyScreen, type RoomEntry, type RoomGameStart } from './components/RoomScreens';
@@ -226,9 +229,13 @@ const INITIAL_HUD: HudState = {
   stash: [],
   stashCount: 0,
   stashCap: 200,
+  nearCodex: false,
+  codexOpen: false,
+  codexIds: [],
   relicStats: computeRelicSummary([]),
   activeSets: [],
   discoveredRelicIds: [],
+  relicBuffs: [],
   heroClass: 'warrior',
   shield: 0,
   maxShield: 0,
@@ -577,6 +584,7 @@ export default function App() {
         setRelicModalOpen(false);
         setCodexModalOpen(false);
         engineRef.current?.closeStash();
+        engineRef.current?.closeCodex();
         const t = tradeRef.current;
         if (t && (t.phase === 'open' || t.phase === 'requesting')) cancelTradeRef.current();
       }
@@ -587,8 +595,8 @@ export default function App() {
 
   // The stash window replaces the equipment window while it is open.
   useEffect(() => {
-    if (hud.stashOpen) setRelicModalOpen(false);
-  }, [hud.stashOpen]);
+    if (hud.stashOpen || hud.codexOpen) setRelicModalOpen(false);
+  }, [hud.stashOpen, hud.codexOpen]);
 
   // --- Account / save flow -------------------------------------------------
   // Restore an existing session on load.
@@ -614,7 +622,7 @@ export default function App() {
 
   // In-game chat (P5-C): Enter opens the box (the hero stops while typing), Enter sends, Esc cancels.
   const chatBlockedRef = useRef(false);
-  chatBlockedRef.current = hud.stashOpen || relicModalOpen || codexModalOpen || hud.isDead || trade !== null;
+  chatBlockedRef.current = hud.stashOpen || hud.codexOpen || relicModalOpen || codexModalOpen || hud.isDead || trade !== null;
   useEffect(() => {
     if (!inRoomGame || screen !== 'playing') return;
     const onKey = (e: KeyboardEvent) => {
@@ -1422,6 +1430,17 @@ export default function App() {
               </div>
             );
           })()}
+
+          {hud.relicBuffs.length > 0 && (
+            <div data-testid="relic-buffs" className="mt-2 pt-2 border-t border-[#3a3328] flex flex-col gap-0.5 font-hud text-[10px]">
+              {hud.relicBuffs.map((b) => (
+                <div key={b.id} className="flex items-center justify-between gap-2" style={{ color: b.css }}>
+                  <span className="truncate">{b.label}</span>
+                  <span className="tabular-nums shrink-0">{b.left.toFixed(1)}s</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Hunter pet: compact row (same style as the teammate rows below), keeps the animal icon */}
@@ -2063,6 +2082,40 @@ export default function App() {
                 <span>打開倉庫</span>
               </div>
               <span className="font-hud text-[11px] text-[#e0bf74] whitespace-nowrap">按 F 或點擊</span>
+            </button>
+          </div>
+        )}
+
+        {hud.inTown && hud.nearCodex && !hud.codexOpen && !hud.nearStash && !hud.nearAltar && !hud.nearShop && !hud.nearPortal && (
+          <div
+            data-testid="codex-prompt"
+            className="mb-2.5 bg-[#0c0e14]/95 border border-[#9a6cff] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.85)] w-[min(420px,94vw)] space-y-2.5"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[#2f2547] pb-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <BookOpen className="w-4 h-4 text-[#c99bff] shrink-0" />
+                <span className="font-display text-xs font-bold tracking-[0.12em] text-[#e3d0ff] whitespace-nowrap">
+                  神秘旅行商人
+                </span>
+              </div>
+              <span className="font-hud text-[11px] font-bold text-[#c8b6ee] whitespace-nowrap shrink-0 tabular-nums">
+                已收錄 {hud.codexIds.length} / {CODEX_ENTRIES.length}
+              </span>
+            </div>
+            <p className="font-hud text-[11px] text-[#aeb8c7] leading-relaxed">
+              「橘色與綠色的遺物……交給我，我替你登錄在圖鑑裡，換來永久的加護。」
+            </p>
+            <button
+              type="button"
+              data-testid="codex-open"
+              onClick={() => engineRef.current?.openCodex()}
+              className="w-full flex items-center justify-between gap-3 px-3 py-2.5 border border-[#9a6cff] bg-[#1c1230] hover:border-[#d0b0ff] hover:bg-[#291a47] transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2 text-xs font-hud font-bold text-[#e3d0ff] whitespace-nowrap">
+                <BookOpen className="w-4 h-4 text-[#c99bff] shrink-0" />
+                <span>翻開遺物圖鑑</span>
+              </div>
+              <span className="font-hud text-[11px] text-[#c8b6ee] whitespace-nowrap">按 F 或點擊</span>
             </button>
           </div>
         )}
@@ -2762,6 +2815,18 @@ export default function App() {
           onSell={(id, source) => engineRef.current!.sellRelicInStash(id, source)}
           onUnequip={(slotIdx) => engineRef.current?.unequipRelic(slotIdx)}
           onClose={() => engineRef.current?.closeStash()}
+        />
+      )}
+
+      {/* Relic codex window (travelling merchant; engine blocks hero input while open, donations save themselves) */}
+      {hud.codexOpen && hud.inTown && !hud.isDead && (
+        <CodexModal
+          heroClass={hud.heroClass}
+          codexIds={hud.codexIds}
+          bag={hud.relicBag}
+          stash={hud.stash}
+          onDonate={(id, from) => engineRef.current!.donateRelicToCodex(id, from)}
+          onClose={() => engineRef.current?.closeCodex()}
         />
       )}
 

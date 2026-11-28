@@ -11,6 +11,7 @@ import {
 } from '../../shared/game';
 import {
   AngelRig,
+  CodexMerchantRig,
   GateRig,
   StashChestRig,
   TownPortalRig,
@@ -83,6 +84,7 @@ import { spawnMethods } from './engine/spawn';
 import { inputMethods } from './engine/input';
 import { travelMethods } from './engine/travel';
 import { economyMethods } from './engine/economy';
+import { relicEffectMethods } from './engine/relicEffects';
 import { heroCombatMethods } from './engine/heroCombat';
 import { classSkillsMethods } from './engine/classSkills';
 import { lootMethods } from './engine/loot';
@@ -104,7 +106,12 @@ export type StashMoveResult =
   | { ok: false; reason: 'closed' | 'notFound' | 'bagFull' | 'stashFull' };
 
 /** Why the engine asks the host to persist the character right now. */
-export type SaveCheckpointReason = 'town' | 'leaveTown' | 'floor' | 'death' | 'stash';
+export type SaveCheckpointReason = 'town' | 'leaveTown' | 'floor' | 'death' | 'stash' | 'codex';
+
+/** Result of handing a relic to the travelling merchant (relic codex). */
+export type CodexDonateResult =
+  | { ok: true; name: string; templateId: string }
+  | { ok: false; reason: 'closed' | 'notFound' | 'notCodex' | 'registered' };
 
 /** Everything the room layer hands the engine when a room game starts (P5-B). */
 export interface MpConfig {
@@ -301,6 +308,9 @@ export class EmbervaultEngine {
   // Town stash chest (the stash contents themselves belong to the hero)
   stashPos: { x: number; z: number } | null = null;
   stashRig: StashChestRig | null = null;
+  // Town travelling merchant (relic codex); the registered entries themselves belong to the hero
+  codexPos: { x: number; z: number } | null = null;
+  codexRig: CodexMerchantRig | null = null;
 
   // Camera & Juice
   camZoom = 1.0;
@@ -438,7 +448,7 @@ export class EmbervaultEngine {
     const tag = (e.target as HTMLElement | null)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     // Stash window open: the hero stays put (the window handles Esc / F itself).
-    if (this.hero.stashOpen) return;
+    if (this.hero.stashOpen || this.hero.codexOpen) return;
     const code = e.code;
 
     // Hotkey F: interact with the town stash chest; in the dungeon, revive downed teammate (hold), open a treasure chest, or
@@ -447,6 +457,9 @@ export class EmbervaultEngine {
       if (this.inTown && this.isHeroNearStash()) {
         e.preventDefault();
         this.openStash();
+      } else if (this.inTown && this.isHeroNearCodex()) {
+        e.preventDefault();
+        this.openCodex();
       } else if (!this.inTown) {
         const nearDowned = this.heroes.some(
           (other) =>
@@ -884,6 +897,7 @@ type SpawnMethods = typeof spawnMethods;
 type InputMethods = typeof inputMethods;
 type TravelMethods = typeof travelMethods;
 type EconomyMethods = typeof economyMethods;
+type RelicEffectMethods = typeof relicEffectMethods;
 type HeroCombatMethods = typeof heroCombatMethods;
 type ClassSkillsMethods = typeof classSkillsMethods;
 type LootMethods = typeof lootMethods;
@@ -907,6 +921,7 @@ export interface EmbervaultEngine
     InputMethods,
     TravelMethods,
     EconomyMethods,
+    RelicEffectMethods,
     HeroCombatMethods,
     ClassSkillsMethods,
     LootMethods,
@@ -931,6 +946,7 @@ Object.assign(
   inputMethods,
   travelMethods,
   economyMethods,
+  relicEffectMethods,
   heroCombatMethods,
   classSkillsMethods,
   lootMethods,

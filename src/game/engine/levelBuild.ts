@@ -127,6 +127,7 @@ export const levelBuildMethods = {
       this.doorUnlocked = false;
       for (const h of this.heroes) {
         h.chronosUsedThisFloor = false;
+        h.bentoUsedThisFloor = false;
         h.floorKills = 0;
       }
       // Room game teammates build the host's floor from its seed (everything static comes out of this generator)

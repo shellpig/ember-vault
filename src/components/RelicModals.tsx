@@ -14,6 +14,7 @@ import {
   getRarityLabel,
   getRelicDiscardValue,
   getUniqueEffectDescForClass,
+  getUniqueEffectInactiveNote,
 } from '../game/relics';
 import type { HeroClassId } from '../game/classes';
 
@@ -235,11 +236,16 @@ export function RelicEquipmentModal({
                         ))}
                       </div>
                       {item.uniqueEffectTitle && (
-                        <div className="mt-2 pt-1.5 border-t border-[#4f3018] font-hud text-[10px] leading-relaxed text-[#ffb878]">
+                        <div
+                          className={`mt-2 pt-1.5 border-t border-[#4f3018] font-hud text-[10px] leading-relaxed ${
+                            getUniqueEffectInactiveNote(item.uniqueEffectId, heroClass) ? 'text-[#7d8394]' : 'text-[#ffb878]'
+                          }`}
+                        >
                           <span className="font-bold">【{item.uniqueEffectTitle}】</span>
                           {item.uniqueEffectId
                             ? getUniqueEffectDescForClass(item.uniqueEffectId, heroClass)
                             : item.uniqueEffectDesc}
+                          {getUniqueEffectInactiveNote(item.uniqueEffectId, heroClass)}
                         </div>
                       )}
                     </div>
@@ -446,11 +452,16 @@ export function RelicEquipmentModal({
                           ))}
                         </div>
                         {item.uniqueEffectTitle && (
-                          <div className="mt-2 pt-1.5 border-t border-[#4f3018] font-hud text-[10px] leading-relaxed text-[#ffb878]">
+                          <div
+                            className={`mt-2 pt-1.5 border-t border-[#4f3018] font-hud text-[10px] leading-relaxed ${
+                              getUniqueEffectInactiveNote(item.uniqueEffectId, heroClass) ? 'text-[#7d8394]' : 'text-[#ffb878]'
+                            }`}
+                          >
                             <span className="font-bold">【{item.uniqueEffectTitle}】</span>
                             {item.uniqueEffectId
                             ? getUniqueEffectDescForClass(item.uniqueEffectId, heroClass)
                             : item.uniqueEffectDesc}
+                            {getUniqueEffectInactiveNote(item.uniqueEffectId, heroClass)}
                           </div>
                         )}
                       </div>
@@ -651,9 +662,14 @@ export function RelicCompendiumModal({
                       </div>
                     </div>
 
-                    <div className="pt-2 border-t border-[#4a2812] font-hud text-xs leading-relaxed text-[#ffc994]">
+                    <div
+                      className={`pt-2 border-t border-[#4a2812] font-hud text-xs leading-relaxed ${
+                        getUniqueEffectInactiveNote(u.uniqueEffectId, heroClass) ? 'text-[#7d8394]' : 'text-[#ffc994]'
+                      }`}
+                    >
                       <span className="font-bold text-[#ff9b4a]">獨特能力【{u.uniqueEffectTitle}】：</span>
                       <span>{getUniqueEffectDescForClass(u.uniqueEffectId, heroClass)}</span>
+                      <span>{getUniqueEffectInactiveNote(u.uniqueEffectId, heroClass)}</span>
                     </div>
                   </div>
                 );

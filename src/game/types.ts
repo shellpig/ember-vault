@@ -346,9 +346,17 @@ export interface HudState {
   stash: RelicItem[];
   stashCount: number;
   stashCap: number;
+  /** Hero is next to the travelling merchant (relic codex). */
+  nearCodex: boolean;
+  /** Relic codex window is open (engine blocks hero input while true). */
+  codexOpen: boolean;
+  /** Registered relic codex entries (relic template ids). */
+  codexIds: string[];
   relicStats: RelicSummaryStats;
   activeSets: ActiveSetBonus[];
   discoveredRelicIds: string[];
+  /** Temporary relic buffs (Selfie Stick, stolen aura, phone shutdown). */
+  relicBuffs: Array<{ id: string; label: string; left: number; css: string }>;
   inTown: boolean;
   nearPortal: boolean;
   /** Dungeon: the local hero stands next to a treasure chest that can be opened (F). */

@@ -7129,3 +7129,302 @@ export function createHunterPetModel(
 
   return { root, body, legs, tail, buffRing, nameTag, flashMaterials };
 }
+
+export interface CodexMerchantRig {
+  root: THREE.Group;
+  /** Whole figure (cloak, hood, backpack): gently bobs. */
+  body: THREE.Group;
+  /** Lantern + pole assembly: sways. */
+  lantern: THREE.Group;
+  lanternGlow: THREE.Sprite;
+  eyes: THREE.Mesh[];
+  auraPool: THREE.Mesh;
+}
+
+/**
+ * The mysterious travelling merchant (relic codex NPC): a dark hooded cloak with two glowing eyes, a walking staff and an
+ * enormous backpack (taller than his head) strapped with crates, jars, bottles and rolled scrolls, with a warm lantern
+ * hanging from a pole above it. Front faces +Z.
+ */
+export function createCodexMerchant(shadowMap: THREE.Texture, glowMap: THREE.Texture): CodexMerchantRig {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+  addContactShadow(root, shadowMap, 1.0);
+
+  const auraPool = new THREE.Mesh(
+    new THREE.RingGeometry(0.8, 1.3, 28),
+    new THREE.MeshBasicMaterial({
+      color: 0xffb45a,
+      transparent: true,
+      opacity: 0.12,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    })
+  );
+  auraPool.rotation.x = -Math.PI / 2;
+  auraPool.position.y = 0.036;
+  root.add(auraPool);
+
+  // Deep charcoal / desaturated indigo cloth, brown leather, aged wood and brass
+  const cloakMat = new THREE.MeshStandardMaterial({ color: 0x23242e, roughness: 0.95, metalness: 0.02 });
+  const cloakTrimMat = new THREE.MeshStandardMaterial({ color: 0x3a3c52, roughness: 0.9 });
+  const voidMat = new THREE.MeshBasicMaterial({ color: 0x030306 });
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x7ff4ff });
+  const leatherMat = new THREE.MeshStandardMaterial({ color: 0x7a5233, roughness: 0.9 });
+  const darkLeatherMat = new THREE.MeshStandardMaterial({ color: 0x45301d, roughness: 0.92 });
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2c, roughness: 0.92 });
+  const crateMat = new THREE.MeshStandardMaterial({ color: 0x8a6238, roughness: 0.9 });
+  const metalMat = new THREE.MeshStandardMaterial({ color: 0xb59a5c, roughness: 0.35, metalness: 0.8 });
+  const ropeMat = new THREE.MeshStandardMaterial({ color: 0xc8b283, roughness: 0.95 });
+  const parchmentMat = new THREE.MeshStandardMaterial({ color: 0xeadcb0, roughness: 0.85, emissive: 0x3a2f14, emissiveIntensity: 0.2 });
+  const makeGlass = (color: number): THREE.MeshStandardMaterial =>
+    new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.4,
+      transparent: true,
+      opacity: 0.82,
+      roughness: 0.15,
+      metalness: 0.1,
+    });
+
+  // Long draped cloak + lighter hem band + shoulder mantle
+  const cloak = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.6, 1.4, 12), cloakMat);
+  cloak.position.y = 0.72;
+  cloak.castShadow = true;
+  body.add(cloak);
+  const hem = new THREE.Mesh(new THREE.TorusGeometry(0.58, 0.04, 6, 18), cloakTrimMat);
+  hem.rotation.x = Math.PI / 2;
+  hem.position.y = 0.06;
+  body.add(hem);
+  const mantle = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.42, 0.22, 12), cloakTrimMat);
+  mantle.position.y = 1.42;
+  mantle.castShadow = true;
+  body.add(mantle);
+
+  // Deep hood with a black void opening and a drooping tip
+  const hood = new THREE.Mesh(new THREE.SphereGeometry(0.31, 14, 12), cloakMat);
+  hood.position.set(0, 1.7, -0.02);
+  hood.scale.set(1, 1.08, 1.05);
+  hood.castShadow = true;
+  body.add(hood);
+  const hoodTip = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.42, 10), cloakMat);
+  hoodTip.position.set(0, 1.98, -0.2);
+  hoodTip.rotation.x = -0.9;
+  body.add(hoodTip);
+  const hoodRim = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.05, 8, 16), cloakTrimMat);
+  hoodRim.position.set(0, 1.68, 0.2);
+  hoodRim.scale.set(0.95, 1.2, 1);
+  body.add(hoodRim);
+  const face = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 10), voidMat);
+  face.position.set(0, 1.67, 0.1);
+  face.scale.set(0.92, 1.1, 0.8);
+  body.add(face);
+
+  // Two clearly visible glowing eyes (cyan) with additive halos
+  const eyes: THREE.Mesh[] = [];
+  for (const sx of [-0.075, 0.075]) {
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.048, 8, 6), eyeMat);
+    eye.position.set(sx, 1.66, 0.275);
+    eye.scale.set(1.3, 0.8, 0.6);
+    body.add(eye);
+    eyes.push(eye);
+    const eyeGlow = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowMap,
+        color: 0x7ff4ff,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      })
+    );
+    eyeGlow.scale.set(0.34, 0.34, 1);
+    eyeGlow.position.set(sx, 1.66, 0.3);
+    body.add(eyeGlow);
+  }
+
+  // Sleeves reaching forward
+  const sleeveGeo = new THREE.CylinderGeometry(0.075, 0.1, 0.5, 8);
+  const sleeveL = new THREE.Mesh(sleeveGeo, cloakMat);
+  sleeveL.position.set(-0.3, 1.1, 0.16);
+  sleeveL.rotation.set(0.85, 0, -0.35);
+  const sleeveR = new THREE.Mesh(sleeveGeo, cloakMat);
+  sleeveR.position.set(0.32, 1.12, 0.2);
+  sleeveR.rotation.set(0.7, 0, 0.3);
+  body.add(sleeveL, sleeveR);
+
+  // Walking staff in the right hand: tall wooden shaft, forked head and a small hanging charm
+  const staff = new THREE.Group();
+  staff.position.set(0.5, 0, 0.42);
+  staff.rotation.z = -0.06;
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 2.1, 6), woodMat);
+  shaft.position.y = 1.05;
+  const fork1 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 0.34, 5), woodMat);
+  fork1.position.set(-0.07, 2.2, 0);
+  fork1.rotation.z = 0.5;
+  const fork2 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 0.34, 5), woodMat);
+  fork2.position.set(0.07, 2.2, 0);
+  fork2.rotation.z = -0.5;
+  const charm = new THREE.Mesh(new THREE.OctahedronGeometry(0.07), new THREE.MeshBasicMaterial({ color: 0xffd890 }));
+  charm.position.set(0, 2.05, 0);
+  const hand = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), cloakTrimMat);
+  hand.position.set(0, 1.02, 0);
+  staff.add(shaft, fork1, fork2, charm, hand);
+  body.add(staff);
+
+  // === Enormous backpack: taller than the head, with a frame, crates, jars, bottles, scrolls and a pot ===
+  const pack = new THREE.Group();
+  pack.position.set(0, 1.45, -0.62);
+  body.add(pack);
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.7, 0.62), leatherMat);
+  frame.castShadow = true;
+  pack.add(frame);
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.4, 0.7), darkLeatherMat);
+  flap.position.set(0, 0.62, 0.02);
+  pack.add(flap);
+  // Shoulder straps wrapping around to the front of the cloak
+  for (const sx of [-0.32, 0.32]) {
+    const strap = new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.55, 0.66), darkLeatherMat);
+    strap.position.set(sx, 0, 0.005);
+    pack.add(strap);
+    const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.1, 0.05), metalMat);
+    buckle.position.set(sx, 0.3, 0.35);
+    pack.add(buckle);
+  }
+  // Rope bands
+  for (const by of [-0.45, 0.1]) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.06, 0.66), ropeMat);
+    band.position.set(0, by, 0.0);
+    pack.add(band);
+  }
+  // Wooden crates strapped on both sides and on the back
+  const crateSpecs: Array<{ x: number; y: number; z: number; w: number; h: number; d: number; ry: number }> = [
+    { x: -0.72, y: -0.5, z: 0.02, w: 0.42, h: 0.42, d: 0.46, ry: 0.15 },
+    { x: 0.72, y: -0.45, z: 0.0, w: 0.4, h: 0.5, d: 0.44, ry: -0.2 },
+    { x: -0.7, y: 0.15, z: -0.02, w: 0.36, h: 0.36, d: 0.4, ry: -0.1 },
+    { x: 0.05, y: -0.35, z: -0.58, w: 0.8, h: 0.6, d: 0.46, ry: 0 },
+  ];
+  for (const c of crateSpecs) {
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(c.w, c.h, c.d), crateMat);
+    crate.position.set(c.x, c.y, c.z);
+    crate.rotation.y = c.ry;
+    crate.castShadow = true;
+    pack.add(crate);
+    const slat = new THREE.Mesh(new THREE.BoxGeometry(c.w + 0.02, 0.05, c.d + 0.02), woodMat);
+    slat.position.set(c.x, c.y, c.z);
+    slat.rotation.y = c.ry;
+    pack.add(slat);
+  }
+  // Bedroll lashed across the top
+  const bedroll = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.2, 0.2, 1.3, 10),
+    new THREE.MeshStandardMaterial({ color: 0x6a4a58, roughness: 0.9 })
+  );
+  bedroll.rotation.z = Math.PI / 2;
+  bedroll.position.set(0, 0.98, 0);
+  pack.add(bedroll);
+
+  // Jars and bottles piled on the bedroll (clearly above the head)
+  const jarSpecs: Array<{ x: number; y: number; z: number; r: number; h: number; c: number }> = [
+    { x: -0.38, y: 1.32, z: 0.0, r: 0.12, h: 0.32, c: 0x5cf2b0 },
+    { x: 0.0, y: 1.42, z: -0.06, r: 0.15, h: 0.42, c: 0xff7ad9 },
+    { x: 0.4, y: 1.3, z: 0.04, r: 0.11, h: 0.28, c: 0xffd45c },
+  ];
+  for (const j of jarSpecs) {
+    const jar = new THREE.Mesh(new THREE.CylinderGeometry(j.r, j.r * 1.05, j.h, 10), makeGlass(j.c));
+    jar.position.set(j.x, j.y, j.z);
+    pack.add(jar);
+    const lid = new THREE.Mesh(new THREE.CylinderGeometry(j.r * 0.8, j.r * 0.8, 0.06, 10), woodMat);
+    lid.position.set(j.x, j.y + j.h / 2 + 0.03, j.z);
+    pack.add(lid);
+  }
+  const bottleSpecs: Array<{ x: number; y: number; z: number; c: number; rz: number }> = [
+    { x: -0.62, y: 1.18, z: 0.1, c: 0x6ab8ff, rz: 0.4 },
+    { x: 0.66, y: 1.2, z: 0.1, c: 0xb072ff, rz: -0.35 },
+  ];
+  for (const b of bottleSpecs) {
+    const bottle = new THREE.Group();
+    const belly = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.3, 8), makeGlass(b.c));
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 0.18, 8), makeGlass(b.c));
+    neck.position.y = 0.24;
+    const cork = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.035, 0.06, 6), woodMat);
+    cork.position.y = 0.36;
+    bottle.add(belly, neck, cork);
+    bottle.position.set(b.x, b.y, b.z);
+    bottle.rotation.z = b.rz;
+    pack.add(bottle);
+  }
+  // Rolled scrolls sticking out of the top (tall tips)
+  for (let i = 0; i < 5; i++) {
+    const scroll = new THREE.Group();
+    const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.95, 8), parchmentMat);
+    scroll.add(roll);
+    const capMat = new THREE.MeshStandardMaterial({ color: i % 2 ? 0xb53a3a : 0x3a6ab5, roughness: 0.7 });
+    for (const sy of [-0.475, 0.475]) {
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.05, 8), capMat);
+      cap.position.y = sy;
+      scroll.add(cap);
+    }
+    scroll.position.set(-0.4 + i * 0.2, 1.4 + (i % 2) * 0.12, -0.2);
+    scroll.rotation.set(0.1 * (i - 2), 0, 0.22 * (2 - i));
+    pack.add(scroll);
+  }
+  // Pot and ladle hanging off the back of the crate
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.11, 0.18, 10), metalMat);
+  pot.position.set(-0.3, -0.78, -0.4);
+  pack.add(pot);
+  const potHandle = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.014, 6, 12, Math.PI), metalMat);
+  potHandle.position.set(-0.3, -0.68, -0.4);
+  pack.add(potHandle);
+
+  // Lantern pole rising from the pack's right side, curving forward; warm lantern hangs from it
+  const lantern = new THREE.Group();
+  lantern.position.set(0.55, 1.1, -0.55);
+  body.add(lantern);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.032, 2.0, 6), woodMat);
+  pole.position.set(0, 0.95, 0);
+  lantern.add(pole);
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.6, 6), woodMat);
+  arm.rotation.x = Math.PI / 2;
+  arm.position.set(0, 1.95, 0.28);
+  lantern.add(arm);
+  const lamp = new THREE.Group();
+  lamp.position.set(0, 1.62, 0.58);
+  lantern.add(lamp);
+  const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.18, 4), metalMat);
+  chain.position.y = 0.26;
+  lamp.add(chain);
+  const lampCap = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.1, 6), metalMat);
+  lampCap.position.y = 0.13;
+  lamp.add(lampCap);
+  const lampGlass = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.24, 6), new THREE.MeshBasicMaterial({ color: 0xffd890 }));
+  lamp.add(lampGlass);
+  const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.08, 0.05, 6), metalMat);
+  lampBase.position.y = -0.14;
+  lamp.add(lampBase);
+  const lanternGlow = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowMap,
+      color: 0xffb45a,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  lanternGlow.scale.set(1.5, 1.5, 1);
+  lamp.add(lanternGlow);
+
+  const nameTag = createEliteNameSprite('神秘旅行商人', false);
+  nameTag.scale.set(7.0, 1.58, 1);
+  nameTag.position.y = 3.9;
+  root.add(nameTag);
+
+  return { root, body, lantern, lanternGlow, eyes, auraPool };
+}

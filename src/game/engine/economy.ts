@@ -2,8 +2,8 @@ import type { EmbervaultEngine } from '../engine';
 import { FROST_MAGE, HUNTER, UpgradeKind, UpgradeOptionView, WARRIOR } from '../classes';
 import { gridToWorld } from '../dungeon';
 import { STASH_CAP } from '../hero';
-import { RelicItem, getRelicDiscardValue } from '../relics';
-import type { StashMoveResult } from '../engine';
+import { RelicItem, getCodexEntry, getRelicDiscardValue, isCodexRelic } from '../relics';
+import type { CodexDonateResult, StashMoveResult } from '../engine';
 
 export const economyMethods = {
   equipRelic(this: EmbervaultEngine, relicId: string, replaceSlotIndex?: number): boolean {
@@ -322,6 +322,76 @@ export const economyMethods = {
     this.audio.playRelicEquip();
     this.requestSave('stash');
     this.emitHud();
+  },
+
+  isHeroNearCodex(this: EmbervaultEngine): boolean {
+    if (!this.inTown || !this.codexPos) return false;
+    return Math.hypot(this.hero.x - this.codexPos.x, this.hero.z - this.codexPos.z) < 2.75;
+  },
+
+  /** Opens the relic codex window. Only in town, next to the merchant, on a saved character (never for attract mode). */
+  openCodex(this: EmbervaultEngine): boolean {
+    if (this.hero.isDead || !this.inTown || !this.persistRun || this.loadingRun || this.tradeLocked) return false;
+    if (this.transitionState !== 'none' || !this.isHeroNearCodex()) return false;
+    if (this.hero.codexOpen) return true;
+    this.hero.codexOpen = true;
+    this.hero.input.keys.clear();
+    this.hero.input.leftMouseHeld = false;
+    this.audio.playRelicEquip();
+    this.emitHud();
+    return true;
+  },
+
+  /** Closes the relic codex window. Safe to call when already closed (donations save themselves). */
+  closeCodex(this: EmbervaultEngine): void {
+    if (!this.hero.codexOpen) return;
+    this.hero.codexOpen = false;
+    this.hero.input.keys.clear();
+    this.audio.playRelicEquip();
+    this.emitHud();
+  },
+
+  /**
+   * Hands an orange / green relic from the bag or the town stash to the merchant: the item is consumed, its template is
+   * registered in the codex (permanent bonus, see relics.ts CODEX_ENTRIES) and the character is saved. Equipped relics
+   * cannot be donated (unequip them to the bag first). Already registered templates are refused.
+   */
+  donateRelicToCodex(this: EmbervaultEngine, relicId: string, from: 'bag' | 'stash'): CodexDonateResult {
+    const h = this.hero;
+    if (!h.codexOpen || !this.inTown || h.isDead || this.tradeLocked) return { ok: false, reason: 'closed' };
+    const list = from === 'bag' ? h.relicBag : h.stash;
+    const idx = list.findIndex((r) => r.id === relicId);
+    if (idx === -1) return { ok: false, reason: 'notFound' };
+    const item = list[idx];
+    if (!isCodexRelic(item)) return { ok: false, reason: 'notCodex' };
+    if (h.codex.has(item.templateId)) return { ok: false, reason: 'registered' };
+    list.splice(idx, 1);
+    h.codex.add(item.templateId);
+    h.recomputeRelicStats(true); // the max HP bonus also heals by the gained amount
+    this.audio.playUpgrade();
+    this.audio.playRelicSell();
+    const entry = getCodexEntry(item.templateId);
+    const px = this.codexPos?.x ?? h.x;
+    const pz = this.codexPos?.z ?? h.z;
+    this.emitFloatingText(px, 2.6, pz, `圖鑑收錄：${item.name}`, item.rarity === 'green' ? 'relicGreen' : 'relicOrange');
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * Math.PI * 2;
+      this.spawnParticle(
+        px + Math.cos(a) * 0.5,
+        1.0,
+        pz + Math.sin(a) * 0.5,
+        Math.cos(a) * 2.0,
+        1.2 + Math.random() * 1.2,
+        Math.sin(a) * 2.0,
+        i % 2 === 0 ? 0xb072ff : 0xf0dcff,
+        0.7,
+        1.0,
+        -0.2
+      );
+    }
+    this.requestSave('codex');
+    this.emitHud();
+    return { ok: true, name: entry?.name ?? item.name, templateId: item.templateId };
   },
 
   /** Bag -> stash. Equipped relics must be unequipped to the bag first. */

@@ -414,6 +414,7 @@ export const sceneMethods = {
         lp.kind === 'angel' ||
         lp.kind === 'portal' ||
         lp.kind === 'stash' ||
+        lp.kind === 'merchant' ||
         lp.kind === 'chest'
           ? -4.5
           : lp.kind === 'rune' || lp.kind === 'key' || lp.kind === 'stairs'
@@ -466,6 +467,35 @@ export const sceneMethods = {
           0.62,
           1.15,
           -0.12
+        );
+      }
+    }
+
+    // Animate the travelling merchant: idle bob, swaying lantern, flickering eyes and drifting purple motes
+    if (this.codexRig) {
+      const m = this.codexRig;
+      m.body.position.y = Math.sin(this.elapsed * 1.7) * 0.045;
+      m.lantern.rotation.z = Math.sin(this.elapsed * 1.3) * 0.045;
+      m.lantern.rotation.x = Math.sin(this.elapsed * 0.9 + 1.2) * 0.03;
+      const glow = 1.4 + Math.sin(this.elapsed * 3.1) * 0.14;
+      m.lanternGlow.scale.set(glow, glow, 1);
+      m.auraPool.rotation.z -= dt * 0.4;
+      const eyeS = 0.85 + Math.sin(this.elapsed * 2.3) * 0.15;
+      for (const eye of m.eyes) eye.scale.set(1.35 * eyeS, 0.75 * eyeS, 0.6);
+      if (this.codexPos && Math.random() < dt * 4.5) {
+        const a = Math.random() * Math.PI * 2;
+        const r = 0.4 + Math.random() * 0.8;
+        this.spawnParticle(
+          this.codexPos.x + Math.cos(a) * r,
+          0.3 + Math.random() * 0.8,
+          this.codexPos.z + Math.sin(a) * r,
+          0,
+          0.5 + Math.random() * 0.6,
+          0,
+          Math.random() < 0.6 ? 0xb072ff : 0xe0c4ff,
+          0.5,
+          1.3,
+          -0.1
         );
       }
     }

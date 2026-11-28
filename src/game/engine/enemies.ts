@@ -1814,7 +1814,8 @@ export const enemiesMethods = {
       if (isSlowed) e.slowTimer = Math.max(0, (e.slowTimer ?? 0) - dt);
       // Slowed enemies run their whole AI (movement, attack cooldowns, boss windups) on scaled time
       const edt = dt * (isSlowed ? 1 - (e.slowPct ?? 0) : 1);
-      e.attackCooldown = Math.max(0, e.attackCooldown - edt);
+      if ((e.atkSlowTimer ?? 0) > 0) e.atkSlowTimer = Math.max(0, (e.atkSlowTimer ?? 0) - dt);
+      e.attackCooldown = Math.max(0, e.attackCooldown - edt * ((e.atkSlowTimer ?? 0) > 0 ? 0.8 : 1));
 
       if (e.rig.frozenShell) e.rig.frozenShell.visible = isFrozen;
       if (e.rig.slowMarker) {
