@@ -1,6 +1,6 @@
 import { EmbervaultEngine } from '../../engine';
 import type { CommandPayload, DoorSnap, EnemySnap, EnemyStatic, GameEvent, GameKind, HandbackPayload, HeroProjSnap, HeroSnap, InputPayload, LevelPayload, LoadoutPayload, LootSnap, PartyStatePayload, PetSnap, PrivatePayload, ProjSnap, RosterEntry, SnapshotPayload, TownPayload, WorldSnap } from '../../../../shared/game';
-import { ACT_ATTACK, ACT_DASH, ACT_POMMEL, ACT_POTION, EF_BOSS_SHIFT, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DASH, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_STALE_MS, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, MAX_EVENTS_PER_SNAPSHOT, SNAPSHOT_HZ, q100 } from '../../../../shared/game';
+import { ACT_ATTACK, ACT_DASH, ACT_POMMEL, ACT_POTION, EF_BOSS_SHIFT, EF_BURN, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DASH, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_STALE_MS, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, MAX_EVENTS_PER_SNAPSHOT, SNAPSHOT_HZ, q100 } from '../../../../shared/game';
 import { ROOM_MAX_PLAYERS } from '../../../../shared/room';
 import type { RoomMember } from '../../../../shared/room';
 import { HeroClassId, UpgradeKind } from '../../classes';
@@ -636,6 +636,7 @@ export const hostMpMethods = {
     if (e.stunTimer > 0) flags |= EF_STUN;
     if ((e.frozenTimer ?? 0) > 0) flags |= EF_FROZEN;
     if ((e.slowTimer ?? 0) > 0) flags |= EF_SLOW;
+    if ((e.burnTimer ?? 0) > 0) flags |= EF_BURN;
     if (e.hitFlash > 0) flags |= EF_HIT;
     const entry: EnemySnap = [e.id, q100(e.x), q100(e.z), q100(e.facing), Math.max(0, Math.ceil(e.hp)), flags];
     if (e.isBoss) {

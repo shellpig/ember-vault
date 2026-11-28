@@ -33,6 +33,8 @@ export interface EnemyRig {
   frozenShell?: THREE.Group;
   /** Lazily attached by the engine while the enemy is slowed (ice spikes). */
   slowMarker?: THREE.Group;
+  /** Lazily attached while the enemy burns (Hunter fire arrows). */
+  burnFx?: THREE.Group;
   /** Lazily attached while an enraged boss is alive (red ground ring + flame column). */
   rageAura?: THREE.Group;
   flashMaterials: THREE.MeshStandardMaterial[];

@@ -186,6 +186,8 @@ export const EF_AC75 = 32;
 export const EF_BOSS_SHIFT = 6;
 /** Boss only (optional, bit 8 sits above the 2-bit boss state): the boss is enraged. Older clients ignore it. */
 export const EF_ENRAGED = 256;
+/** Optional: the enemy is burning (Hunter fire arrows). Older clients ignore it. */
+export const EF_BURN = 512;
 
 /** Enemy projectile (flies straight, the receiver moves it): [pid, kind, x100, z100, vx100, vz100] */
 export type ProjSnap = [number, string, number, number, number, number];
@@ -217,7 +219,9 @@ export interface WorldSnap {
  *  ['k', mag100, dur100, toId]                  screen shake (private)
  *  ['x', x100, z100, big]                       an enemy died here (burst)
  *  ['m', kind, x100, z100, a100, b100, originId]  Frost Mage VFX: 'n' nova (a = radius), 'i' ice burst
- *                                               (a = radius, b = empowered 0/1), 'k' blink (x/z = start, a/b = end)
+ *                                               (a = radius, b = empowered 0/1), 'k' blink (x/z = start, a/b = end);
+ *                                               skill VFX: 'w' pommel strike (a = radius), 'h' pet summon
+ *                                               (a = PET_SPECIES_LIST index), 'u' pet buff
  */
 export type GameEvent = Array<string | number>;
 

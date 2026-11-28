@@ -8,7 +8,7 @@ import { q100 } from '../../../shared/game';
 // Visual only: damage and hit logic stay in classSkills.ts.
 // ---------------------------------------------------------------------------------------------------------------
 
-const FLAT_VERT = /* glsl */ `
+export const FLAT_VERT = /* glsl */ `
 varying vec2 vUv;
 void main() {
   vUv = uv;
@@ -16,7 +16,7 @@ void main() {
 }
 `;
 
-const NOISE_GLSL = /* glsl */ `
+export const NOISE_GLSL = /* glsl */ `
 float hash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -209,7 +209,7 @@ const MAGE_GOLD = 0xffd84a;
 
 const _flatGeo = new THREE.PlaneGeometry(2, 2);
 const _trailGeo = new THREE.PlaneGeometry(1, 1);
-const _crystalGeo = (() => {
+export const _crystalGeo = (() => {
   const g = new THREE.ConeGeometry(1, 1, 6, 1, false);
   g.translate(0, 0.5, 0); // base on the floor
   return g;
@@ -220,7 +220,7 @@ const _pillarGeo = (() => {
   return g;
 })();
 
-function flatMat(frag: string, uniforms: Record<string, THREE.IUniform>): THREE.ShaderMaterial {
+export function flatMat(frag: string, uniforms: Record<string, THREE.IUniform>): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     vertexShader: FLAT_VERT,
     fragmentShader: frag,
@@ -232,22 +232,23 @@ function flatMat(frag: string, uniforms: Record<string, THREE.IUniform>): THREE.
   });
 }
 
-function crystalMat(): THREE.ShaderMaterial {
+/** Faceted crystal / shard material (ice by default; other skills pass their own deep / mid / tip colours). */
+export function crystalMat(deep = ICE_DEEP, color = ICE_BLUE, core = ICE_CORE): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     vertexShader: CRYSTAL_VERT,
     fragmentShader: CRYSTAL_FRAG,
     uniforms: {
       uFade: { value: 1 },
-      uDeep: { value: new THREE.Color(ICE_DEEP) },
-      uColor: { value: new THREE.Color(ICE_BLUE) },
-      uCore: { value: new THREE.Color(ICE_CORE) },
+      uDeep: { value: new THREE.Color(deep) },
+      uColor: { value: new THREE.Color(color) },
+      uCore: { value: new THREE.Color(core) },
     },
     transparent: true,
     depthWrite: false,
   });
 }
 
-function floorQuad(mat: THREE.Material, x: number, z: number, radius: number, y: number): THREE.Mesh {
+export function floorQuad(mat: THREE.Material, x: number, z: number, radius: number, y: number): THREE.Mesh {
   const mesh = new THREE.Mesh(_flatGeo, mat);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(x, y, z);
@@ -256,7 +257,7 @@ function floorQuad(mat: THREE.Material, x: number, z: number, radius: number, y:
   return mesh;
 }
 
-function disposeGroupMaterials(group: THREE.Object3D): void {
+export function disposeGroupMaterials(group: THREE.Object3D): void {
   const seen = new Set<THREE.Material>();
   group.traverse((o) => {
     const m = (o as THREE.Mesh).material;
@@ -270,7 +271,7 @@ function disposeGroupMaterials(group: THREE.Object3D): void {
 }
 
 /** Pop-in (ease-out-back) then hold, then sink into the floor: returns the vertical scale factor. */
-function crystalRise(t: number, start: number, sinkFrom: number): number {
+export function crystalRise(t: number, start: number, sinkFrom: number): number {
   if (t < start) return 0;
   const k = Math.min(1, (t - start) / 0.08);
   const c = 1.9;
@@ -309,20 +310,22 @@ export const mageVfxMethods = {
     for (const m of mats) m.dispose();
   },
 
-  /** Rising frost column at (x, z): Nova centre and both Blink ends. Returns the update hook for its group. */
+  /** Rising energy column at (x, z) (frost by default): Nova centre, Blink ends, pet summon. Returns its update hook. */
   addFrostPillar(
     this: EmbervaultEngine,
     group: THREE.Group,
     x: number,
     z: number,
     radius: number,
-    height: number
+    height: number,
+    color = ICE_BLUE,
+    core = ICE_CORE
   ): (t: number, elapsed: number) => void {
     const mat = flatMat(PILLAR_FRAG, {
       uLife: { value: 0 },
       uTime: { value: 0 },
-      uColor: { value: new THREE.Color(ICE_BLUE) },
-      uCore: { value: new THREE.Color(ICE_CORE) },
+      uColor: { value: new THREE.Color(color) },
+      uCore: { value: new THREE.Color(core) },
     });
     const mesh = new THREE.Mesh(_pillarGeo, mat);
     mesh.position.set(x, 0.02, z);

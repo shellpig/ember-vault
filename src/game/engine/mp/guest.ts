@@ -1,7 +1,7 @@
 import { EmbervaultEngine } from '../../engine';
 import type { DoorSnap, EnemyStatic, GameEvent, InputPayload, LevelPayload, PrivatePayload, SnapshotPayload, WorldSnap } from '../../../../shared/game';
-import { EF_BOSS_SHIFT, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
-import { HeroClassId, PetSpecies } from '../../classes';
+import { EF_BOSS_SHIFT, EF_BURN, EF_ENRAGED, EF_FROZEN, EF_HIT, EF_SLOW, EF_STUN, HF_DEAD, HF_HIT, HF_HIT_SHIELD, HF_TOWN, INPUT_KEEPALIVE_MS, INPUT_MAX_HZ, KEY_A, KEY_D, KEY_F, KEY_S, KEY_W, q100 } from '../../../../shared/game';
+import { HeroClassId, PET_SPECIES_LIST, PetSpecies } from '../../classes';
 import { BOSS_CONFIGS, BOSS_ENRAGE, BOSS_PRISM, BOSS_SKILL_LIST, BOSS_WARP, ENEMY_AURA_DEFS, ENEMY_AURA_INTERVAL, MP_BREAK_CONFIRM_MS, auraTypeFromKey, isFloorBoss, isRangedEnemy } from '../data';
 import { BreakableEntity, EnemyEntity, HeroProjectileEntity, LootEntity, MpGuestState, MpSample, ProjectileEntity } from '../entities';
 import { Hero } from '../../hero';
@@ -221,6 +221,8 @@ export const guestMpMethods = {
         p.e.stunTimer = flags & EF_STUN ? 0.3 : 0;
         p.e.frozenTimer = flags & EF_FROZEN ? 0.3 : 0;
         p.e.slowTimer = flags & EF_SLOW ? 0.3 : 0;
+        // Kept until the host clears the flag (the entry is re-sent when it changes)
+        p.e.burnTimer = flags & EF_BURN ? 9 : 0;
         if (flags & EF_HIT || en[4] < prevHp) p.e.hitFlash = 0.12;
         if (p.e.isBoss) {
           const nextState = EmbervaultEngine.MP_BOSS_STATES[(flags >> EF_BOSS_SHIFT) & 3] ?? 'chase';
@@ -687,14 +689,17 @@ export const guestMpMethods = {
       if (String(ev[3]) !== mp.selfId) return;
       this.addScreenShake(Number(ev[1]) / 100, Number(ev[2]) / 100);
     } else if (t === 'm') {
-      // Frost Mage skill VFX; our own casts were already drawn by local prediction
-      if (String(ev[6]) === mp.selfId) return;
       const kind = String(ev[1]);
+      // Our own predicted casts (mage skills, pommel) were already drawn locally; the pet skill runs on the host only
+      if (String(ev[6]) === mp.selfId && kind !== 'h' && kind !== 'u') return;
       const x = Number(ev[2]) / 100;
       const z = Number(ev[3]) / 100;
       if (kind === 'n') this.spawnFrostNovaVfx(x, z, Number(ev[4]) / 100, false);
       else if (kind === 'i') this.spawnIceBurstVfx(x, z, Number(ev[4]) / 100, Number(ev[5]) === 1, false);
       else if (kind === 'k') this.spawnBlinkVfx(x, z, Number(ev[4]) / 100, Number(ev[5]) / 100);
+      else if (kind === 'w') this.spawnPommelVfx(x, z, Number(ev[4]) / 100, false);
+      else if (kind === 'h') this.spawnPetSummonVfx(x, z, PET_SPECIES_LIST[Number(ev[4])] ?? 'bear', String(ev[6]) === mp.selfId);
+      else if (kind === 'u') this.spawnPetBuffVfx(x, z, String(ev[6]) === mp.selfId);
     } else if (t === 'x') {
       const x = Number(ev[1]) / 100;
       const z = Number(ev[2]) / 100;
@@ -902,6 +907,7 @@ export const guestMpMethods = {
       const slowed = (e.slowTimer ?? 0) > 0;
       if (e.rig.frozenShell) e.rig.frozenShell.visible = frozen;
       if (e.rig.slowMarker) e.rig.slowMarker.visible = slowed && !frozen;
+      this.updateBurnVisual(e, dt);
       if (e.rig.stunStars) {
         e.rig.stunStars.visible = e.stunTimer > 0;
         if (e.stunTimer > 0) e.rig.stunStars.rotation.y += dt * 5.8;

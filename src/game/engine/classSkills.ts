@@ -162,6 +162,10 @@ export const classSkillsMethods = {
       state: hitState,
       hitColor: 0xff7b47,
     });
+    // Fire arrow: chance to set the target on fire (10% of a normal arrow hit per second)
+    if (!target.dead && Math.random() < HUNTER.burnChance) {
+      this.applyBurn(target, warriorBase * HUNTER.shotDamageMult * dmgMult * atkMult * HUNTER.burnDmgFraction);
+    }
     this.audio.playHit(false);
     this.emitHud();
   },
@@ -193,21 +197,7 @@ export const classSkillsMethods = {
         `★ ${existing.name} 狂野激勵 +${Math.round(actualHeal)} HP`,
         'heal'
       );
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2;
-        this.spawnParticle(
-          existing.x + Math.cos(a) * 0.45,
-          0.6,
-          existing.z + Math.sin(a) * 0.45,
-          Math.cos(a) * 2.2,
-          1.8 + Math.random() * 1.4,
-          Math.sin(a) * 2.2,
-          i % 2 === 0 ? 0xff9f43 : 0x52ffa8,
-          0.95,
-          0.45,
-          2.0
-        );
-      }
+      this.spawnPetBuffVfx(existing.x, existing.z, true);
     } else {
       // Summon a brand-new random pet beside the Hunter
       if (existing) this.dismissPet(this.hero.id);
@@ -249,21 +239,7 @@ export const classSkillsMethods = {
       this.audio.playUpgrade();
       const speciesLabel = species === 'bear' ? '戰熊' : species === 'chocobo' ? '陸行鳥' : '戰狼';
       this.emitFloatingText(sx, 2.0, sz, `召喚 ${speciesLabel}「${name}」!`, 'relicOrange');
-      for (let i = 0; i < 18; i++) {
-        const a = (i / 18) * Math.PI * 2;
-        this.spawnParticle(
-          sx + Math.cos(a) * 0.4,
-          0.5,
-          sz + Math.sin(a) * 0.4,
-          Math.cos(a) * 2.6,
-          1.6 + Math.random() * 1.4,
-          Math.sin(a) * 2.6,
-          i % 2 === 0 ? 0xff7b47 : 0xffd54f,
-          1.0,
-          0.45,
-          3.0
-        );
-      }
+      this.spawnPetSummonVfx(sx, sz, species, true);
     }
     this.emitHud();
   },
@@ -631,6 +607,21 @@ export const classSkillsMethods = {
     pet.rig.buffRing.visible = buffed;
     if (buffed) {
       pet.rig.buffRing.rotation.z += dt * 2.4;
+      // Wild Rally: embers rising off the pet while the buff lasts
+      if (!this.bgSim && pet.rig.root.visible && Math.random() < dt * 9) {
+        this.spawnParticle(
+          pet.x + (Math.random() - 0.5) * 0.9,
+          0.3 + Math.random() * 0.5,
+          pet.z + (Math.random() - 0.5) * 0.9,
+          (Math.random() - 0.5) * 0.5,
+          1.6 + Math.random() * 1.2,
+          (Math.random() - 0.5) * 0.5,
+          Math.random() < 0.65 ? 0xff8c24 : 0xffd54f,
+          0.6,
+          0.6,
+          -0.6
+        );
+      }
     }
     for (const m of pet.rig.flashMaterials) {
       if (pet.hitFlash > 0) {

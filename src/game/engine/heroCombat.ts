@@ -623,50 +623,8 @@ export const heroCombatMethods = {
     // Subtle full-screen impact shake
     this.addScreenShake(0.24, 0.22);
 
-    // Compact 360-degree dual shockwave rings around the hero
-    const outerGeo = new THREE.RingGeometry(0.42, 0.62, 32);
-    const outerMat = new THREE.MeshBasicMaterial({
-      color: 0xffe484,
-      transparent: true,
-      opacity: 0.92,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const outerRing = new THREE.Mesh(outerGeo, outerMat);
-    outerRing.rotation.x = -Math.PI / 2;
-    outerRing.position.set(this.hero.x, 0.22, this.hero.z);
-    this.scene.add(outerRing);
-    this.slashArcs.push({
-      mesh: outerRing,
-      life: 0,
-      maxLife: 0.34,
-      isCleave: false,
-      isShockwave: true,
-      targetScale: WARRIOR.pommelReach / 0.62,
-    });
-
-    const innerGeo = new THREE.RingGeometry(0.18, 0.36, 24);
-    const innerMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.85,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const innerRing = new THREE.Mesh(innerGeo, innerMat);
-    innerRing.rotation.x = -Math.PI / 2;
-    innerRing.position.set(this.hero.x, 0.26, this.hero.z);
-    this.scene.add(innerRing);
-    this.slashArcs.push({
-      mesh: innerRing,
-      life: 0,
-      maxLife: 0.2,
-      isCleave: false,
-      isShockwave: true,
-      targetScale: (WARRIOR.pommelReach * 0.92) / 0.36,
-    });
+    // Cracked-earth shockwave to the stun radius, erupting rock shards
+    this.spawnPommelVfx(this.hero.x, this.hero.z, WARRIOR.pommelReach, true);
 
     // Radial shockwave dust/gold impact sparks
     for (let i = 0; i < 24; i++) {

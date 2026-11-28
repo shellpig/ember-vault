@@ -201,6 +201,11 @@ export const HUNTER = {
   projectileRange: 11,
   projectileHitRadius: 0.45,
   thunderEveryNHits: 4,
+  // Fire arrows: a hit has this chance to set the enemy on fire. While burning it takes, once per second, this fraction
+  // of the Hunter's normal (non-crit) arrow damage, after the enemy's damage reduction. Re-igniting refreshes the timer.
+  burnChance: 0.1,
+  burnDuration: 5.0,
+  burnDmgFraction: 0.1,
 
   // Altar upgrades (total 60)
   hpPerUpgrade: 8,

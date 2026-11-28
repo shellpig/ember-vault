@@ -255,6 +255,15 @@ export interface EnemyEntity {
   slowPct?: number;
   /** Seconds of Frost Nova freeze remaining (acts like a stun). */
   frozenTimer?: number;
+  // Hunter fire arrows
+  /** Seconds of burning remaining (teammate clients only know burning / not burning). */
+  burnTimer?: number;
+  /** Raw damage per tick, before the enemy's damage reduction. */
+  burnDmg?: number;
+  /** Seconds until the next burn tick. */
+  burnTick?: number;
+  /** Hero credited with burn damage and the kill. */
+  burnOwnerId?: string;
 }
 
 export interface HeroProjectileEntity {

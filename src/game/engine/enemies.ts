@@ -1803,6 +1803,9 @@ export const enemiesMethods = {
       if (e.dead) continue;
       // Sounds this enemy makes (boss skills, ranged shots) come from where it stands
       this.audio.setEmitter(e.x, e.z);
+      this.tickBurn(e, dt);
+      if (e.dead) continue;
+      this.updateBurnVisual(e, dt);
 
       if (e.isBoss) {
         this.checkBossEnrage(e);
