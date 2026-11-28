@@ -216,6 +216,8 @@ export interface WorldSnap {
  *  ['b', title, subtitle, toId?]                banner
  *  ['k', mag100, dur100, toId]                  screen shake (private)
  *  ['x', x100, z100, big]                       an enemy died here (burst)
+ *  ['m', kind, x100, z100, a100, b100, originId]  Frost Mage VFX: 'n' nova (a = radius), 'i' ice burst
+ *                                               (a = radius, b = empowered 0/1), 'k' blink (x/z = start, a/b = end)
  */
 export type GameEvent = Array<string | number>;
 

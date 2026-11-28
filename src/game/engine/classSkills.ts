@@ -773,43 +773,7 @@ export const classSkillsMethods = {
     const radius = FROST_MAGE.shotExplosionRadius[shotIdx];
     this.audio.playIceShatter(empowered);
 
-    // Expanding frost ring on the floor
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: empowered ? 0xbff4ff : 0x8fe3ff,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.62, 28), ringMat);
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.set(x, 0.2, z);
-    this.scene.add(ring);
-    this.slashArcs.push({
-      mesh: ring,
-      life: 0,
-      maxLife: empowered ? 0.3 : 0.2,
-      isCleave: false,
-      isShockwave: true,
-      targetScale: radius / 0.62,
-    });
-    for (let i = 0; i < (empowered ? 18 : 9); i++) {
-      const a = (i / (empowered ? 18 : 9)) * Math.PI * 2;
-      const spd = (empowered ? 4.2 : 2.6) + Math.random() * 1.6;
-      this.spawnParticle(
-        x,
-        0.75,
-        z,
-        Math.cos(a) * spd,
-        1.4 + Math.random() * 1.8,
-        Math.sin(a) * spd,
-        i % 3 === 0 ? 0xffffff : empowered && i % 4 === 1 ? 0xffe066 : 0x9fe8ff,
-        empowered ? 1.0 : 0.8,
-        0.4,
-        6.5
-      );
-    }
+    this.spawnIceBurstVfx(x, z, radius, empowered, true);
 
     const atkMult = this.hero.getAtkMult();
     const usePhantomCrit = phantomCrit;
@@ -881,35 +845,7 @@ export const classSkillsMethods = {
     this.audio.playFrostNova();
     this.addScreenShake(0.32, 0.28);
 
-    const rings: Array<[number, number, number, number]> = [
-      // [inner, outer, maxLife, color]
-      // Thin rings: they scale ~19x to reach the nova radius, so keep them narrow
-      [0.64, 0.7, 0.55, 0x8fe3ff],
-      [0.6, 0.64, 0.42, 0xdff8ff],
-      [0.67, 0.7, 0.68, 0xffe066],
-    ];
-    for (const [inner, outer, life, color] of rings) {
-      const mat = new THREE.MeshBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.7,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      });
-      const mesh = new THREE.Mesh(new THREE.RingGeometry(inner, outer, 48), mat);
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(this.hero.x, 0.24, this.hero.z);
-      this.scene.add(mesh);
-      this.slashArcs.push({
-        mesh,
-        life: 0,
-        maxLife: life,
-        isCleave: false,
-        isShockwave: true,
-        targetScale: FROST_MAGE.novaRadius / outer,
-      });
-    }
+    this.spawnFrostNovaVfx(this.hero.x, this.hero.z, FROST_MAGE.novaRadius, true);
     for (let i = 0; i < 40; i++) {
       const a = (i / 40) * Math.PI * 2;
       const spd = 8 + Math.random() * 6;
@@ -1095,6 +1031,7 @@ export const classSkillsMethods = {
     this.hero.facing = Math.atan2(dirX, dirZ);
     this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
     burst(endX, endZ, true);
+    this.spawnBlinkVfx(startX, startZ, endX, endZ);
     if (this.hero.hasUnique('phoenix_dash_nova')) this.triggerPhoenixRingAt(endX, endZ);
     this.onRelicDash(startX, startZ, endX, endZ);
     this.emitHud();

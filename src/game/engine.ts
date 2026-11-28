@@ -95,6 +95,7 @@ import { enemiesMethods } from './engine/enemies';
 import { treasureMethods } from './engine/treasure';
 import { BOSS_ARENA_DEPTH } from './engine/data';
 import { bossVfxMethods } from './engine/bossVfx';
+import { mageVfxMethods } from './engine/mageVfx';
 import type { BossVfxInstance, BossWindupRig } from './engine/bossVfx';
 
 export type { CharacterLoadout } from './hero';
@@ -343,6 +344,7 @@ export class EmbervaultEngine {
     this.devDepthRun = devDepth !== null;
     this.buildLevel(devDepth ?? 1);
     this.prewarmBossVfx();
+    this.prewarmMageVfx();
     this.bindEvents();
     this.loadAutoAttackSetting();
     this.lastTime = performance.now();
@@ -907,6 +909,7 @@ type FrameMethods = typeof frameMethods;
 type EnemiesMethods = typeof enemiesMethods;
 type TreasureMethods = typeof treasureMethods;
 type BossVfxMethods = typeof bossVfxMethods;
+type MageVfxMethods = typeof mageVfxMethods;
 export interface EmbervaultEngine
   extends HudMethods,
     CoreMpMethods,
@@ -930,7 +933,8 @@ export interface EmbervaultEngine
     FrameMethods,
     EnemiesMethods,
     TreasureMethods,
-    BossVfxMethods {}
+    BossVfxMethods,
+    MageVfxMethods {}
 Object.assign(
   EmbervaultEngine.prototype,
   hudMethods,
@@ -956,4 +960,5 @@ Object.assign(
   enemiesMethods,
   treasureMethods,
   bossVfxMethods,
+  mageVfxMethods,
 );

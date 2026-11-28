@@ -127,6 +127,8 @@ export const WARRIOR = {
   maxAtkUpgrades: 20,
   maxArmorUpgrades: 5,
   maxCritUpgrades: 15,
+  // Pommel Strike (right click): 360-degree stun shockwave radius (+0.18 elite / +0.5 boss body margin)
+  pommelReach: 4.0,
 } as const;
 
 // ---------------------------------------------------------------------------

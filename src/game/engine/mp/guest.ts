@@ -682,6 +682,15 @@ export const guestMpMethods = {
     } else if (t === 'k') {
       if (String(ev[3]) !== mp.selfId) return;
       this.addScreenShake(Number(ev[1]) / 100, Number(ev[2]) / 100);
+    } else if (t === 'm') {
+      // Frost Mage skill VFX; our own casts were already drawn by local prediction
+      if (String(ev[6]) === mp.selfId) return;
+      const kind = String(ev[1]);
+      const x = Number(ev[2]) / 100;
+      const z = Number(ev[3]) / 100;
+      if (kind === 'n') this.spawnFrostNovaVfx(x, z, Number(ev[4]) / 100, false);
+      else if (kind === 'i') this.spawnIceBurstVfx(x, z, Number(ev[4]) / 100, Number(ev[5]) === 1, false);
+      else if (kind === 'k') this.spawnBlinkVfx(x, z, Number(ev[4]) / 100, Number(ev[5]) / 100);
     } else if (t === 'x') {
       const x = Number(ev[1]) / 100;
       const z = Number(ev[2]) / 100;

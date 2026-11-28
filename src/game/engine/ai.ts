@@ -1,5 +1,5 @@
 import type { EmbervaultEngine } from '../engine';
-import { BOT_REGROUP_DIST, BOT_REGROUP_DONE_DIST, COMPANION_EDGE_NDC, COMPANION_WARP_DIST, FROST_MAGE, HERO_CLASSES, HUNTER, UpgradeKind } from '../classes';
+import { BOT_REGROUP_DIST, BOT_REGROUP_DONE_DIST, COMPANION_EDGE_NDC, COMPANION_WARP_DIST, FROST_MAGE, HERO_CLASSES, HUNTER, UpgradeKind, WARRIOR } from '../classes';
 import { findGridPath, gridToWorld, hasLineOfSight, isTileWalkable, worldToGrid, worldToWalkableGrid } from '../dungeon';
 import { BOSS_AI, BOSS_CHARGE, BOSS_NOVA, BOSS_PRISM, BOSS_VOLLEY, BOSS_WARP, isGuardianEnemy, isSwarmEnemy } from './data';
 import { AnimatedLightProp, EnemyEntity, LootEntity } from './entities';
@@ -795,7 +795,7 @@ export const aiMethods = {
         for (const e of this.enemies) {
           if (e.dead || e.bossWarpUntargetable) continue;
           const ed = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
-          const eReach = 2.55 + (e.isBoss ? 0.5 : e.isElite ? 0.18 : 0);
+          const eReach = WARRIOR.pommelReach + (e.isBoss ? 0.5 : e.isElite ? 0.18 : 0);
           if (ed <= eReach) {
             if (e.isBoss && e.bossState === 'windup') {
               hasPriorityInterrupt = true;

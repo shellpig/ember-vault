@@ -1,6 +1,6 @@
 import type { EmbervaultEngine } from '../engine';
 import { ACT_DASH, ACT_POMMEL, ACT_POTION } from '../../../shared/game';
-import { FROST_MAGE, HERO_CLASSES, HUNTER } from '../classes';
+import { FROST_MAGE, HERO_CLASSES, HUNTER, WARRIOR } from '../classes';
 import { hasLineOfSight } from '../dungeon';
 import { ENEMY_AURA_DR_MULT, getBossDamageTakenMult, isFloorBoss, isGuardianEnemy, isSwarmEnemy } from './data';
 import { EnemyEntity, HeroHitParams } from './entities';
@@ -640,10 +640,10 @@ export const heroCombatMethods = {
     this.slashArcs.push({
       mesh: outerRing,
       life: 0,
-      maxLife: 0.28,
+      maxLife: 0.34,
       isCleave: false,
       isShockwave: true,
-      targetScale: 4.35,
+      targetScale: WARRIOR.pommelReach / 0.62,
     });
 
     const innerGeo = new THREE.RingGeometry(0.18, 0.36, 24);
@@ -665,13 +665,13 @@ export const heroCombatMethods = {
       maxLife: 0.2,
       isCleave: false,
       isShockwave: true,
-      targetScale: 4.1,
+      targetScale: (WARRIOR.pommelReach * 0.92) / 0.36,
     });
 
     // Radial shockwave dust/gold impact sparks
-    for (let i = 0; i < 16; i++) {
-      const a = (i / 16) * Math.PI * 2;
-      const spd = 4.6 + Math.random() * 2.4;
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const spd = 9 + Math.random() * 4;
       this.spawnParticle(
         this.hero.x + Math.cos(a) * 0.45,
         0.35,
@@ -681,13 +681,13 @@ export const heroCombatMethods = {
         Math.sin(a) * spd,
         i % 2 === 0 ? 0xffe45e : 0xf4f7ff,
         0.95,
-        0.34,
+        0.4,
         5.5
       );
     }
 
-    // Same 360-degree radius as the 3rd-hit cleave (2.55 + target size margin)
-    const reach = 2.55;
+    // 360-degree stun shockwave (+ target size margin below)
+    const reach = WARRIOR.pommelReach;
     const effMaxHp = this.hero.getEffectiveMaxHp();
     const avariceBonus = this.hero.hasUnique('avarice_gold_atk')
       ? Math.min(0.4, Math.floor(this.hero.gold / 100) * 0.01)
