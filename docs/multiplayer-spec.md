@@ -64,6 +64,7 @@
 | `equipped` | 裝備中遺物（4 格） |
 | `bag` | 背包遺物（上限 30，同現有 `relicBagCap`） |
 | `stash` | **倉庫遺物（上限 200）— 新功能** |
+| `codex` | 遺物圖鑑已收錄條目（relic `templateId` 的 JSON 陣列，見 §1.5） |
 | `maxDepth` | 曾經到達的最高層數 |
 | `potions` | 身上的藥水數量（新角色預設 3；不再每局重置為 3） |
 
@@ -74,6 +75,15 @@
 - 城鎮新增一棟建築 / NPC「倉庫」，靠近按互動鍵開啟。
 - 容量 200；可在 背包 ↔ 倉庫 間移動、在倉庫內排序 / 篩選稀有度 / 篩選套裝。
 - 只能在城鎮使用。
+
+### 1.5 遺物圖鑑（神秘旅行商人，`feat/codex-relics` 批次 1）
+
+- **條目**：每個橘色模板（`UNIQUE_RELIC_CATALOG`，36）與每個綠色套裝件（`SET_RELIC_CATALOG`，4 套 × 4 = 16）各一格，共 52 格；key = 遺物 `templateId`。新增條目只需在模板加上 `codexBonus`（`relics.ts` 的 `CODEX_ENTRIES` 自動收進圖鑑）。
+- **永久加成**：每格登錄後固定給一種加成——HP +0.5% 最大血量、攻擊 +0.5%、暴擊 +0.25%、金幣 +1%（`CODEX_BONUS_VALUE`）。52 格分配為 18 HP / 18 攻擊 / 8 暴擊 / 8 金幣（批次 1 的 36 格為 12/12/6/6，批次 2 的 16 格為 6/6/2/2）。HP 以百分比乘在「職業基礎＋升級＋遺物」的總最大血量上（法師的血量與護盾兩部分都乘）；攻擊／暴擊／金幣作為額外遺物數值併入 `relicStats`，因此機器人以同一個 `relicScale`（0.8）繼承。
+- **登錄**：只在城鎮、靠近 NPC（右側房屋右下方的「神秘旅行商人」，`TOWN_CODEX_GRID`；F 或點提示）開啟視窗。可把**背包或倉庫**的橘／綠遺物「交給商人」：遺物消失、模板登錄、立即存檔；同模板已登錄則拒絕；橘色需二次確認；裝備中的遺物不可交出（需先卸下）。交易鎖定期間不可操作。
+- **批次 2 內容**：12 個新橘色獨特（6 嚴肅＋6 搞笑，三件為職業專屬 `classOnly`：霜語者的永冬法杖／獵月長弓／燼火大劍——其他職業裝備只吃屬性、效果灰顯並標「（某職業專屬）」；掉落權重：符合掉寶英雄職業的專屬模板 ×2、不符 ×0.5）與新綠色套裝「外送員套裝：使命必達」（`courier`，2/3/4 件加成與效果見 `relics.ts`）。效果程式在 `src/game/engine/relicEffects.ts` 與 `heroCombat.ts`／`classSkills.ts` 的既有 hook，只改房主／單人模擬；不改 `shared/room.ts`，不需 `deploy:room`。
+- **存檔**：`characters.codex`（TEXT，JSON 字串陣列，預設 `'[]'`），migration `0004_codex.sql`；`PUT` 的 `codex` 為選用（省略時沿用已存值），驗證為不重複、每項符合 `/^[a-z0-9_]{1,48}$/`、長度 ≤ `MAX_CODEX_ENTRIES`（256）。**部署 Pages 前必須先套用 migration 0004**（舊程式不讀寫該欄，可先套）。
+- **多人**：圖鑑隨 `CharacterLoadout.codex` 走既有 `loadout`／`handback` 訊息（房主以 `sanitizeCodexIds` 過濾未知／重複 id 後模擬隊友的加成）；房主對隊友的 `priv` 回傳不帶 `codex`，隊友端保留自己的圖鑑，與倉庫一致只留在擁有者端。**不改 `shared/room.ts`／`workers/room/**`，不需 `deploy:room`**。
 
 ---
 

@@ -521,7 +521,7 @@ export const hostMpMethods = {
 
   mpPrivOf(this: EmbervaultEngine, h: Hero): PrivatePayload {
     return {
-      ld: { ...h.exportLoadout(this.depth), stash: [] },
+      ld: { ...h.exportLoadout(this.depth), stash: [], codex: [] }, // codex stays with its owner like the stash
       ab: h.angelBuff ? { ...h.angelBuff } : null,
       st: [h.kills, h.normalKills, h.eliteKills, h.bossKills, h.totalGoldEarned, h.totalDamageDealt, h.critCount, h.potionsUsed],
       ch: h.chronosUsedThisFloor ? 1 : 0,

@@ -44,7 +44,7 @@ npm run db:migrate:local     # 本機（存在 .wrangler/state，供 dev:full �
 npm run db:migrate:remote    # 遠端（正式 D1）
 ```
 
-之後新增 migration 檔（`migrations/0002_*.sql`、`0003_treasure_pity.sql`…）時重跑同一組指令即可，已套用的不會重複執行。
+之後新增 migration 檔（`migrations/0002_*.sql`、`0003_treasure_pity.sql`、`0004_codex.sql`…）時重跑同一組指令即可，已套用的不會重複執行。
 
 ### 4. Cloudflare Pages 專案設定
 

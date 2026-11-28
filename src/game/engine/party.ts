@@ -216,7 +216,7 @@ export const partyMethods = {
       bot.applyClassStats(classId);
       bot.relicScale = BOT_RELIC_SCALE;
       if (base) {
-        this.applyBotGear(bot, sumUpgradeLevels(base.upgrades), base.equipped, Math.max(3, Math.min(6, base.potions)));
+        this.applyBotGear(bot, sumUpgradeLevels(base.upgrades), base.equipped, Math.max(3, Math.min(6, base.potions)), base.codex);
       }
       bot.controlMode = 'auto';
       bot.maxDepthReached = 1;
@@ -233,7 +233,7 @@ export const partyMethods = {
    * their share on) and the player's equipped relics (numeric bonuses scaled by `bot.relicScale`). Never touches the
    * player, the save or the API.
    */
-  applyBotGear(this: EmbervaultEngine, bot: Hero, level: number, equipped: RelicItem[], potions: number): void {
+  applyBotGear(this: EmbervaultEngine, bot: Hero, level: number, equipped: RelicItem[], potions: number, codex?: string[]): void {
     bot.applyLoadout({
       gold: 0,
       maxDepth: 1,
@@ -242,6 +242,7 @@ export const partyMethods = {
       equipped,
       bag: [],
       stash: [],
+      codex, // bots inherit the owner's codex bonuses at the same relicScale as relics
     });
     bot.relicScale = BOT_RELIC_SCALE;
   },
@@ -258,7 +259,7 @@ export const partyMethods = {
     this.botGearTimer = 0.5;
     const local = this.localHero;
     const equipped = local.equippedRelics;
-    const key = `${local.getTotalUpgradeLevel()}|${equipped.map((r) => r.id).join(',')}`;
+    const key = `${local.getTotalUpgradeLevel()}|${equipped.map((r) => r.id).join(',')}|${local.codex.size}`;
     if (key === this.botGearKey) return;
     const first = this.botGearKey === '';
     this.botGearKey = key;
@@ -267,7 +268,7 @@ export const partyMethods = {
       if (!bot.isBot) continue;
       const prevHp = bot.getEffectiveMaxHp();
       const prevShield = bot.getEffectiveMaxShield();
-      this.applyBotGear(bot, local.getTotalUpgradeLevel(), equipped, bot.potions);
+      this.applyBotGear(bot, local.getTotalUpgradeLevel(), equipped, bot.potions, [...local.codex]);
       bot.recomputeRelicStats(false);
       const nextHp = bot.getEffectiveMaxHp();
       const nextShield = bot.getEffectiveMaxShield();
@@ -461,7 +462,7 @@ export const partyMethods = {
       if (h.isBot || h.controlMode === 'auto') {
         // AI heroes announce who they are reviving (aiRescueStep sets it while standing next to the target)
         target = h.rescueTargetId ? this.heroById(h.rescueTargetId) ?? null : null;
-      } else if (h.input.keys.has('KeyF') && !h.stashOpen) {
+      } else if (h.input.keys.has('KeyF') && !h.stashOpen && !h.codexOpen) {
         let bestD = Infinity;
         for (const o of this.heroes) {
           if (o === h || !o.isDead) continue;

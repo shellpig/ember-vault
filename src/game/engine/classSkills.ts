@@ -69,11 +69,28 @@ export const classSkillsMethods = {
     const dirZ = Math.cos(this.hero.facing);
     const x = this.hero.x + dirX * 0.55;
     const z = this.hero.z + dirZ * 0.55;
+    // Unique: Amazon Queen Moon Bow (Hunter) — every 5th arrow is a piercing moonlight arrow (+60% damage)
+    this.hero.moonArrowCount += 1;
+    const moon = this.hero.hasUnique('moon_arrow_volley') && this.hero.moonArrowCount % 5 === 0;
     const mesh = createHunterArrowMesh();
     mesh.position.set(x, 0.88, z);
     mesh.rotation.y = Math.atan2(dirX, dirZ);
+    if (moon) {
+      mesh.scale.setScalar(1.6);
+      mesh.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh && m.material) {
+          const mat = (m.material as THREE.MeshStandardMaterial).clone();
+          mat.color?.setHex(0xbfd8ff);
+          if (mat.emissive) mat.emissive.setHex(0x6a9cff);
+          m.material = mat;
+        }
+      });
+    }
     this.dynamicGroup.add(mesh);
     this.heroProjectiles.push({
+      moon,
+      pierced: moon ? new Set<number>() : undefined,
       mesh,
       x,
       z,
@@ -92,7 +109,8 @@ export const classSkillsMethods = {
     x: number,
     z: number,
     target: EnemyEntity | null,
-    phantomCrit = false
+    phantomCrit = false,
+    dmgMult = 1
   ): void {
     for (let i = 0; i < (target ? 7 : 5); i++) {
       this.spawnParticle(
@@ -128,7 +146,7 @@ export const classSkillsMethods = {
     const hitState = { consumedPhantom: false, triggeredStorm: false };
 
     this.applyHeroHit(target, {
-      baseDmg: Math.max(1, Math.round(warriorBase * HUNTER.shotDamageMult)),
+      baseDmg: Math.max(1, Math.round(warriorBase * HUNTER.shotDamageMult * dmgMult)),
       isEmpowered: isThunderHit,
       atkMult,
       critChance,
@@ -447,9 +465,11 @@ export const classSkillsMethods = {
             const rawBase =
               HUNTER.petDamageMin +
               Math.floor(Math.random() * (HUNTER.petDamageMax - HUNTER.petDamageMin + 1));
+            // Moon Bow (Hunter): +20% pet attack while the pet is within 4 of its owner
+            const moonPet = owner.hasUnique('moon_arrow_volley') && Math.hypot(pet.x - owner.x, pet.z - owner.z) <= 4 ? 1.2 : 1;
             const dmg = this.scaleEnemyDamageTaken(
               target,
-              Math.max(1, Math.round(rawBase * owner.getAtkMult() * (buffed ? HUNTER.petBuffAtkMult : 1)))
+              Math.max(1, Math.round(rawBase * owner.getAtkMult() * moonPet * (buffed ? HUNTER.petBuffAtkMult : 1)))
             );
             target.hp -= dmg;
             target.hitFlash = 0.14;
@@ -675,6 +695,14 @@ export const classSkillsMethods = {
         for (const e of hitTargets) {
           if (e.dead || e.bossWarpUntargetable) continue;
           if (Math.hypot(e.x - p.x, e.z - p.z) <= hitRad + this.getEnemyHitRadius(e)) {
+            if (isArrow && p.moon) {
+              // Moonlight arrow pierces: damages each enemy once and keeps flying
+              if (!p.pierced?.has(e.id)) {
+                p.pierced?.add(e.id);
+                this.hitHunterArrow(p.x, p.z, e, p.phantomCrit, 1.6);
+              }
+              continue;
+            }
             if (isArrow) this.hitHunterArrow(p.x, p.z, e, p.phantomCrit);
             else this.explodeIceSpike(p.x, p.z, p.shotIdx, p.phantomCrit);
             exploded = true;
@@ -846,7 +874,8 @@ export const classSkillsMethods = {
   /** Frost Mage right-click: screen-wide expanding ice nova — freeze, damage, push. */
   performFrostNova(this: EmbervaultEngine): void {
     if (this.hero.isDead || this.hero.pommelCooldown > 0) return;
-    this.hero.pommelCooldown = this.hero.pommelMaxCooldown;
+    // Unique: Frost Whisperer Staff — Frost Nova cooldown -15%
+    this.hero.pommelCooldown = this.hero.pommelMaxCooldown * (this.hero.hasUnique('frost_shard_resonance') ? 0.85 : 1);
     this.hero.attackAnim = 0.34;
     this.hero.attackCooldown = Math.max(this.hero.attackCooldown, 0.3);
     this.audio.playFrostNova();
@@ -1067,6 +1096,7 @@ export const classSkillsMethods = {
     this.hero.rig.root.position.set(this.hero.x, 0, this.hero.z);
     burst(endX, endZ, true);
     if (this.hero.hasUnique('phoenix_dash_nova')) this.triggerPhoenixRingAt(endX, endZ);
+    this.onRelicDash(startX, startZ, endX, endZ);
     this.emitHud();
   },
 };

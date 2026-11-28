@@ -569,6 +569,7 @@ export const travelMethods = {
   setTradeLock(this: EmbervaultEngine, locked: boolean): void {
     if (locked === this.tradeLocked) return;
     if (locked && this.localHero.stashOpen) this.closeStash();
+    if (locked && this.localHero.codexOpen) this.closeCodex();
     this.tradeLocked = locked;
     this.emitHud();
   },

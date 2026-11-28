@@ -83,6 +83,7 @@ export const lootMethods = {
     }
     this.hero.kills += 1;
     this.hero.floorKills += 1;
+    this.onRelicKill(enemy);
     if (enemy.isBoss) {
       this.hero.bossKills += 1;
     } else if (enemy.isElite) {
@@ -412,7 +413,8 @@ export const lootMethods = {
       source,
       this.hero.relicStats.dropRatePct,
       () => this.nextId++,
-      extraDropMult
+      extraDropMult,
+      this.hero.classId
     );
     this.spawnRelicItems(x, z, dropped);
   },

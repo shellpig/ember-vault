@@ -10,6 +10,10 @@ export const MAX_STASH = 200;
 export const MAX_NAME_LENGTH = 16;
 /** Upper bound the server accepts for the treasure room pity counter (the game itself never goes past ~9). */
 export const MAX_TREASURE_PITY = 50;
+/** Upper bound on registered relic codex entries per character (the catalog itself is far smaller). */
+export const MAX_CODEX_ENTRIES = 256;
+/** A codex entry is a relic template id (lowercase letters, digits, underscore). */
+export const CODEX_ID_PATTERN = /^[a-z0-9_]{1,48}$/;
 
 /** Gold-upgrade levels. Warrior: hp/atk/armor/crit; Frost Mage: hpShield/atk/crit/shieldSpeed; Hunter: hp/atk/atkSpeed/crit. */
 export interface CharacterUpgrades {
@@ -48,6 +52,8 @@ export interface CharacterState {
   stash?: RelicItem[];
   /** Optional on upload: when omitted the server keeps the stored counter (treasure room pity, 0..MAX_TREASURE_PITY). */
   treasure_pity?: number;
+  /** Optional on upload: when omitted the server keeps the stored codex (registered relic template ids, unique). */
+  codex?: string[];
 }
 
 export interface CharacterSummary {
@@ -68,6 +74,8 @@ export interface CharacterSave extends CharacterSummary {
   stash: RelicItem[];
   /** Consecutive floors built without a treasure room (old saves read as 0). */
   treasure_pity: number;
+  /** Registered relic codex entries (template ids; old saves read as empty). */
+  codex: string[];
   save_version: number;
   created_at: number;
 }

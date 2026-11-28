@@ -196,7 +196,7 @@ export const treasureMethods = {
       case 'bossPlus': {
         this.dropBossHoard(x, z);
         const rarity = Math.random() < TREASURE_CONFIG.bossPlusOrangeChance ? 'orange' : 'green';
-        this.spawnRelicItems(x, z, [generateRelic(this.depth, 'boss', this.nextId++, rarity)]);
+        this.spawnRelicItems(x, z, [generateRelic(this.depth, 'boss', this.nextId++, rarity, this.hero.classId)]);
         break;
       }
     }

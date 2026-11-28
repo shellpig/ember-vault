@@ -59,9 +59,25 @@ export type UniqueEffectId =
   | 'overtime_mug_fury'
   | 'disco_fever_aura'
   | 'noodle_elixir_boost'
-  | 'cat_paw_swat';
+  | 'cat_paw_swat'
+  // Batch 2 uniques (6 serious + 6 comedic)
+  | 'frost_shard_resonance'
+  | 'moon_arrow_volley'
+  | 'ember_lantern_pulse'
+  | 'weakness_mark'
+  | 'aura_plunder'
+  | 'ember_hilt_burst'
+  | 'livestream_donation'
+  | 'mom_bento_heal'
+  | 'channel_surf'
+  | 'low_battery_mode'
+  | 'salted_fish_flip'
+  | 'slime_cushion';
 
-export type RelicSetId = 'dragonfire' | 'voidstalker' | 'syndicate';
+/** Kinds of permanent bonus a codex entry can grant. */
+export type CodexBonusKey = 'hpPct' | 'atkPct' | 'critPct' | 'goldPct';
+
+export type RelicSetId = 'dragonfire' | 'voidstalker' | 'syndicate' | 'courier';
 
 export interface RelicItem {
   id: string;
@@ -362,6 +378,10 @@ export const STAT_DEFS: Record<RelicStatKey, StatDefinition> = {
 export interface UniqueRelicTemplate {
   templateId: string;
   name: string;
+  /** Permanent bonus this entry grants once it is registered in the codex (see CODEX_BONUS_VALUE). */
+  codexBonus: CodexBonusKey;
+  /** Class-exclusive effect: the item's stats work for everyone, the unique effect only for this class. */
+  classOnly?: HeroClassId;
   statKeys: RelicStatKey[]; // 2..4 guaranteed stats
   uniqueEffectId: UniqueEffectId;
   uniqueEffectTitle: string;
@@ -373,6 +393,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_ember_crown',
     name: '燼火君王的斷冠',
+    codexBonus: 'atkPct',
     statKeys: ['atkPct', 'critPct', 'eliteBossDmgPct'],
     uniqueEffectId: 'ember_crit_nova',
     uniqueEffectTitle: '焚世爆擊',
@@ -382,6 +403,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_eternal_aegis',
     name: '永恆誓言之盾',
+    codexBonus: 'hpPct',
     statKeys: ['damageReduction', 'blockPct', 'maxHp'],
     uniqueEffectId: 'aegis_block_counter',
     uniqueEffectTitle: '聖盾反震',
@@ -391,6 +413,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_avarice_chalice',
     name: '貪婪魔神的金杯',
+    codexBonus: 'goldPct',
     statKeys: ['goldPct', 'dropRatePct', 'maxHp'],
     uniqueEffectId: 'avarice_gold_atk',
     uniqueEffectTitle: '黃金之力',
@@ -400,6 +423,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_phantom_greaves',
     name: '幽影行者的瞬步靴',
+    codexBonus: 'critPct',
     statKeys: ['moveSpeedPct', 'dashCdPct', 'critPct'],
     uniqueEffectId: 'phantom_dash_crit',
     uniqueEffectTitle: '殘影斬擊',
@@ -409,6 +433,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_blood_moon_fang',
     name: '血月收割者的獠牙',
+    codexBonus: 'atkPct',
     statKeys: ['atkPct', 'lifeOnKill', 'critDmgPct'],
     uniqueEffectId: 'blood_moon_leech',
     uniqueEffectTitle: '嗜血掠奪',
@@ -418,6 +443,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_executioner_signet',
     name: '審判官的斬首印戒',
+    codexBonus: 'critPct',
     statKeys: ['eliteBossDmgPct', 'critPct', 'atkPct'],
     uniqueEffectId: 'executioner_finisher',
     uniqueEffectTitle: '處決宣告',
@@ -427,6 +453,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_alchemist_flask',
     name: '煉金術士的無限燒瓶',
+    codexBonus: 'hpPct',
     statKeys: ['potionHealPct', 'dropRatePct', 'damageReduction'],
     uniqueEffectId: 'alchemist_free_flask',
     uniqueEffectTitle: '秘藥奇蹟',
@@ -436,6 +463,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_titan_heart',
     name: '泰坦之心臟碎片',
+    codexBonus: 'hpPct',
     statKeys: ['maxHp', 'damageReduction', 'thorns', 'atkPct'],
     uniqueEffectId: 'titan_low_hp_fury',
     uniqueEffectTitle: '不屈巨人',
@@ -445,6 +473,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_storm_hammer',
     name: '雷霆鍛造師的轟雷錘',
+    codexBonus: 'atkPct',
     statKeys: ['atkPct', 'critDmgPct', 'moveSpeedPct'],
     uniqueEffectId: 'storm_cleave_lightning',
     uniqueEffectTitle: '連鎖落雷',
@@ -454,6 +483,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_gambler_coin',
     name: '深淵賭徒的雙面硬幣',
+    codexBonus: 'goldPct',
     statKeys: ['goldPct', 'critPct'],
     uniqueEffectId: 'gambler_coin_flip',
     uniqueEffectTitle: '命運輪盤',
@@ -463,6 +493,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_frying_pan',
     name: '勇者的破舊平底鍋',
+    codexBonus: 'hpPct',
     statKeys: ['blockPct', 'crateDmgPct', 'politeness'],
     uniqueEffectId: 'frying_pan_bonk',
     uniqueEffectTitle: '神聖噹一聲',
@@ -472,6 +503,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_chronos_hourglass',
     name: '時光砂漏的破碎核心',
+    codexBonus: 'hpPct',
     statKeys: ['dashCdPct', 'moveSpeedPct', 'critPct', 'dropRatePct'],
     uniqueEffectId: 'chronos_cheat_death',
     uniqueEffectTitle: '時間凝滯',
@@ -482,6 +514,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_astral_prism',
     name: '星界折射稜鏡',
+    codexBonus: 'critPct',
     statKeys: ['atkPct', 'critPct', 'moveSpeedPct'],
     uniqueEffectId: 'astral_double_strike',
     uniqueEffectTitle: '星光殘影斬',
@@ -491,6 +524,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_permafrost_stele',
     name: '永凍冰川的殘碑',
+    codexBonus: 'hpPct',
     statKeys: ['damageReduction', 'maxHp', 'blockPct'],
     uniqueEffectId: 'frost_chill_aura',
     uniqueEffectTitle: '極寒緩速',
@@ -500,6 +534,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_berserker_fang',
     name: '狂戰龍牙墜飾',
+    codexBonus: 'atkPct',
     statKeys: ['atkPct', 'critDmgPct', 'eliteBossDmgPct'],
     uniqueEffectId: 'berserker_combo_ramp',
     uniqueEffectTitle: '越戰越狂',
@@ -509,6 +544,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_eclipse_mirror',
     name: '蝕月折射古鏡',
+    codexBonus: 'critPct',
     statKeys: ['thorns', 'blockPct', 'damageReduction'],
     uniqueEffectId: 'eclipse_reflect_beam',
     uniqueEffectTitle: '蝕月反衝',
@@ -518,6 +554,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_phoenix_plume',
     name: '焚天不死鳥尾羽',
+    codexBonus: 'hpPct',
     statKeys: ['dashCdPct', 'moveSpeedPct', 'atkPct'],
     uniqueEffectId: 'phoenix_dash_nova',
     uniqueEffectTitle: '熾焰掠影',
@@ -527,6 +564,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_starforged_compass',
     name: '星鑄獵寶羅盤',
+    codexBonus: 'goldPct',
     statKeys: ['dropRatePct', 'goldPct', 'eliteBossDmgPct'],
     uniqueEffectId: 'starforged_treasure_sense',
     uniqueEffectTitle: '寶藏直覺',
@@ -537,6 +575,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_rubber_duck',
     name: '勇者的澡堂黃色小鴨',
+    codexBonus: 'hpPct',
     statKeys: ['maxHp', 'blockPct', 'politeness'],
     uniqueEffectId: 'rubber_duck_squeak',
     uniqueEffectTitle: '神聖啾一聲',
@@ -546,6 +585,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_banana_peel',
     name: '傳說級香蕉皮',
+    codexBonus: 'critPct',
     statKeys: ['critPct', 'moveSpeedPct', 'dramaticKnockback'],
     uniqueEffectId: 'banana_slip_crit',
     uniqueEffectTitle: '原地大滑倒',
@@ -555,6 +595,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_overtime_mug',
     name: '寫著「加班中」的馬克杯',
+    codexBonus: 'atkPct',
     statKeys: ['atkPct', 'eliteBossDmgPct', 'footstepEcho'],
     uniqueEffectId: 'overtime_mug_fury',
     uniqueEffectTitle: '社畜怨念',
@@ -564,6 +605,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_disco_ball',
     name: '地城迪斯可彩球',
+    codexBonus: 'goldPct',
     statKeys: ['goldPct', 'critDmgPct', 'lanternGlowPct', 'shinyGoldFeel'],
     uniqueEffectId: 'disco_fever_aura',
     uniqueEffectTitle: '全場焦點小費',
@@ -573,6 +615,7 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_soggy_noodles',
     name: '泡過頭的神秘泡麵碗',
+    codexBonus: 'hpPct',
     statKeys: ['potionHealPct', 'maxHp', 'crateDmgPct'],
     uniqueEffectId: 'noodle_elixir_boost',
     uniqueEffectTitle: '加湯又加麵',
@@ -582,11 +625,136 @@ export const UNIQUE_RELIC_CATALOG: UniqueRelicTemplate[] = [
   {
     templateId: 'uniq_cat_paw_gloves',
     name: '主子賜福的貓掌手套',
+    codexBonus: 'atkPct',
     statKeys: ['dashCdPct', 'critPct', 'politeness'],
     uniqueEffectId: 'cat_paw_swat',
     uniqueEffectTitle: '高速貓貓拳',
     uniqueEffectDesc: '每第 3 次近戰命中追加一記超快「喵！」連擊貓掌，造成額外傷害與擊退。',
     flavor: '肉球摸起來軟綿綿，但巴在怪物臉上可是會飛出去的。',
+  },
+  // Batch 2 (codex): 6 serious + 6 comedic uniques. classOnly entries only run their effect for that class.
+  {
+    templateId: 'uniq_frost_staff',
+    name: '霜語者的永冬法杖',
+    codexBonus: 'atkPct',
+    classOnly: 'frost_mage',
+    statKeys: ['atkPct', 'critPct', 'critDmgPct'],
+    uniqueEffectId: 'frost_shard_resonance',
+    uniqueEffectTitle: '冰晶共鳴',
+    uniqueEffectDesc: '冰尖彈命中時 25% 機率分裂出 2 枚小冰錐，各造成 40% 傷害；冰霜新星冷卻 -15%。',
+    flavor: '永冬的低語在杖尖結晶，每一片碎冰都記得寒冷的名字。',
+  },
+  {
+    templateId: 'uniq_moon_bow',
+    name: '亞馬遜女王的獵月長弓',
+    codexBonus: 'atkPct',
+    classOnly: 'hunter',
+    statKeys: ['atkPct', 'critPct', 'moveSpeedPct'],
+    uniqueEffectId: 'moon_arrow_volley',
+    uniqueEffectTitle: '月影連矢',
+    uniqueEffectDesc: '每第 5 支箭變成穿透月光箭，貫穿所有敵人、傷害 +60%；戰寵在你身邊 4 格內時，戰寵攻擊 +20%。',
+    flavor: '女王拉滿弓弦的那一夜，月亮也乖乖讓出了位置。',
+  },
+  {
+    templateId: 'uniq_ember_lantern',
+    name: '燈守誓約的不滅提燈',
+    codexBonus: 'hpPct',
+    statKeys: ['maxHp', 'damageReduction', 'lanternGlowPct'],
+    uniqueEffectId: 'ember_lantern_pulse',
+    uniqueEffectTitle: '餘燼護佑',
+    uniqueEffectDesc: '每 8 秒提燈爆出一圈燼火，對周圍敵人造成 30% 攻擊力傷害，並使其攻速 -20%，持續 3 秒。',
+    flavor: '燈芯從未熄滅，因為守燈人從未放下它。',
+  },
+  {
+    templateId: 'uniq_third_eye',
+    name: '深淵觀測者的第三隻眼',
+    codexBonus: 'critPct',
+    statKeys: ['critPct', 'eliteBossDmgPct', 'dropRatePct'],
+    uniqueEffectId: 'weakness_mark',
+    uniqueEffectTitle: '弱點標記',
+    uniqueEffectDesc: '每 6 秒標記附近血量最高的敵人 6 秒：對其傷害 +30%，對其第一擊必定暴擊，頭上顯示標記。',
+    flavor: '深淵看了你一眼，你也順便看穿了它。',
+  },
+  {
+    templateId: 'uniq_aura_gloves',
+    name: '光環竊賊的手套',
+    codexBonus: 'atkPct',
+    statKeys: ['atkPct', 'moveSpeedPct', 'lifeOnKill'],
+    uniqueEffectId: 'aura_plunder',
+    uniqueEffectTitle: '光環掠奪',
+    uniqueEffectDesc: '擊殺有名菁英時奪取其光環種類，自己獲得同類增益 +15%（攻速／攻擊／減傷／移速／爆擊率），持續 20 秒。',
+    flavor: '失主還沒回過神，光環已經戴在你頭上了。',
+  },
+  {
+    templateId: 'uniq_ember_greatsword',
+    name: '燈守先祖的燼火大劍',
+    codexBonus: 'hpPct',
+    classOnly: 'warrior',
+    statKeys: ['atkPct', 'blockPct', 'maxHp'],
+    uniqueEffectId: 'ember_hilt_burst',
+    uniqueEffectTitle: '燼火劍柄',
+    uniqueEffectDesc: '劍柄重擊命中時爆出燼火衝擊，對半徑 2.5 內的敵人造成 60% 攻擊力傷害，暈眩再延長 0.3 秒；成功格擋時，劍柄重擊冷卻 -1 秒。',
+    flavor: '先祖的劍柄至今溫熱，敲下去的時候還會冒火星。',
+  },
+  {
+    templateId: 'uniq_selfie_stick',
+    name: '會說話的自拍棒',
+    codexBonus: 'goldPct',
+    statKeys: ['critPct', 'politeness', 'shinyGoldFeel'],
+    uniqueEffectId: 'livestream_donation',
+    uniqueEffectTitle: '直播斗內',
+    uniqueEffectDesc: '10 秒內連殺 10 隻觸發「感謝乾爹斗內！」：噴出金幣並獲得 5 秒攻擊 +20%。',
+    flavor: '「家人們點點關注！」它在你背後喊了一整層。',
+  },
+  {
+    templateId: 'uniq_mom_bento',
+    name: '媽媽的愛心便當',
+    codexBonus: 'hpPct',
+    statKeys: ['maxHp', 'potionHealPct', 'lifeOnKill'],
+    uniqueEffectId: 'mom_bento_heal',
+    uniqueEffectTitle: '有吃飯嗎',
+    uniqueEffectDesc: '每層第一次生命低於 50% 時自動吃便當，回復 35% 生命，飄字「媽媽說要吃飽！」。',
+    flavor: '飯菜還是熱的，肯定是媽媽偷偷塞進你背包的。',
+  },
+  {
+    templateId: 'uniq_alien_remote',
+    name: '外星人遺落的遙控器',
+    codexBonus: 'critPct',
+    statKeys: ['dashCdPct', 'moveSpeedPct', 'footstepEcho'],
+    uniqueEffectId: 'channel_surf',
+    uniqueEffectTitle: '轉台',
+    uniqueEffectDesc: '衝刺時 20% 機率「切台」：周圍 4 格內的敵人暫停 1 秒（電視雜訊特效）。',
+    flavor: '按下去的瞬間，全世界都只剩雪花畫面。',
+  },
+  {
+    templateId: 'uniq_low_battery_phone',
+    name: '只剩 1% 電量的手機',
+    codexBonus: 'atkPct',
+    statKeys: ['atkPct', 'critDmgPct', 'politeness'],
+    uniqueEffectId: 'low_battery_mode',
+    uniqueEffectTitle: '低電量模式',
+    uniqueEffectDesc: '攻擊力 +25%，但每 30 秒會「關機」1 秒，期間無法攻擊（飄字「沒電了…」）。',
+    flavor: '省電模式開著，拍照不能拍、戰鬥倒是拚命拚。',
+  },
+  {
+    templateId: 'uniq_salted_fish',
+    name: '一條鹹魚',
+    codexBonus: 'hpPct',
+    statKeys: ['crateDmgPct', 'dramaticKnockback', 'atkPct'],
+    uniqueEffectId: 'salted_fish_flip',
+    uniqueEffectTitle: '鹹魚翻身',
+    uniqueEffectDesc: '生命低於 30% 時，下一擊必定暴擊並擊飛敵人，飄字「鹹魚翻身！」，冷卻 10 秒。',
+    flavor: '放了三年的鹹魚，終於等到翻身的這一天。',
+  },
+  {
+    templateId: 'uniq_slime_pillow',
+    name: '打折中的史萊姆抱枕',
+    codexBonus: 'hpPct',
+    statKeys: ['blockPct', 'damageReduction', 'politeness'],
+    uniqueEffectId: 'slime_cushion',
+    uniqueEffectTitle: '軟Q緩衝',
+    uniqueEffectDesc: '被擊退時改成「噗啾」彈回（自身擊退大幅減少），順勢彈開周圍 1.5 格內的敵人。',
+    flavor: '標價寫著「最後一件，快搶」，抱起來意外地可靠。',
   },
 ];
 
@@ -595,6 +763,8 @@ export interface SetPieceTemplate {
   setId: RelicSetId;
   pieceIndex: number;
   name: string;
+  /** Permanent bonus this entry grants once it is registered in the codex (see CODEX_BONUS_VALUE). */
+  codexBonus: CodexBonusKey;
   statKeys: [RelicStatKey, RelicStatKey];
   flavor: string;
 }
@@ -624,6 +794,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'dragonfire',
         pieceIndex: 0,
         name: '龍炎之角',
+        codexBonus: 'atkPct',
         statKeys: ['atkPct', 'critPct'],
         flavor: '從古龍額骨折下的赤紅殘角。',
       },
@@ -632,6 +803,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'dragonfire',
         pieceIndex: 1,
         name: '龍炎逆鱗',
+        codexBonus: 'hpPct',
         statKeys: ['maxHp', 'damageReduction'],
         flavor: '覆滿暗金裂紋的堅硬鱗甲。',
       },
@@ -640,6 +812,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'dragonfire',
         pieceIndex: 2,
         name: '龍炎之心',
+        codexBonus: 'atkPct',
         statKeys: ['eliteBossDmgPct', 'critDmgPct'],
         flavor: '仍在脈動的熔岩火核。',
       },
@@ -648,6 +821,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'dragonfire',
         pieceIndex: 3,
         name: '龍炎誓印',
+        codexBonus: 'atkPct',
         statKeys: ['atkPct', 'blockPct'],
         flavor: '龍騎團團長世代傳承的炙焰徽記。',
       },
@@ -673,6 +847,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'voidstalker',
         pieceIndex: 0,
         name: '虛空之眼',
+        codexBonus: 'critPct',
         statKeys: ['critPct', 'critDmgPct'],
         flavor: '凝視裂隙深處的紫晶魔瞳。',
       },
@@ -681,6 +856,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'voidstalker',
         pieceIndex: 1,
         name: '虛空利爪',
+        codexBonus: 'atkPct',
         statKeys: ['atkPct', 'moveSpeedPct'],
         flavor: '彷彿能撕開空間的暗影指刃。',
       },
@@ -689,6 +865,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'voidstalker',
         pieceIndex: 2,
         name: '虛空斗篷紋章',
+        codexBonus: 'hpPct',
         statKeys: ['dashCdPct', 'blockPct'],
         flavor: '在陰影中隱去身形的無聲扣環。',
       },
@@ -697,6 +874,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'voidstalker',
         pieceIndex: 3,
         name: '虛空低語吊墜',
+        codexBonus: 'hpPct',
         statKeys: ['dropRatePct', 'lifeOnKill'],
         flavor: '耳畔時常傳來異界的輕笑與指引。',
       },
@@ -722,6 +900,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'syndicate',
         pieceIndex: 0,
         name: '金庫萬能鑰',
+        codexBonus: 'goldPct',
         statKeys: ['goldPct', 'dropRatePct'],
         flavor: '沒有這把金鑰打不開的寶箱。',
       },
@@ -730,6 +909,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'syndicate',
         pieceIndex: 1,
         name: '鑲鑽算盤珠',
+        codexBonus: 'goldPct',
         statKeys: ['goldPct', 'maxHp'],
         flavor: '每一顆珠子都價值一座城鎮。',
       },
@@ -738,6 +918,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'syndicate',
         pieceIndex: 2,
         name: '商會印璽戒',
+        codexBonus: 'atkPct',
         statKeys: ['blockPct', 'damageReduction'],
         flavor: '有錢能使鬼推磨，也能買通死神。',
       },
@@ -746,6 +927,7 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         setId: 'syndicate',
         pieceIndex: 3,
         name: '天秤護符',
+        codexBonus: 'atkPct',
         statKeys: ['potionHealPct', 'eliteBossDmgPct'],
         flavor: '絕對公平的黃金天秤，永遠偏向出價更高的一方。',
       },
@@ -757,6 +939,59 @@ export const SET_RELIC_CATALOG: RelicSetTemplate[] = [
         required: 4,
         title: '點石成金',
         desc: '周身閃耀黃金輝光：擊殺敵人必定噴出額外金幣，攻擊有 20% 機率觸發「重金轟擊」造成額外傷害並爆出金幣！',
+      },
+    ],
+  },
+  {
+    setId: 'courier',
+    name: '外送員套裝「使命必達」',
+    themeDesc: '風雨無阻的快遞精神，用機車殘影與五星好評碾壓地城。',
+    auraColor: 0x7cf24a,
+    pieces: [
+      {
+        templateId: 'set_courier_0',
+        setId: 'courier',
+        pieceIndex: 0,
+        name: '外送員的保溫大背箱',
+        codexBonus: 'hpPct',
+        statKeys: ['maxHp', 'damageReduction'],
+        flavor: '裝得下十份珍奶，也裝得下一整個地城的怨氣。',
+      },
+      {
+        templateId: 'set_courier_1',
+        setId: 'courier',
+        pieceIndex: 1,
+        name: '外送員的歪掉安全帽',
+        codexBonus: 'atkPct',
+        statKeys: ['blockPct', 'moveSpeedPct'],
+        flavor: '帽扣早就壞了，但它還是擋下了無數次衝撞。',
+      },
+      {
+        templateId: 'set_courier_2',
+        setId: 'courier',
+        pieceIndex: 2,
+        name: '外送員的螢光雨衣',
+        codexBonus: 'goldPct',
+        statKeys: ['dashCdPct', 'lanternGlowPct'],
+        flavor: '夜裡最亮的就是它，連怪物都看得見你在趕時間。',
+      },
+      {
+        templateId: 'set_courier_3',
+        setId: 'courier',
+        pieceIndex: 3,
+        name: '外送員的瘋狂接單手機',
+        codexBonus: 'atkPct',
+        statKeys: ['goldPct', 'critPct'],
+        flavor: '叮咚叮咚叮咚——下一單已經在路上了。',
+      },
+    ],
+    bonuses: [
+      { required: 2, title: '趕單中', desc: '移動速度 +8%，衝刺冷卻縮減 +8%。' },
+      { required: 3, title: '好評五星', desc: '獲得金幣 +20%，擊殺回復 +3。' },
+      {
+        required: 4,
+        title: '使命必達',
+        desc: '衝刺時留下外送機車殘影，撞到的敵人受到 40% 攻擊力傷害並被擊退；每擊殺 20 隻怪掉落一袋「客人給的小費」金幣（約一般金幣 ×5）。',
       },
     ],
   },
@@ -829,6 +1064,7 @@ const FROST_MAGE_UNIQUE_DESC: Partial<Record<UniqueEffectId, string>> = {
     '每第 3 發強化冰尖彈爆炸時釋放雷電，連鎖電擊附近最多 3 名敵人造成 20% 額外傷害。',
   phantom_dash_crit: '閃現後的 2 秒內，下一次攻擊必定暴擊且額外造成 +25% 傷害。',
   phoenix_dash_nova: '每次閃現時在起點與終點爆開烈焰火環，灼燒周圍敵人並造成擊退。',
+  channel_surf: '閃現時 20% 機率「切台」：周圍 4 格內的敵人暫停 1 秒（電視雜訊特效）。',
 };
 
 const HUNTER_UNIQUE_DESC: Partial<Record<UniqueEffectId, string>> = {
@@ -839,7 +1075,29 @@ const HUNTER_UNIQUE_DESC: Partial<Record<UniqueEffectId, string>> = {
     '每第 4 次箭矢命中時釋放雷電，連鎖電擊附近最多 3 名敵人造成 20% 額外傷害。',
   phantom_dash_crit: '疾步後的 2 秒內，下一次射擊必定暴擊且額外造成 +25% 傷害。',
   phoenix_dash_nova: '每次疾步時在起點與終點爆開烈焰火環，灼燒周圍敵人並造成擊退。',
+  channel_surf: '疾步時 20% 機率「切台」：周圍 4 格內的敵人暫停 1 秒（電視雜訊特效）。',
 };
+
+export const CLASS_ONLY_LABEL: Record<HeroClassId, string> = {
+  warrior: '燈守戰士',
+  frost_mage: '冰雪法師',
+  hunter: '亞馬遜獵人',
+};
+
+const UNIQUE_EFFECT_CLASS_ONLY = new Map<UniqueEffectId, HeroClassId>(
+  UNIQUE_RELIC_CATALOG.filter((t) => t.classOnly).map((t) => [t.uniqueEffectId, t.classOnly as HeroClassId])
+);
+
+/** The class a unique effect is exclusive to (undefined = every class). */
+export function getUniqueEffectClassOnly(effectId: UniqueEffectId | undefined): HeroClassId | undefined {
+  return effectId ? UNIQUE_EFFECT_CLASS_ONLY.get(effectId) : undefined;
+}
+
+/** "（燈守戰士專屬）" when the effect is exclusive to another class (the effect is then inactive), else null. */
+export function getUniqueEffectInactiveNote(effectId: UniqueEffectId | undefined, classId: HeroClassId): string | null {
+  const only = getUniqueEffectClassOnly(effectId);
+  return only && only !== classId ? `（${CLASS_ONLY_LABEL[only]}專屬）` : null;
+}
 
 export function getUniqueEffectDescForClass(effectId: UniqueEffectId, classId: HeroClassId): string {
   if (classId === 'frost_mage') {
@@ -1028,11 +1286,26 @@ function rollRarity(source: RelicDropSource, depth: number): RelicRarity {
   return 'blue';
 }
 
+/** Random orange template; class-exclusive ones weigh x2 for their class and x0.5 for the others. */
+function pickUniqueTemplate(classId?: HeroClassId): UniqueRelicTemplate {
+  const weight = (t: UniqueRelicTemplate): number => (t.classOnly && classId ? (t.classOnly === classId ? 2 : 0.5) : 1);
+  let total = 0;
+  for (const t of UNIQUE_RELIC_CATALOG) total += weight(t);
+  let r = Math.random() * total;
+  for (const t of UNIQUE_RELIC_CATALOG) {
+    r -= weight(t);
+    if (r < 0) return t;
+  }
+  return UNIQUE_RELIC_CATALOG[UNIQUE_RELIC_CATALOG.length - 1];
+}
+
 export function generateRelic(
   depth: number,
   source: RelicDropSource,
   idNum: number,
-  forcedRarity?: RelicRarity
+  forcedRarity?: RelicRarity,
+  /** Looting hero's class: class-exclusive orange templates weigh x2 for it and x0.5 for the others. */
+  classId?: HeroClassId
 ): RelicItem {
   const level = Math.max(1, depth);
   const rarity = forcedRarity ?? rollRarity(source, depth);
@@ -1041,7 +1314,7 @@ export function generateRelic(
   const id = `relic_${idNum}_${Math.random().toString(36).slice(2, 8)}`;
 
   if (rarity === 'orange') {
-    const tpl = UNIQUE_RELIC_CATALOG[Math.floor(Math.random() * UNIQUE_RELIC_CATALOG.length)];
+    const tpl = pickUniqueTemplate(classId);
     const stats: RelicStat[] = tpl.statKeys.map((k) => ({
       key: k,
       value: rollStatValue(k, level, 'orange'),
@@ -1118,7 +1391,8 @@ export function rollRelicDrops(
   source: RelicDropSource,
   dropRatePct: number,
   allocId: () => number,
-  extraDropMult = 1
+  extraDropMult = 1,
+  classId?: HeroClassId
 ): RelicItem[] {
   const dropMult = (1 + Math.max(0, dropRatePct) / 100) * extraDropMult;
   const results: RelicItem[] = [];
@@ -1126,7 +1400,7 @@ export function rollRelicDrops(
   if (source === 'crate') {
     const chance = Math.min((0.24 / 3) * extraDropMult, (0.045 / 3) * dropMult);
     if (Math.random() < chance) {
-      results.push(generateRelic(depth, 'crate', allocId()));
+      results.push(generateRelic(depth, 'crate', allocId(), undefined, classId));
     }
     return results;
   }
@@ -1134,21 +1408,21 @@ export function rollRelicDrops(
   if (source === 'mob') {
     const chance = Math.min((0.28 / 3) * extraDropMult, (0.055 / 3) * dropMult);
     if (Math.random() < chance) {
-      results.push(generateRelic(depth, 'mob', allocId()));
+      results.push(generateRelic(depth, 'mob', allocId(), undefined, classId));
     }
     return results;
   }
 
   if (source === 'elite') {
     // Guaranteed at least 1 relic from elites (unchanged)
-    results.push(generateRelic(depth, 'elite', allocId()));
+    results.push(generateRelic(depth, 'elite', allocId(), undefined, classId));
     // Depth-scaling chance for a 2nd relic (1/3 base & cap, scaled multiplicatively by extraDropMult)
     const secondChance = Math.min(
       (0.82 / 3) * extraDropMult,
       ((0.16 + depth * 0.025) / 3) * dropMult
     );
     if (Math.random() < secondChance) {
-      results.push(generateRelic(depth, 'elite', allocId()));
+      results.push(generateRelic(depth, 'elite', allocId(), undefined, classId));
     }
     // Deep floor bonus chance for a 3rd relic (1/3 base & cap, scaled multiplicatively by extraDropMult)
     if (depth >= 12) {
@@ -1157,20 +1431,20 @@ export function rollRelicDrops(
         (((depth - 10) * 0.015) / 3) * dropMult
       );
       if (Math.random() < thirdChance) {
-        results.push(generateRelic(depth, 'elite', allocId()));
+        results.push(generateRelic(depth, 'elite', allocId(), undefined, classId));
       }
     }
     return results;
   }
 
   // Boss: Guaranteed 1 relic (unchanged) + 1/3 depth-scaling chance for 2nd & 3rd
-  results.push(generateRelic(depth, 'boss', allocId()));
+  results.push(generateRelic(depth, 'boss', allocId(), undefined, classId));
   const secondChance = Math.min(
     (0.95 / 3) * extraDropMult,
     ((0.45 + depth * 0.03) / 3) * dropMult
   );
   if (Math.random() < secondChance) {
-    results.push(generateRelic(depth, 'boss', allocId()));
+    results.push(generateRelic(depth, 'boss', allocId(), undefined, classId));
   }
   if (depth >= 10) {
     const thirdChance = Math.min(
@@ -1178,12 +1452,12 @@ export function rollRelicDrops(
       ((0.12 + (depth - 9) * 0.022) / 3) * dropMult
     );
     if (Math.random() < thirdChance) {
-      results.push(generateRelic(depth, 'boss', allocId()));
+      results.push(generateRelic(depth, 'boss', allocId(), undefined, classId));
     }
   }
   // Boss rework (docs/boss-spec.md section 7): every hero's hoard holds at least one yellow-or-better relic
   if (!results.some((r) => r.rarity !== 'blue')) {
-    results.push(generateRelic(depth, 'boss', allocId(), rollBossRarityAboveBlue(depth)));
+    results.push(generateRelic(depth, 'boss', allocId(), rollBossRarityAboveBlue(depth), classId));
   }
   return results;
 }
@@ -1333,6 +1607,9 @@ export function computeRelicSummary(
   if (uniqueSet.has('starforged_treasure_sense')) {
     summary.eliteBossDmgPct += 12;
   }
+  if (uniqueSet.has('low_battery_mode')) {
+    summary.atkPct += 25;
+  }
   if (uniqueSet.has('overtime_mug_fury')) {
     summary.eliteBossDmgPct += 15;
   }
@@ -1366,6 +1643,18 @@ export function computeRelicSummary(
       }
       if (count >= 4) {
         summary.activeSetIds4pc.push('voidstalker');
+      }
+    } else if (setTpl.setId === 'courier') {
+      if (count >= 2) {
+        summary.moveSpeedPct += 8;
+        summary.dashCdPct += 8;
+      }
+      if (count >= 3) {
+        summary.goldPct += 20;
+        summary.lifeOnKill += 3;
+      }
+      if (count >= 4) {
+        summary.activeSetIds4pc.push('courier');
       }
     } else if (setTpl.setId === 'syndicate') {
       if (count >= 2) {
@@ -1472,4 +1761,113 @@ export function evaluateRelicLoadoutScore(equipped: RelicItem[]): number {
   }
 
   return score;
+}
+
+// ---------------------------------------------------------------------------
+// Relic codex (收集圖鑑): one entry per orange template and per green set piece. Registering an entry (by handing a
+// matching relic to the travelling merchant in town) permanently grants the entry's fixed bonus.
+// To add an entry, add the template to UNIQUE_RELIC_CATALOG / SET_RELIC_CATALOG with its `codexBonus`; nothing else.
+// ---------------------------------------------------------------------------
+
+/** Value one registered entry grants, per bonus kind (hpPct / atkPct / critPct / goldPct are all in percent points). */
+export const CODEX_BONUS_VALUE: Record<CodexBonusKey, number> = {
+  hpPct: 0.5,
+  atkPct: 0.5,
+  critPct: 0.25,
+  goldPct: 1,
+};
+
+export const CODEX_BONUS_LABEL: Record<CodexBonusKey, string> = {
+  hpPct: '血量上限',
+  atkPct: '攻擊力',
+  critPct: '暴擊率',
+  goldPct: '金幣獲取',
+};
+
+export const CODEX_BONUS_KEYS: CodexBonusKey[] = ['hpPct', 'atkPct', 'critPct', 'goldPct'];
+
+export type CodexBonusTotals = Record<CodexBonusKey, number>;
+
+export interface CodexEntry {
+  templateId: string;
+  name: string;
+  rarity: 'orange' | 'green';
+  codexBonus: CodexBonusKey;
+  classOnly?: HeroClassId;
+  statKeys: RelicStatKey[];
+  flavor: string;
+  /** Orange only. */
+  uniqueEffectId?: UniqueEffectId;
+  uniqueEffectTitle?: string;
+  uniqueEffectDesc?: string;
+  /** Green only. */
+  setId?: RelicSetId;
+  setName?: string;
+  pieceIndex?: number;
+}
+
+/** All codex entries in display order: the orange catalog, then each set's pieces. */
+export const CODEX_ENTRIES: CodexEntry[] = [
+  ...UNIQUE_RELIC_CATALOG.map(
+    (t): CodexEntry => ({
+      templateId: t.templateId,
+      name: t.name,
+      rarity: 'orange',
+      codexBonus: t.codexBonus,
+      classOnly: t.classOnly,
+      statKeys: t.statKeys,
+      flavor: t.flavor,
+      uniqueEffectId: t.uniqueEffectId,
+      uniqueEffectTitle: t.uniqueEffectTitle,
+      uniqueEffectDesc: t.uniqueEffectDesc,
+    })
+  ),
+  ...SET_RELIC_CATALOG.flatMap((set) =>
+    set.pieces.map(
+      (p): CodexEntry => ({
+        templateId: p.templateId,
+        name: p.name,
+        rarity: 'green',
+        codexBonus: p.codexBonus,
+        statKeys: p.statKeys,
+        flavor: p.flavor,
+        setId: set.setId,
+        setName: set.name,
+        pieceIndex: p.pieceIndex,
+      })
+    )
+  ),
+];
+
+const CODEX_ENTRY_BY_ID = new Map<string, CodexEntry>(CODEX_ENTRIES.map((e) => [e.templateId, e]));
+
+export function getCodexEntry(templateId: string): CodexEntry | undefined {
+  return CODEX_ENTRY_BY_ID.get(templateId);
+}
+
+/** True when a relic can be donated to the codex (orange / green; blue and yellow have no template entry). */
+export function isCodexRelic(relic: RelicItem): boolean {
+  return (relic.rarity === 'orange' || relic.rarity === 'green') && CODEX_ENTRY_BY_ID.has(relic.templateId);
+}
+
+/** Drops unknown / duplicate ids (a saved or peer-supplied codex is never trusted). */
+export function sanitizeCodexIds(ids: readonly unknown[] | undefined | null): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids ?? []) {
+    if (typeof id !== 'string' || seen.has(id) || !CODEX_ENTRY_BY_ID.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** Sum of the permanent bonuses of the registered entries (percent points). */
+export function computeCodexBonus(ids: Iterable<string>): CodexBonusTotals {
+  const total: CodexBonusTotals = { hpPct: 0, atkPct: 0, critPct: 0, goldPct: 0 };
+  for (const id of ids) {
+    const e = CODEX_ENTRY_BY_ID.get(id);
+    if (e) total[e.codexBonus] += CODEX_BONUS_VALUE[e.codexBonus];
+  }
+  return total;
 }

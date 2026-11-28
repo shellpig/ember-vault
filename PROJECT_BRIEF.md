@@ -36,7 +36,8 @@
 ├── migrations/
 │   ├── 0001_init.sql             # D1 schema：accounts, sessions, characters, trades
 │   ├── 0002_room_creates.sql     # P7 建房限流
-│   └── 0003_treasure_pity.sql    # 寶箱房保底計數 characters.treasure_pity
+│   ├── 0003_treasure_pity.sql    # 寶箱房保底計數 characters.treasure_pity
+│   └── 0004_codex.sql            # 遺物圖鑑 characters.codex（JSON 字串陣列）
 ├── shared/                       # 瀏覽器／Pages Functions／Room Worker 共用純 TS
 │   ├── character.ts              # 角色存檔型別與數量上限（8 角色 / 4 裝 / 30 包 / 200 倉）
 │   ├── trade.ts                  # P6 交易提供型別與純函式 `applyTrade`（驗證物品／金幣／空間並算出新存檔）
@@ -141,6 +142,8 @@ npm run deploy:room
 ---
 
 ## 近期動態與下一步
+
+- **遺物圖鑑・批次 1（`feat/codex-relics`，2026-11-28，尚未合併）**：城鎮右側房屋右下方新增「神秘旅行商人」NPC（`TOWN_CODEX_GRID`，F／點提示開窗）。橘色模板 24 ＋ 綠色套裝件 12 共 36 格，把背包／倉庫的橘／綠遺物交給商人即登錄（遺物消失、立即存檔），每格永久加成固定一種（HP +0.5%／攻擊 +0.5%／暴擊 +0.25%／金幣 +1%，分配 12/12/6/6）；機器人以 0.8 倍繼承，多人隊友的加成隨 `loadout`／`handback` 的 `codex` 欄位由房主模擬。存檔欄位 `characters.codex`（**migration `0004_codex.sql` 必須先於 Pages 部署套用**）；**不改 `shared/room.ts`／`workers/room/**`，不需 `deploy:room`**。UI 為 `src/components/CodexModal.tsx`（與 Ctrl+I 的「遺物秘典」目錄是兩個東西）。**批次 2（同分支）**：新增 12 個橘色獨特（含霜語者法杖／獵月長弓／燼火大劍三件職業專屬，效果灰顯於其他職業，掉落權重 ×2／×0.5）與綠色套裝「外送員套裝：使命必達」，圖鑑共 52 格（18 HP／18 攻擊／8 暴擊／8 金幣）；效果在 `src/game/engine/relicEffects.ts` 與既有戰鬥 hook，HUD 新增遺物 buff 條；神秘商人模型改版（大背包、青色雙眼、暖色提燈）。無後端／協定變更。雙瀏覽器多人實測尚未進行。規格見 [`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §1.5。
 
 - **難度調校（merge `0277517`，2026-11-28）**：只動一般怪與菁英、Boss 不變。依深度分七階（1–10／11–15／16–20／21–25／26–30／31–35／36+）加成普攻攻速（+5%～+35%，只縮冷卻、不縮預警）、移速（+5%～+20%，群居小怪除外）與每個有小怪的房間額外一般怪（+0～+3）；每隻具名菁英隨機帶一種半徑 5 的光環（迅捷／狂暴／堅韌／疾風／致命，同房不重複，同種不疊加、不同種並存，名牌以光環色標籤顯示）；光環地面效果為柔光風格：持有者腳下柔光環帶＋繞行菱形符記＋上飄光點（取代原菁英橘圈），範圍內受影響的怪腳下有同色小光池，多光環時每 1.2 秒交替顏色；所有敵人新增 `critChance`（基礎 `ENEMY_BASE_CRIT = 0`、倍率 1.5，致命光環 +20%，命中英雄時飄「爆擊 -X」）。`EnemyStatic` 新增選用欄位 `a`，隊友端只依此在本機畫光環、不套戰鬥加成（只改 `shared/game.ts`，**不需 `deploy:room`**）。Bot 實測（1 級起始英雄）25／36 層存活時間約減半。多人隊友端畫面與實戰爆擊飄字尚未實機確認。規格見 [`docs/multiplayer-spec.md`](docs/multiplayer-spec.md) §4.1。
 

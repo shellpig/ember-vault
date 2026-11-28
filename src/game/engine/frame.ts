@@ -77,7 +77,7 @@ export const frameMethods = {
    */
   updateHeroFrame(this: EmbervaultEngine, dt: number, isLocal: boolean): void {
     // Cooldowns & Relic Timers
-    this.hero.attackCooldown = Math.max(0, this.hero.attackCooldown - dt);
+    this.hero.attackCooldown = Math.max(0, this.hero.attackCooldown - dt * this.hero.getAttackSpeedMult());
     this.hero.attackAnim = Math.max(0, this.hero.attackAnim - dt);
     this.hero.pommelCooldown = Math.max(0, this.hero.pommelCooldown - dt);
     this.hero.pommelAnim = Math.max(0, this.hero.pommelAnim - dt);
@@ -88,6 +88,7 @@ export const frameMethods = {
     this.hero.phantomCritTimer = Math.max(0, this.hero.phantomCritTimer - dt);
     this.hero.alchemistShieldTimer = Math.max(0, this.hero.alchemistShieldTimer - dt);
     this.hero.updateShield(dt);
+    this.tickRelicEffects(dt);
 
     // 4pc Green Set: Dragonfire Knight periodic fiery breath nova every 3.0s
     if (this.hero.hasSet4pc('dragonfire')) {

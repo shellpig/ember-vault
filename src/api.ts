@@ -47,6 +47,8 @@ export function buildSaveBody(state: CharacterLoadout, baseVersion: number) {
     stash: state.stash,
     // Omitted (server keeps its value) when the loadout does not carry a counter
     ...(state.treasurePity === undefined ? {} : { treasure_pity: Math.max(0, Math.floor(state.treasurePity)) }),
+    // Omitted (server keeps its value) when the loadout does not carry a codex
+    ...(state.codex === undefined ? {} : { codex: state.codex }),
   };
 }
 
@@ -60,6 +62,7 @@ export function saveToLoadout(save: CharacterSave): CharacterLoadout {
     bag: save.bag,
     stash: save.stash,
     treasurePity: save.treasure_pity ?? 0,
+    codex: save.codex ?? [],
   };
 }
 

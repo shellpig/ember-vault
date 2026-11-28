@@ -71,6 +71,9 @@ export const TOWN_ALTAR_GRID = { gx: 11, gz: 19 };
 
 export const TOWN_STASH_GRID = { gx: 17, gz: 18 };
 
+/** Mysterious travelling merchant (relic codex): outside the right-hand house, to its lower right. */
+export const TOWN_CODEX_GRID = { gx: 14, gz: 7 };
+
 /** Depth 5 is always the first (beginner) boss. */
 export const FIRST_BOSS: FloorBossKind = 'boss_juggernaut';
 

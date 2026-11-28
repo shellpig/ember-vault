@@ -167,6 +167,8 @@ export interface EnemyEntity {
   fxDr?: boolean;
   fxMove?: boolean;
   fxCrit?: boolean;
+  /** Ember Lantern: seconds left of the -20% attack speed debuff (attack cooldowns tick at 80%). */
+  atkSlowTimer?: number;
   /** Visual (all clients): bit per ENEMY_AURA_TYPES index of the auras currently covering this enemy. */
   auraMask?: number;
   /** Thin ground rings per covering aura type, fading in/out (see updateAuraRings). */
@@ -270,6 +272,9 @@ export interface HeroProjectileEntity {
   ownerId: string;
   /** Teammate view only: a projectile of another hero, mirrored from the host's snapshots (never simulated here). */
   pid?: number;
+  /** Moon Bow: piercing moonlight arrow (+60% damage) and the enemy ids it already hit. */
+  moon?: boolean;
+  pierced?: Set<number>;
 }
 
 export interface PetEntity {
@@ -417,6 +422,7 @@ export interface AnimatedLightProp {
     | 'portal'
     | 'angel'
     | 'stash'
+    | 'merchant'
     | 'chest'
     | 'lamp';
   used?: boolean;

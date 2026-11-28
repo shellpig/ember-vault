@@ -93,6 +93,7 @@ export const heroCombatMethods = {
     this.hero.dashDirX = Math.sin(this.hero.facing);
     this.hero.dashDirZ = Math.cos(this.hero.facing);
     this.audio.playDash();
+    this.onRelicDash(this.hero.x, this.hero.z, this.hero.x + this.hero.dashDirX * 2.2, this.hero.z + this.hero.dashDirZ * 2.2);
 
     // Unique: Phoenix Plume — fiery ring nova when dashing
     if (this.hero.hasUnique('phoenix_dash_nova')) {
@@ -193,7 +194,7 @@ export const heroCombatMethods = {
   },
 
   performAttack(this: EmbervaultEngine): void {
-    if (this.hero.attackCooldown > 0) return;
+    if (this.hero.attackCooldown > 0 || this.hero.phoneOffLeft > 0) return; // phone shutdown: no attacks
     if (this.hero.isMage()) {
       this.performMageAttack();
       return;
@@ -341,10 +342,22 @@ export const heroCombatMethods = {
     const { atkMult, critChance, critMult, knockMult, usePhantomCrit, effMaxHp } = hit;
     const baseDmg = hit.baseDmg;
     const bananaSlip = this.hero.hasUnique('banana_slip_crit') && Math.random() < 0.15;
-    const isCrit = isCounter || usePhantomCrit || bananaSlip || Math.random() < critChance;
+    // Third Eye mark: +30% damage and the first hit on the marked enemy always crits
+    const marked = this.hero.markLeft > 0 && this.hero.markId === enemy.id;
+    const markCrit = marked && this.hero.markCritPending;
+    // Salted Fish: below 30% HP the next hit crits and launches the enemy (10 s cooldown)
+    const fishFlip =
+      this.hero.hasUnique('salted_fish_flip') && this.hero.fishCd <= 0 && this.hero.hp / Math.max(1, effMaxHp) < 0.3;
+    const isCrit = isCounter || usePhantomCrit || bananaSlip || markCrit || fishFlip || Math.random() < critChance;
     if (usePhantomCrit) hit.state.consumedPhantom = true;
+    if (markCrit) this.hero.markCritPending = false;
+    if (fishFlip) {
+      this.hero.fishCd = 10;
+      this.emitFloatingText(this.hero.x, 2.2, this.hero.z, '鹹魚翻身！', 'relicOrange');
+    }
 
     let mult = atkMult * (isCounter ? Math.max(1.45, critMult) : isCrit ? critMult : 1);
+    if (marked) mult *= 1.3;
     if (bananaSlip) {
       mult *= 1.4;
     }
@@ -381,6 +394,7 @@ export const heroCombatMethods = {
       hit.knockBase *
       knockMult *
       (bananaSlip ? 1.85 : 1) *
+      (fishFlip ? 3 : 1) *
       (enemy.isBoss ? 0.22 : enemy.isElite ? 0.45 : 1);
     enemy.vx += nx * knock;
     enemy.vz += nz * knock;
@@ -450,6 +464,19 @@ export const heroCombatMethods = {
         'info',
         0x7ef5ff
       );
+    }
+
+    // Unique: Frost Whisperer Staff (Frost Mage) — 25% chance to split into 2 small ice shards (40% damage each)
+    if (!enemy.dead && hit.isMageHit && this.hero.hasUnique('frost_shard_resonance') && Math.random() < 0.25) {
+      const shardDmg = Math.max(2, Math.round(dmg * 0.4));
+      const others = this.enemies
+        .filter((o) => !o.dead && !o.bossWarpUntargetable && o.id !== enemy.id && Math.hypot(o.x - enemy.x, o.z - enemy.z) <= 5)
+        .sort((a, b) => Math.hypot(a.x - enemy.x, a.z - enemy.z) - Math.hypot(b.x - enemy.x, b.z - enemy.z));
+      for (let i = 0; i < 2; i++) {
+        const t = others[i] ?? enemy;
+        if (t.dead) continue;
+        this.applyBonusEnemyDamage(t, shardDmg, `冰錐 -${shardDmg}`, 'frost', 0x9fe8ff);
+      }
     }
 
     // Unique: Permafrost Stele — chill enemy cooldown (+35%) & frost chip damage
@@ -738,7 +765,7 @@ export const heroCombatMethods = {
         : enemy.isElite || isGuardianEnemy(enemy.kind)
         ? 1.5
         : 2.5;
-      enemy.stunTimer = Math.max(enemy.stunTimer, stunDur);
+      enemy.stunTimer = Math.max(enemy.stunTimer, stunDur + (this.hero.hasUnique('ember_hilt_burst') ? 0.3 : 0));
 
       // Lazily attach orbiting 3D stun stars above enemy head
       if (!enemy.rig.stunStars) {
@@ -798,6 +825,21 @@ export const heroCombatMethods = {
       landedHit = true;
       if (enemy.hp <= 0) {
         this.killEnemy(enemy);
+      }
+    }
+
+    // Unique: Ancestral Ember Greatsword (Warrior) — ember burst around the hero when the pommel hits (60% attack, r 2.5)
+    if (landedHit && this.hero.hasUnique('ember_hilt_burst')) {
+      const burstDmg = Math.max(5, Math.round(13.5 * atkMult * 0.6));
+      this.spawnRelicRing(this.hero.x, this.hero.z, 0xff7a2a, 2.5, 0.35);
+      for (const e of this.enemies) {
+        if (e.dead || e.bossWarpUntargetable) continue;
+        if (Math.hypot(e.x - this.hero.x, e.z - this.hero.z) > 2.5 + (e.isBoss ? 0.5 : 0)) continue;
+        this.applyBonusEnemyDamage(e, burstDmg, `燼火 -${burstDmg}`, 'relicOrange', 0xff7a2a);
+      }
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2;
+        this.spawnParticle(this.hero.x, 0.5, this.hero.z, Math.cos(a) * 4.6, 1 + Math.random() * 1.5, Math.sin(a) * 4.6, i % 2 ? 0xffd24a : 0xff6a1f, 1.1, 0.45, 1);
       }
     }
 
@@ -952,6 +994,11 @@ export const heroCombatMethods = {
         );
       }
 
+      // Unique: Ancestral Ember Greatsword — a successful block shaves 1 s off the pommel strike cooldown
+      if (this.hero.hasUnique('ember_hilt_burst')) {
+        this.hero.pommelCooldown = Math.max(0, this.hero.pommelCooldown - 1);
+      }
+
       // Unique: Eternal Aegis counter-shockwave & heal on block
       if (this.hero.hasUnique('aegis_block_counter')) {
         this.hero.hp = Math.min(effMaxHp, this.hero.hp + 3);
@@ -984,7 +1031,7 @@ export const heroCombatMethods = {
       this.hero.hasUnique('titan_low_hp_fury') && this.hero.hp / Math.max(1, effMaxHp) < 0.4 ? 2 : 0;
     const alchemistFlat = this.hero.alchemistShieldTimer > 0 ? 2 : 0;
     const flatReduce = this.hero.relicStats.damageReduction + titanFlat + alchemistFlat;
-    const actualDamage = Math.max(1, Math.round(amount * defMult) - flatReduce);
+    const actualDamage = Math.max(1, Math.round(amount * defMult * this.hero.getPlunderDrMult()) - flatReduce);
 
     const dx = this.hero.x - sourceX;
     const dz = this.hero.z - sourceZ;
@@ -1112,7 +1159,38 @@ export const heroCombatMethods = {
       }
     }
 
-    const kbForce = isSwarmHit ? 1.15 : 5.2;
+    // Unique: Mom Bento — first time per floor below 50% HP: eat the bento, heal 35%
+    if (this.hero.hp > 0 && this.hero.hasUnique('mom_bento_heal') && !this.hero.bentoUsedThisFloor && this.hero.hp / Math.max(1, effMaxHp) < 0.5) {
+      this.hero.bentoUsedThisFloor = true;
+      this.hero.hp = Math.min(effMaxHp, this.hero.hp + Math.round(effMaxHp * 0.35));
+      this.emitFloatingText(this.hero.x, 2.4, this.hero.z, '媽媽說要吃飽！', 'heal');
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2;
+        this.spawnParticle(this.hero.x, 0.9, this.hero.z, Math.cos(a) * 2.4, 1.6 + Math.random() * 1.2, Math.sin(a) * 2.4, i % 2 ? 0xffd9a0 : 0x7dffb0, 1.0, 0.55, 1);
+      }
+    }
+
+    let kbForce = isSwarmHit ? 1.15 : 5.2;
+    // Unique: Discount Slime Pillow — squish back: far less knockback, nearby enemies get bounced away
+    if (this.hero.hasUnique('slime_cushion')) {
+      kbForce *= 0.2;
+      this.emitFloatingText(this.hero.x, 2.2, this.hero.z, '噗啾！', 'relicYellow');
+      for (const e of this.enemies) {
+        if (e.dead || e.bossWarpUntargetable) continue;
+        const edx = e.x - this.hero.x;
+        const edz = e.z - this.hero.z;
+        const edist = Math.hypot(edx, edz);
+        if (edist <= 1.5) {
+          const push = e.isBoss ? 1.8 : 7.5;
+          e.vx += (edx / (edist || 1)) * push;
+          e.vz += (edz / (edist || 1)) * push;
+        }
+      }
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        this.spawnParticle(this.hero.x, 0.7, this.hero.z, Math.cos(a) * 3.2, 1.2 + Math.random(), Math.sin(a) * 3.2, i % 2 ? 0x7dffa8 : 0xc8ffe0, 1.0, 0.4, 2);
+      }
+    }
     this.hero.vx += (dx / dist) * kbForce;
     this.hero.vz += (dz / dist) * kbForce;
 

@@ -8,6 +8,7 @@ import {
   getRarityCss,
   getRarityLabel,
   getUniqueEffectDescForClass,
+  getUniqueEffectInactiveNote,
 } from '../game/relics';
 import type { HeroClassId } from '../game/classes';
 import type { StashMoveResult } from '../game/engine';
@@ -65,7 +66,7 @@ function buildRelicTooltipText(item: RelicItem, heroClass: HeroClassId): string 
           item.uniqueEffectId
             ? getUniqueEffectDescForClass(item.uniqueEffectId, heroClass)
             : item.uniqueEffectDesc ?? ''
-        }`
+        }${getUniqueEffectInactiveNote(item.uniqueEffectId, heroClass) ?? ''}`
       : '',
     `售價：${item.sellValue}G`,
   ]
@@ -183,11 +184,16 @@ function RelicHoverTooltip({
         })}
       </div>
       {item.uniqueEffectTitle && (
-        <div className="mt-1.5 pt-1.5 border-t border-[#4f3018] font-hud text-[10px] leading-relaxed text-[#ffb878]">
+        <div
+          className={`mt-1.5 pt-1.5 border-t border-[#4f3018] font-hud text-[10px] leading-relaxed ${
+            getUniqueEffectInactiveNote(item.uniqueEffectId, heroClass) ? 'text-[#7d8394]' : 'text-[#ffb878]'
+          }`}
+        >
           <span className="font-bold">【{item.uniqueEffectTitle}】</span>
           {item.uniqueEffectId
             ? getUniqueEffectDescForClass(item.uniqueEffectId, heroClass)
             : item.uniqueEffectDesc}
+          {getUniqueEffectInactiveNote(item.uniqueEffectId, heroClass)}
         </div>
       )}
       <div className="mt-1.5 pt-1 border-t border-white/10 flex items-center justify-between font-hud text-[10px] text-[#e6c46a] tabular-nums">
