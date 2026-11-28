@@ -179,7 +179,8 @@ export const inputMethods = {
 
   /**
    * Auto-attack (manual mode only): when an enemy is inside the class's attack range (ranged classes also need line of
-   * sight), turn to the nearest one and swing / shoot. Never casts the skill, dashes or drinks. A held left mouse
+   * sight), turn to the nearest one and swing / shoot; with no monster in range, the nearest crate / urn instead.
+   * Never casts the skill, dashes or drinks. A held left mouse
    * button (manual aim) takes precedence.
    */
   updateAutoAttack(this: EmbervaultEngine): void {
@@ -199,8 +200,23 @@ export const inputMethods = {
       best = e;
       bestDist = d;
     }
-    if (!best) return;
-    h.facing = Math.atan2(best.x - h.x, best.z - h.z);
+    // No monster in range: smash the nearest crate / urn instead (handy on touch devices)
+    let target: { x: number; z: number } | null = best;
+    if (!target) {
+      // Melee swings break props within 0.92 x reach, so stay a little inside that
+      const propRange = ranged ? range : AUTO_ATTACK_MELEE_REACH * 0.9;
+      let propDist = Infinity;
+      for (const br of this.breakables) {
+        if (br.broken) continue;
+        const d = Math.hypot(br.x - h.x, br.z - h.z);
+        if (d > propRange || d >= propDist) continue;
+        if (ranged && !hasLineOfSight(this.dungeon, h.x, h.z, br.x, br.z, this.doorUnlocked, 0.2)) continue;
+        target = br;
+        propDist = d;
+      }
+    }
+    if (!target) return;
+    h.facing = Math.atan2(target.x - h.x, target.z - h.z);
     h.rig.body.rotation.y = h.facing;
     if (this.mpGuestDungeon()) this.mpQueueAction(ACT_ATTACK);
     this.performAttack();

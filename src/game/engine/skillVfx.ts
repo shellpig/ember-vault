@@ -437,19 +437,28 @@ export const skillVfxMethods = {
     }
     e.rig.burnFx.visible = true;
     _burnTime.value = this.elapsed;
-    if (!this.bgSim && Math.random() < dt * 6) {
-      const sc = burnScale(e);
+    if (this.bgSim) return;
+    // Red / orange / yellow embers rising up and drifting outward (~12 per second; bosses / elites up to 1.5x)
+    const sc = burnScale(e);
+    let count = dt * 12 * Math.min(1.5, sc);
+    while (count > 0) {
+      if (count < 1 && Math.random() > count) break;
+      count -= 1;
+      const a = Math.random() * Math.PI * 2;
+      const r = 0.15 + Math.random() * 0.3 * sc;
+      const out = 0.6 + Math.random() * 1.1;
+      const roll = Math.random();
       this.spawnParticle(
-        e.x + (Math.random() - 0.5) * 0.6 * sc,
-        0.4 + Math.random() * 0.6 * sc,
-        e.z + (Math.random() - 0.5) * 0.6 * sc,
-        (Math.random() - 0.5) * 0.4,
-        1.4 + Math.random() * 1.0,
-        (Math.random() - 0.5) * 0.4,
-        Math.random() < 0.5 ? 0xff7b29 : 0xffc04a,
-        0.55,
-        0.55,
-        -0.8
+        e.x + Math.cos(a) * r,
+        0.25 + Math.random() * 0.9 * sc,
+        e.z + Math.sin(a) * r,
+        Math.cos(a) * out,
+        1.6 + Math.random() * 1.6,
+        Math.sin(a) * out,
+        roll < 0.35 ? 0xff3b1f : roll < 0.7 ? 0xff8a1e : 0xffd84a,
+        0.7 + Math.random() * 0.3,
+        0.6 + Math.random() * 0.3,
+        -0.9
       );
     }
   },
