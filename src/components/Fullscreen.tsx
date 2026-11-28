@@ -26,6 +26,11 @@ function isIPhone(): boolean {
   return /iPhone|iPod/.test(navigator.userAgent);
 }
 
+/** iPad Safari (iPadOS 13+ reports a Mac user agent, so also check for a multi-touch screen). */
+function isIPad(): boolean {
+  return /iPad/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
 function isStandalone(): boolean {
   const nav = navigator as Navigator & { standalone?: boolean };
   try {
@@ -138,11 +143,15 @@ export function FullscreenButton({ touch = false, inGame = false }: { touch?: bo
   );
 }
 
-/** One-time tip on iPhone Safari: how to add the game to the Home Screen and play without the address bar. */
+/**
+ * One-time tip on iPhone / iPad Safari: how to add the game to the Home Screen and play without the address bar
+ * (on iPad the page fullscreen exits on a downward swipe, which is easy to trigger mid-fight; the Home Screen app has no such gesture).
+ */
 export function HomeScreenHint() {
+  const [iPad] = useState(isIPad);
   const [show, setShow] = useState(() => {
     try {
-      return isIPhone() && !isStandalone() && localStorage.getItem(HINT_STORAGE_KEY) !== '1';
+      return (isIPhone() || isIPad()) && !isStandalone() && localStorage.getItem(HINT_STORAGE_KEY) !== '1';
     } catch {
       return false;
     }
@@ -161,7 +170,8 @@ export function HomeScreenHint() {
       <Share className="w-4 h-4 mt-0.5 shrink-0 text-[#e6be63]" />
       <div className="flex-1">
         想用全螢幕玩？點 Safari 的<span className="text-[#f3dca0]">「分享」</span>按鈕，選
-        <span className="text-[#f3dca0]">「加入主畫面」</span>，之後從主畫面的圖示開啟就不會有網址列。
+        <span className="text-[#f3dca0]">「加入主畫面」</span>，之後從主畫面的圖示開啟就不會有網址列
+        {iPad ? '，遊玩時往下拉也不會退出全螢幕。' : '。'}
         <div className="mt-1 text-[11px] text-[#a3a8b8]">第一次從主畫面開啟時需要重新登入一次。</div>
       </div>
       <button
