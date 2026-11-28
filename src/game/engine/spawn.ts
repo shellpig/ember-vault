@@ -322,7 +322,8 @@ export const spawnMethods = {
     if (!this.bossArenaMode) return this.depth;
     const hostHero = this.mp ? (this.heroById(this.mp.hostId) ?? this.localHero) : this.localHero;
     const hostLevel = 1 + hostHero.getTotalUpgradeLevel();
-    return Math.max(1, Math.min(40, Math.round(hostLevel * 0.65)));
+    // Arena stats follow the host's level 1:1 (host Lv 20 -> monsters as on floor 20), capped at the deepest floor
+    return Math.max(1, Math.min(40, hostLevel));
   },
 
   /** Spawn one wave of the Boss Test Arena (5F..40F dual-boss, then loops) at the center of the 18x18 room. */
@@ -563,7 +564,8 @@ export const spawnMethods = {
       }
     }
 
-    const depthScale = 1 + (this.depth - 1) * 0.22;
+    // Effective depth: the Boss Test Arena's sentinel depth (99) must not inflate regular monster HP
+    const depthScale = 1 + (this.getEffectiveSimDepth() - 1) * 0.22;
     const baseHp = isGuardianEnemy(kind)
       ? 62
       : isSwarmEnemy(kind)
