@@ -466,7 +466,8 @@ export function RelicEquipmentModal({
                         )}
                       </div>
 
-                      <div className="mt-3 pt-2 border-t border-white/10 flex items-center justify-end gap-2">
+                      {/* Sell / discard on the left, equip on the right: far apart so they are not mis-tapped */}
+                      <div className="mt-3 pt-2 border-t border-white/10 flex items-center justify-between gap-2">
                         {nearShop && (
                           <button
                             type="button"
