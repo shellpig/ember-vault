@@ -76,7 +76,7 @@ export const lootMethods = {
     enemy.bossWarpUntargetable = false;
     this.resetBossWarpVisual(enemy);
     this.hideBossWindupVfx(enemy.id);
-    enemy.rig.root.visible = false;
+    if (!enemy.isBoss) enemy.rig.root.visible = false; // a boss rig stays for its death sequence (playBossDeath)
     // Boss death: whole-screen slow motion; in a room the host only tells teammates to slow down when it did too
     const slowMo = enemy.isBoss && this.triggerBossSlowMo(BOSS_DEATH_SLOWMO.duration, BOSS_DEATH_SLOWMO.scale, true);
     if (this.mp?.role === 'host') this.mpEmit(['x', q100(enemy.x), q100(enemy.z), slowMo ? 2 : enemy.isBoss || enemy.isElite ? 1 : 0]);
@@ -96,42 +96,6 @@ export const lootMethods = {
 
     if (enemy.isBoss) {
       this.audio.playBossVictory();
-      this.addScreenShake(0.45, 0.35);
-      const burstColor =
-        enemy.kind === 'boss_lich'
-          ? 0xd675ff
-          : enemy.kind === 'boss_colossus'
-          ? 0xff8024
-          : enemy.kind === 'boss_crystal_wyrm'
-          ? 0x45f2ff
-          : enemy.kind === 'boss_fungal_king'
-          ? 0x52f795
-          : enemy.kind === 'boss_leviathan_heart'
-          ? 0xff8826
-          : enemy.kind === 'boss_abyssal_brain'
-          ? 0x36f5d4
-          : enemy.kind === 'boss_mothership_ai'
-          ? 0xff4757
-          : enemy.kind === 'boss_xeno_commander'
-          ? 0x39ff7a
-          : 0xffd252;
-      for (let i = 0; i < 36; i++) {
-        const a = (i / 36) * Math.PI * 2;
-        const spd = 2.5 + Math.random() * 5.0;
-        this.spawnParticle(
-          enemy.x,
-          1.1,
-          enemy.z,
-          Math.cos(a) * spd,
-          2.2 + Math.random() * 3.8,
-          Math.sin(a) * spd,
-          i % 2 === 0 ? 0xffe066 : burstColor,
-          1.45,
-          0.85,
-          5.5
-        );
-      }
-
       this.pushBanner(
         `${enemy.bossName ?? 'BOSS'} VANQUISHED`,
         'Treasure Hoard Dropped!',
@@ -139,14 +103,38 @@ export const lootMethods = {
       );
 
       // Boss Treasure Hoard: 12 high-value bouncing gold coins (x1.5) scaled +6.5%/floor + Healing Elixir + Guaranteed Boss Relics
-      // (every hero gets their own hoard)
-      const bossKiller = this.hero;
-      for (const h of this.heroes) {
-        if (h.inTown) continue;
-        this.setActor(h);
-        this.dropBossHoard(enemy.x, enemy.z);
-      }
-      this.setActor(bossKiller);
+      // (every hero gets their own hoard). It drops at the death sequence's finisher; the recipients are fixed now.
+      const hoardHeroes = this.heroes.filter((h) => !h.inTown);
+      const hx = enemy.x;
+      const hz = enemy.z;
+      this.playBossDeath(enemy, {
+        killerX: this.hero.x,
+        killerZ: this.hero.z,
+        onFinisher: () => {
+          const actor = this.hero;
+          // The local hero may already be in town (boss VFX keep updating there): drop into the dungeon, not the town
+          const townCtx = this.inTown && this.dungeonCtx ? this.captureCtx() : null;
+          if (townCtx) {
+            this.applyCtx(this.dungeonCtx!);
+            this.inTown = false;
+          }
+          try {
+            for (const h of hoardHeroes) {
+              if (!this.heroes.includes(h)) continue;
+              this.setActor(h);
+              this.dropBossHoard(hx, hz);
+            }
+          } finally {
+            if (townCtx) {
+              this.dungeonCtx = this.captureCtx();
+              this.applyCtx(townCtx);
+              this.inTown = true;
+            }
+            this.setActor(actor);
+          }
+          this.emitHud();
+        },
+      });
       if (this.hero.relicStats.lifeOnKill > 0) {
         const effMax = this.hero.getEffectiveMaxHp();
         this.hero.hp = Math.min(effMax, this.hero.hp + this.hero.relicStats.lifeOnKill);

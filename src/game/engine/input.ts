@@ -4,6 +4,7 @@ import { ACT_ATTACK } from '../../../shared/game';
 import { FROST_MAGE, HUNTER } from '../classes';
 import { hasLineOfSight } from '../dungeon';
 import type { EnemyEntity } from './entities';
+import { isFloorBoss } from './data';
 
 /** Auto-attack toggle (all platforms): remembered per browser. */
 const AUTO_ATTACK_STORAGE_KEY = 'embervault.autoAttack.v1';
@@ -137,6 +138,24 @@ export const inputMethods = {
       this.buildLevel(nextDepth, { tickBuffFloor: true });
       this.emitFloatingText(this.hero.x, 2.0, this.hero.z, `+${bonusGold} G`, 'gold');
     });
+  },
+
+  /** Dev only (see the K hotkey): kills the nearest live floor boss through the normal `killEnemy` path. Single player. */
+  devKillNearestBoss(this: EmbervaultEngine): void {
+    if (this.mp || this.inTown || this.hero.isDead) return;
+    let best: EnemyEntity | null = null;
+    let bestD = Infinity;
+    for (const e of this.enemies) {
+      if (e.dead || !e.isBoss || !isFloorBoss(e.kind)) continue;
+      const d = Math.hypot(e.x - this.hero.x, e.z - this.hero.z);
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    if (!best) return;
+    best.hp = 0;
+    this.killEnemy(best);
   },
 
   /** Projects a screen point onto the ground plane (y = 0.85, ice spike height). */

@@ -38,7 +38,7 @@ export const BOSS_ARENA_DEPTH = 99;
 /** Death screen 回到城鎮 ("rescue team") costs the portal toll (`depth * 10`) times this. */
 export const DEATH_RETURN_COST_MULT = 5;
 /** Whole-screen slow motion when a floor boss dies (real seconds; slowest world speed). Single player and room games. */
-export const BOSS_DEATH_SLOWMO = { duration: 0.6, scale: 0.25 } as const;
+export const BOSS_DEATH_SLOWMO = { duration: 2.0, scale: 0.25 } as const;
 /** Ordered wave depths spawned in the Boss Test Arena (5F..40F dual-boss, then loops). */
 export const BOSS_ARENA_WAVES: readonly number[] = [5, 10, 15, 20, 25, 30, 35, 40];
 

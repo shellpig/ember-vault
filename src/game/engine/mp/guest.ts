@@ -523,10 +523,13 @@ export const guestMpMethods = {
     const p = g.enemies.get(id);
     if (!p) return;
     p.e.dead = true;
-    p.e.rig.root.visible = false;
+    // A boss plays its death sequence locally (the host's snapshots carry the loot) and leaves the scene when it ends
+    const dying = p.e.isBoss && !this.bgSim;
+    if (dying) this.playBossDeath(p.e, { killerX: this.localHero.x, killerZ: this.localHero.z, removeRoot: true });
+    else p.e.rig.root.visible = false;
     if (p.e.telegraph) p.e.telegraph.group.visible = false;
     this.hideBossWindupVfx(id);
-    this.dynamicGroup.remove(p.e.rig.root);
+    if (!dying) this.dynamicGroup.remove(p.e.rig.root);
     if (p.e.telegraph) this.dynamicGroup.remove(p.e.telegraph.group);
     g.enemies.delete(id);
     g.enemyList = g.enemyList.filter((e) => e !== p.e);

@@ -95,6 +95,7 @@ import { enemiesMethods } from './engine/enemies';
 import { treasureMethods } from './engine/treasure';
 import { BOSS_ARENA_DEPTH } from './engine/data';
 import { bossVfxMethods } from './engine/bossVfx';
+import { bossDeathMethods } from './engine/bossDeath';
 import { mageVfxMethods } from './engine/mageVfx';
 import { skillVfxMethods } from './engine/skillVfx';
 import type { BossVfxInstance, BossWindupRig } from './engine/bossVfx';
@@ -484,6 +485,13 @@ export class EmbervaultEngine {
           this.hero.input.keys.add('KeyF');
         }
       }
+      return;
+    }
+
+    // Dev only (Vite dev server / DEV_AUTH backend), single player: K kills the nearest live floor boss
+    if (code === 'KeyK' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat && (import.meta.env.DEV || EmbervaultEngine.serverDevAuth)) {
+      e.preventDefault();
+      this.devKillNearestBoss();
       return;
     }
 
@@ -917,6 +925,7 @@ type FrameMethods = typeof frameMethods;
 type EnemiesMethods = typeof enemiesMethods;
 type TreasureMethods = typeof treasureMethods;
 type BossVfxMethods = typeof bossVfxMethods;
+type BossDeathMethods = typeof bossDeathMethods;
 type MageVfxMethods = typeof mageVfxMethods;
 type SkillVfxMethods = typeof skillVfxMethods;
 export interface EmbervaultEngine
@@ -943,6 +952,7 @@ export interface EmbervaultEngine
     EnemiesMethods,
     TreasureMethods,
     BossVfxMethods,
+    BossDeathMethods,
     MageVfxMethods,
     SkillVfxMethods {}
 Object.assign(
@@ -970,6 +980,7 @@ Object.assign(
   enemiesMethods,
   treasureMethods,
   bossVfxMethods,
+  bossDeathMethods,
   mageVfxMethods,
   skillVfxMethods,
 );

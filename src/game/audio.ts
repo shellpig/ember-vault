@@ -1114,6 +1114,68 @@ export class DungeonAudio {
     src.start(now, 0.02, 0.32);
   }
 
+  /** Floor boss death finisher: deep boom, cracking blast, rubble tail and a few debris rattles. */
+  public playBossDeathBlast(): void {
+    if (!this.canPlay() || !this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(130, now);
+    sub.frequency.exponentialRampToValueAtTime(22, now + 0.95);
+    const sg = this.ctx.createGain();
+    sg.gain.setValueAtTime(0.75, now);
+    sg.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+    sub.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 1.02);
+
+    const blast = this.ctx.createBufferSource();
+    blast.buffer = this.noiseBuffer;
+    const bf = this.ctx.createBiquadFilter();
+    bf.type = 'lowpass';
+    bf.frequency.setValueAtTime(3200, now);
+    bf.frequency.exponentialRampToValueAtTime(120, now + 0.9);
+    const bg = this.ctx.createGain();
+    bg.gain.setValueAtTime(0.62, now);
+    bg.gain.exponentialRampToValueAtTime(0.001, now + 0.95);
+    blast.connect(bf);
+    bf.connect(bg);
+    bg.connect(this.masterGain);
+    blast.start(now, 0.05, 1.0);
+
+    const crack = this.ctx.createOscillator();
+    crack.type = 'sawtooth';
+    crack.frequency.setValueAtTime(420, now);
+    crack.frequency.exponentialRampToValueAtTime(55, now + 0.22);
+    const cg = this.ctx.createGain();
+    cg.gain.setValueAtTime(0.3, now);
+    cg.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
+    crack.connect(cg);
+    cg.connect(this.masterGain);
+    crack.start(now);
+    crack.stop(now + 0.26);
+
+    // Debris rattling down after the blast
+    for (let i = 0; i < 6; i++) {
+      const at = now + 0.18 + i * 0.09 + Math.random() * 0.05;
+      const tick = this.ctx.createBufferSource();
+      tick.buffer = this.noiseBuffer;
+      const tf = this.ctx.createBiquadFilter();
+      tf.type = 'bandpass';
+      tf.frequency.value = 700 + Math.random() * 1500;
+      tf.Q.value = 2.2;
+      const tg = this.ctx.createGain();
+      tg.gain.setValueAtTime(0.16 * (1 - i / 8), at);
+      tg.gain.exponentialRampToValueAtTime(0.001, at + 0.07);
+      tick.connect(tf);
+      tf.connect(tg);
+      tg.connect(this.masterGain);
+      tick.start(at, Math.random() * 1.2, 0.08);
+    }
+  }
+
   public playBossVictory(): void {
     if (!this.canPlay() || !this.ctx || !this.masterGain) return;
     const now = this.ctx.currentTime;
