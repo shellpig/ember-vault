@@ -1,7 +1,7 @@
 import type { EmbervaultEngine } from '../engine';
 import { q100 } from '../../../shared/game';
 import { BOSS_LOOT, isGuardianEnemy, isSwarmEnemy } from './data';
-import { AnimatedLightProp, BreakableEntity, EnemyEntity } from './entities';
+import { AnimatedLightProp, BreakableEntity, EnemyEntity, LootEntity, SavedLoot } from './entities';
 import { Hero } from '../hero';
 import { createLootMesh, createRelicLootMesh } from '../models';
 import { RelicDropSource, RelicItem, evaluateRelicLoadoutScore, getRarityColorHex, rollRelicDrops } from '../relics';
@@ -510,6 +510,44 @@ export const lootMethods = {
           -0.6
         );
       }
+    }
+  },
+
+  /**
+   * Puts the drops of a frozen floor back where they lay (rebuild from a saved snapshot). Quiet: no banner,
+   * sound or pop; already settled on the ground and ready to pick up. Owners are kept, so teammates' drops
+   * reach them again through the host's next full loot snapshot.
+   */
+  restoreSavedLoots(this: EmbervaultEngine, saved: SavedLoot[]): void {
+    for (const s of saved) {
+      let mesh: THREE.Group;
+      let relicRig: LootEntity['relicRig'];
+      if (s.type === 'relic' && s.relic) {
+        relicRig = createRelicLootMesh(s.relic.rarity, this.textures?.glowMap);
+        relicRig.root.position.set(s.x, 0, s.z);
+        mesh = relicRig.root;
+      } else if (s.type !== 'relic') {
+        mesh = createLootMesh(s.type);
+        mesh.position.set(s.x, 0, s.z);
+      } else {
+        continue;
+      }
+      this.dynamicGroup.add(mesh);
+      this.loots.push({
+        id: this.nextId++,
+        ownerId: s.ownerId,
+        type: s.type,
+        value: s.value,
+        mesh,
+        relic: s.relic,
+        relicRig,
+        x: s.x,
+        z: s.z,
+        y: 0,
+        vy: 0,
+        age: 10,
+        collected: false,
+      });
     }
   },
 

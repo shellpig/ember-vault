@@ -423,6 +423,17 @@ export interface SavedDungeonSnapshot {
   returnZ: number;
   usedRuneKeys: Set<string>;
   brokenBreakableKeys: Set<string>;
+  /** Drops still lying on the floor when it froze; put back on rebuild (memory only, never saved to D1). */
+  loots: SavedLoot[];
+}
+
+export interface SavedLoot {
+  ownerId: string;
+  type: 'gold' | 'potion' | 'relic';
+  value: number;
+  relic?: RelicItem;
+  x: number;
+  z: number;
 }
 
 /**

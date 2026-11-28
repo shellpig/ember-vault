@@ -2739,6 +2739,8 @@ export default function App() {
           onUnequip={(slotIdx) => engineRef.current?.unequipRelic(slotIdx)}
           onSell={(relicId) => engineRef.current?.sellRelic(relicId)}
           onSellCommon={() => engineRef.current?.sellCommonBagRelics(true)}
+          onDiscard={(relicId) => engineRef.current?.discardRelic(relicId)}
+          onDiscardBlue={() => engineRef.current?.discardBlueBagRelics()}
           onClose={() => setRelicModalOpen(false)}
         />
       )}

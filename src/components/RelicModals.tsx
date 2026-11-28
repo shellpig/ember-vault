@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Coins, Gem, Shield, Sparkles, X } from 'lucide-react';
+import { Coins, Gem, Shield, Sparkles, Trash2, X } from 'lucide-react';
 import {
   ActiveSetBonus,
   RelicItem,
@@ -12,6 +12,7 @@ import {
   formatStatRange,
   getRarityCss,
   getRarityLabel,
+  getRelicDiscardValue,
   getUniqueEffectDescForClass,
 } from '../game/relics';
 import type { HeroClassId } from '../game/classes';
@@ -33,6 +34,9 @@ interface RelicEquipmentModalProps {
   onUnequip: (slotIndex: number) => void;
   onSell: (relicId: string) => void;
   onSellCommon: () => void;
+  /** Away from the shop: discard for half the sell value (orange / green ask for a second click). */
+  onDiscard: (relicId: string) => void;
+  onDiscardBlue: () => void;
   onClose: () => void;
   heroClass?: HeroClassId;
 }
@@ -55,11 +59,14 @@ export function RelicEquipmentModal({
   onUnequip,
   onSell,
   onSellCommon,
+  onDiscard,
+  onDiscardBlue,
   onClose,
   heroClass = 'warrior',
 }: RelicEquipmentModalProps) {
   const [filter, setFilter] = useState<'all' | RelicRarity>('all');
   const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
+  const [confirmDiscardId, setConfirmDiscardId] = useState<string | null>(null);
 
   const sortedBag = useMemo(() => {
     const list = filter === 'all' ? bag : bag.filter((r) => r.rarity === filter);
@@ -73,6 +80,11 @@ export function RelicEquipmentModal({
       bag
         .filter((r) => r.rarity === 'blue' || r.rarity === 'yellow')
         .reduce((sum, r) => sum + r.sellValue, 0),
+    [bag]
+  );
+
+  const blueDiscardTotal = useMemo(
+    () => bag.filter((r) => r.rarity === 'blue').reduce((sum, r) => sum + getRelicDiscardValue(r), 0),
     [bag]
   );
 
@@ -376,6 +388,17 @@ export function RelicEquipmentModal({
                   <span>一鍵賣出藍/黃遺物 (+{commonSellTotal} G)</span>
                 </button>
               )}
+              {!nearShop && blueDiscardTotal > 0 && (
+                <button
+                  type="button"
+                  onClick={onDiscardBlue}
+                  title="不在商店旁：以半價丟棄所有藍色遺物"
+                  className="flex items-center gap-1.5 px-3 py-1 border border-[#4d5266] bg-[#171a24] font-hud text-xs font-semibold text-[#b9bfd0] hover:border-[#8c93ad] hover:bg-[#1f2330] transition-colors cursor-pointer whitespace-nowrap tabular-nums"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>一鍵丟棄藍色遺物 (+{blueDiscardTotal} G)</span>
+                </button>
+              )}
             </div>
 
             {sortedBag.length === 0 ? (
@@ -444,6 +467,33 @@ export function RelicEquipmentModal({
                           >
                             <Coins className="w-3 h-3" />
                             <span>賣出 +{item.sellValue}G</span>
+                          </button>
+                        )}
+                        {!nearShop && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const needsConfirm = item.rarity === 'orange' || item.rarity === 'green';
+                              if (needsConfirm && confirmDiscardId !== item.id) {
+                                setConfirmDiscardId(item.id);
+                                return;
+                              }
+                              setConfirmDiscardId(null);
+                              if (swapTargetId === item.id) setSwapTargetId(null);
+                              onDiscard(item.id);
+                            }}
+                            onMouseLeave={() => setConfirmDiscardId((prev) => (prev === item.id ? null : prev))}
+                            title="半價丟棄（商店可全價賣出）"
+                            className={`flex items-center gap-1 px-2.5 py-1 border font-hud text-[11px] font-semibold transition-colors cursor-pointer whitespace-nowrap tabular-nums ${
+                              confirmDiscardId === item.id
+                                ? 'border-[#d0743a] bg-[#3a1d0e] text-[#ffc08a]'
+                                : 'border-[#3f4456] bg-[#151821] text-[#a9afc0] hover:border-[#7d849c]'
+                            }`}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>
+                              {confirmDiscardId === item.id ? '確認丟棄？' : '丟棄'} +{getRelicDiscardValue(item)}G
+                            </span>
                           </button>
                         )}
                         <button

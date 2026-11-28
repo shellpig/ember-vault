@@ -803,6 +803,13 @@ const RELIC_NOUNS = [
   '鏡片',
 ];
 
+/** Discarding a bag relic away from the shop pays this share of its sell value (the shop pays it in full). */
+export const RELIC_DISCARD_RATIO = 0.5;
+
+export function getRelicDiscardValue(relic: RelicItem): number {
+  return Math.floor(relic.sellValue * RELIC_DISCARD_RATIO);
+}
+
 export function formatRelicStat(stat: RelicStat): string {
   const def = STAT_DEFS[stat.key];
   return `${def.label} ${def.prefix}${stat.value}${def.unit}`;

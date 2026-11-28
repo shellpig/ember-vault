@@ -40,6 +40,9 @@ export const travelMethods = {
       returnZ: portal.z,
       usedRuneKeys,
       brokenBreakableKeys,
+      loots: this.loots
+        .filter((l) => !l.collected)
+        .map((l) => ({ ownerId: l.ownerId, type: l.type, value: l.value, relic: l.relic, x: l.x, z: l.z })),
     };
   },
 

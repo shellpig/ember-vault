@@ -58,7 +58,7 @@
 │   ├── net/roomClient.ts         # 瀏覽器房間 WebSocket 客戶端
 │   ├── components/               # AccountScreens, RoomScreens, StashModal, RelicModals, ClassEmblem, TouchControls
 │   └── game/                     # engine.ts（引擎本體：欄位／建構子／主迴圈／公開 API／組裝）、hero.ts、classes.ts、
-│       │                         # dungeon.ts、relics.ts、treasure.ts（TREASURE_CONFIG）、models.ts、textures.ts、audio.ts、types.ts
+│       │                         # dungeon.ts、relics.ts、treasure.ts（TREASURE_CONFIG）、models.ts、textures.ts、alienTextures.ts（飛船貼圖）、audio.ts、types.ts
 │       └── engine/               # engine.ts 拆出的方法模組（`this: EmbervaultEngine` 方法物件，掛回原型）
 │           ├── data.ts / entities.ts / scratch.ts      # Boss 設定與判斷函式、內部型別、共用暫存向量
 │           ├── party.ts / scene.ts / levelBuild.ts / town.ts / spawn.ts / input.ts
@@ -142,6 +142,8 @@ npm run deploy:room
 
 ## 近期動態與下一步
 
+- **背包半價丟棄與凍結樓層保留掉寶（分支 `feat/bag-discard-loot-keep`）**：不在商店旁時，裝備欄視窗每件背包遺物有「丟棄 +X G」（賣價 50%，`RELIC_DISCARD_RATIO`；橘／綠需點兩次確認）與「一鍵丟棄藍色遺物」，用來在地城騰出背包空位（商店仍全價收購；背包已滿時自動折現維持 100%）。多人新增隊友指令 `disc`／`discb`（`shared/game.ts`，DO 只轉送，**不需 `deploy:room`**）。回城使樓層凍結時，`SavedDungeonSnapshot.loots` 記下地上未撿的掉寶，重建時原地放回（`restoreSavedLoots`；只在記憶體、不寫 D1，換層不保留）。規格見 `docs/multiplayer-spec.md` §3.4。
+- **外星飛船地形升級（merge `7f45ee1`）**：31–40 層比照洞窟／巨獸體內的做法補齊。兩個生物群系分開：冷凍甲板 `alien_deck`（31/32/35/36/39/40 層，深石墨藍、冰青、結霜）與指揮甲板 `alien_core`（33/34/37/38 層，近黑海軍藍、琥珀指揮燈與提燈、格柵較多）；飛船天光由 0.96 調降到 0.30～0.36，提燈光圈與陰影恢復可讀。新增 `src/game/alienTextures.ts`（地板 6 變體、牆面 4 變體＋暗色警示踢腳、方柱、貨櫃、3 種貼花，警示 V 紋只放靠牆地板）；`models.ts` 新增 3 種機械牆頂、方柱底座／柱頭＋細發光環、貨櫃與冷凍罐、沿牆環境裝飾（冷凍罐／小機櫃、電纜捲、壞無人機、稀有全息投影台每層最多 2 個）。地板導光條只沿牆腳與走道（`buildAlienFloorStrips`，單一 InstancedMesh、加法混色、約 3 秒呼吸，由共用 `alienStripClock` 驅動，不加燈光）。擺放皆由 `depth + genSeed` 決定，多人一致；**不改協定、不改存檔、不需 `deploy:room`**。Boss 預警圈在新地板上的可讀性尚未實戰確認。
 - **自動攻擊與觸控操作**：下方操作列新增「自動攻擊」開關（全平台，快捷鍵 `T`，記在 `localStorage`）：手動模式下攻擊範圍內有怪就自動轉向並普攻（戰士 2.25、法師／獵人射程內且需視線），不會自動放技能、衝刺或喝藥；按住左鍵手動瞄準時優先。觸控主裝置（`(hover: none) and (pointer: coarse)`）顯示左下移動搖桿（8 方向，對應 WASD，因此多人輸入協定不變）與右下技能／位移按鈕，觸控裝置預設開啟自動攻擊。實作在 `src/game/engine/input.ts`、`src/components/TouchControls.tsx`。手機直式版面尚未調整。
 - **Boss 招式與特效打磨（`afa83ec`～`f8948e5`，直接提交 `main`）**：五種招式改為程序化 shader 特效（`src/game/engine/bossVfx.ts`，開局預熱 shader 與爆光燈），新增 `prism_cone`（彩繪玻璃扇形）、`orbital_barrage`、`warp_ambush`（寶藍傳送伏擊）三招；`ranged_volley` 改為兩段式 railgun（35% 即時光束＋75% 高速砲彈）；`charge_slam` 熔岩裂縫與衝刺走廊判定；Boss 仇恨追擊。Boss 配置改為第 10 層固定骸骨大巫妖、熔岩巨像移到**第 40 層雙 Boss 終局**（與 Omega Core AI 同場）。PC 大廳左上角隱藏按鈕可解鎖起始層滑桿最右側的「BOSS 測試戰」（`BOSS_ARENA_DEPTH = 99`，依序 5F～40F 波次循環）——**此入口未限開發環境，正式站同樣可點開**。另有獵人戰寵攻擊動畫（`8ad0b32`）。招式已補記於 `docs/boss-spec.md` §3，但 §8 輪替仍寫第 10 層隨機抽、未記第 40 層雙 Boss 與測試戰入口。
 - **寶箱房（merge `d3d5adf`，規格 `docs/treasure-room-spec.md`）**：非 Boss 層、至少 3 個戰鬥房時有 10% 機率（連 8 個非 Boss 層沒出現則強制；Boss 層不出現也不累積計數）把一間死路戰鬥房改成寶箱房（無怪、3～6 個寶箱、F 開啟，結果 20/50/20/9/1：金幣＋小怪掉落／菁英／具名菁英／Boss 寶藏／Boss 寶藏＋額外橙綠遺物）。保底計數存 D1 新欄位 `characters.treasure_pity`（**migration `0003_treasure_pity.sql`**），多人只用房主的計數，`?devDepth` 不讀寫。協定只新增選用欄位（`cmd` `chest`、`level.tr`、`world.tc`），**不需要 `npm run deploy:room`**。掉落公式抽成 `dropEnemyLoot`／`dropBossHoard`，數值集中在 `src/game/treasure.ts` 的 `TREASURE_CONFIG`。**部署順序：先 `npm run db:migrate:remote`，再部署 Pages**（欄位不存在時存檔 UPDATE 會失敗）。實作決定見規格末段。

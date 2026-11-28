@@ -84,6 +84,9 @@ export type CommandPayload =
   | { c: 'uneq'; s: number }
   | { c: 'sell'; id: string }
   | { c: 'sellc'; y?: 0 | 1 }
+  /** Discard a bag relic anywhere for half its sell value / all blue bag relics. */
+  | { c: 'disc'; id: string }
+  | { c: 'discb' }
   | { c: 'up'; kind: string }
   | { c: 'buy' }
   /** Back to town (B, or free = 1 when walking through an existing dungeon portal). */
