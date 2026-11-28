@@ -292,6 +292,8 @@ export interface PetEntity {
   walkPhase: number;
   /** Remaining seconds of the pet's lunge / paw-slam / peck attack animation. */
   attackAnim?: number;
+  /** Seconds the owner has been out of the pet's line of sight (warps beside the owner past PET_NO_LOS_WARP_SEC). */
+  noLosTimer?: number;
   targetX?: number;
   targetZ?: number;
   targetFacing?: number;

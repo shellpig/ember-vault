@@ -375,7 +375,7 @@ export const classSkillsMethods = {
       pet.attackCooldown = Math.max(0, pet.attackCooldown - dt);
       pet.timeSinceDamaged += dt;
 
-      // Out-of-combat automatic regeneration (~5s to full after delay)
+      // Out-of-combat automatic regeneration (slow on purpose: the hunter's skill is the main heal)
       if (pet.hp < pet.maxHp && pet.timeSinceDamaged >= HUNTER.petRegenDelay) {
         pet.hp = Math.min(pet.maxHp, pet.hp + (pet.maxHp / HUNTER.petRegenRefill) * dt);
       }
@@ -388,7 +388,15 @@ export const classSkillsMethods = {
       let moveX = 0;
       let moveZ = 0;
 
-      if (ownerDist > HUNTER.petTeleportDist || this.isCompanionTooFar(owner, pet.x, pet.z)) {
+      // Owner hidden behind a wall for a while (the pet only walks straight lines): warp instead of hugging the wall
+      const ownerVisible =
+        ownerDist <= 2.0 || hasLineOfSight(this.dungeon, pet.x, pet.z, owner.x, owner.z, this.doorUnlocked, 0.2);
+      pet.noLosTimer = ownerVisible ? 0 : (pet.noLosTimer ?? 0) + dt;
+      const lostSight = (pet.noLosTimer ?? 0) >= HUNTER.petNoLosWarpSec;
+
+      if (ownerDist > HUNTER.petTeleportDist || lostSight || this.isCompanionTooFar(owner, pet.x, pet.z)) {
+        if (lostSight && !this.bgSim) this.spawnPetWarpPuff(pet.x, pet.z);
+        pet.noLosTimer = 0;
         // Teleport right next to owner (also once it drifts to the screen edge, e.g. snagged behind a wall)
         pet.x = owner.x + (Math.random() - 0.5) * 0.8;
         pet.z = owner.z + (Math.random() - 0.5) * 0.8;
@@ -398,6 +406,7 @@ export const classSkillsMethods = {
         }
         pet.vx = 0;
         pet.vz = 0;
+        if (lostSight && !this.bgSim) this.spawnPetWarpPuff(pet.x, pet.z);
       } else if (ownerDist > HUNTER.petLeashReturnDist) {
         // Too far from owner: disengage and rush back
         moveX = (toOwnerX / ownerDist) * HUNTER.petMoveSpeed * 1.25;
@@ -411,7 +420,12 @@ export const classSkillsMethods = {
           if (e.dead || e.bossWarpUntargetable) continue;
           const dPet = Math.hypot(e.x - pet.x, e.z - pet.z);
           const dOwner = Math.hypot(e.x - owner.x, e.z - owner.z);
-          if (dPet < bestD && dOwner < HUNTER.petLeashReturnDist && !this.isCompanionTooFar(owner, e.x, e.z)) {
+          if (
+            dPet < bestD &&
+            dOwner < HUNTER.petLeashReturnDist &&
+            !this.isCompanionTooFar(owner, e.x, e.z) &&
+            hasLineOfSight(this.dungeon, pet.x, pet.z, e.x, e.z, this.doorUnlocked, 0.2)
+          ) {
             bestD = dPet;
             target = e;
           }
@@ -521,6 +535,14 @@ export const classSkillsMethods = {
       this.animatePetRig(pet, Math.hypot(moveX, moveZ), dt);
     }
     this.setActor(prevActor);
+  },
+
+  /** Small smoke puff where a pet vanishes / reappears when it warps back to its owner. */
+  spawnPetWarpPuff(this: EmbervaultEngine, x: number, z: number): void {
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      this.spawnParticle(x, 0.4, z, Math.cos(a) * 1.6, 0.8 + Math.random() * 0.8, Math.sin(a) * 1.6, 0xd8dde6, 0.7, 0.4, 2.5);
+    }
   },
 
   animatePetRig(this: EmbervaultEngine, pet: PetEntity, moveSpeed: number, dt: number): void {

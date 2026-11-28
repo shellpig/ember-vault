@@ -210,9 +210,10 @@ export const HUNTER = {
 
   // Pet companion
   petBaseHp: 64, // ~65% of unnamed elite base HP (96)
-  petDepthHpScale: 0.22,
-  petRegenDelay: 3.0, // seconds without damage before out-of-combat regen starts
-  petRegenRefill: 10.0, // seconds to refill from 0 to full once regen starts (10%/s)
+  petDepthHpScale: 0.12,
+  petRegenDelay: 6.0, // seconds without damage before out-of-combat regen starts
+  petRegenRefill: 30.0, // seconds to refill from 0 to full once regen starts (~3.3%/s); topping up is the skill's job
+  petNoLosWarpSec: 1.2, // owner hidden behind a wall this long -> pet warps beside the owner
   petMoveSpeed: 6.0,
   petAggroRange: 9.0,
   petLeashReturnDist: 11.5, // breaks off combat to return to owner beyond this distance
