@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Maximize, Minimize, Share, X } from 'lucide-react';
 
 const HINT_STORAGE_KEY = 'embervault.homeScreenHint.v1';
+const FS_HINT_STORAGE_KEY = 'embervault.fullscreenHint.v1';
 
 type FsDocument = Document & {
   webkitFullscreenEnabled?: boolean;
@@ -68,20 +69,72 @@ export function useFullscreen(): { supported: boolean; active: boolean; toggle: 
   return { supported, active, toggle };
 }
 
-/** Dock button: enter / leave fullscreen. Renders nothing where the API is missing. */
-export function FullscreenButton() {
+/** Seconds the first-time fullscreen tip stays up if the player ignores it. */
+const FS_HINT_SECONDS = 12;
+
+/**
+ * Dock button: enter / leave fullscreen. Renders nothing where the API is missing. On touch devices it carries a
+ * label, and the first time it is shown a tip bubble above it explains it (until used, dismissed or timed out).
+ */
+export function FullscreenButton({ touch = false, inGame = false }: { touch?: boolean; inGame?: boolean }) {
   const { supported, active, toggle } = useFullscreen();
+  // The dock is mounted behind the login / lobby screens too: only show (and time) the tip once in the game
+  const [hintDone, setHintDone] = useState(() => {
+    try {
+      return localStorage.getItem(FS_HINT_STORAGE_KEY) === '1';
+    } catch {
+      return true;
+    }
+  });
+  const hint = touch && inGame && supported && !hintDone && !active && !isStandalone();
+
+  const closeHint = useCallback(() => {
+    setHintDone(true);
+    try {
+      localStorage.setItem(FS_HINT_STORAGE_KEY, '1');
+    } catch {
+      // Private mode: the tip just shows again next time
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hint) return;
+    const id = window.setTimeout(closeHint, FS_HINT_SECONDS * 1000);
+    return () => window.clearTimeout(id);
+  }, [hint, closeHint]);
+
   if (!supported) return null;
   return (
-    <button
-      type="button"
-      onClick={toggle}
-      title={active ? '離開全螢幕' : '全螢幕'}
-      aria-pressed={active}
-      className="p-1.5 border border-[#3a3428] bg-[#151822] text-[#c7b68d] hover:border-[#b89448] hover:text-[#f3dca0] transition-colors cursor-pointer shrink-0"
-    >
-      {active ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
-    </button>
+    <span className="relative shrink-0">
+      {hint && (
+        <span
+          role="status"
+          onClick={closeHint}
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 w-[200px] px-3 py-2 bg-[#241c0f] border border-[#e6be63] text-[11px] leading-snug text-[#fff0bf] text-center shadow-[0_0_14px_rgba(230,190,99,0.35)] animate-pulse cursor-pointer z-50"
+        >
+          點這裡切換<span className="font-bold">全螢幕</span>，畫面會更大；再點一次可還原。
+          {/* Arrow pointing down at the button */}
+          <span className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-x-[7px] border-x-transparent border-t-[7px] border-t-[#e6be63]" />
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          if (hint) closeHint();
+          toggle();
+        }}
+        title={active ? '離開全螢幕' : '全螢幕'}
+        aria-pressed={active}
+        className={`flex items-center gap-1 p-1.5 border text-xs font-hud transition-colors cursor-pointer whitespace-nowrap ${
+          hint
+            ? 'border-[#e6be63] bg-[#241c0f] text-[#fff0bf]'
+            : 'border-[#3a3428] bg-[#151822] text-[#c7b68d] hover:border-[#b89448] hover:text-[#f3dca0]'
+        }`}
+      >
+        {active ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
+        {touch && <span>{active ? '還原' : '全螢幕'}</span>}
+      </button>
+    </span>
   );
 }
 

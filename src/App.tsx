@@ -2277,7 +2277,7 @@ export default function App() {
                 <ZoomOut className="w-3.5 h-3.5" />
               </button>
               {/* Fullscreen toggle (hidden where the browser has no Fullscreen API, e.g. iPhone Safari) */}
-              <FullscreenButton />
+              <FullscreenButton touch={touchPrimary} inGame={screen === 'playing'} />
             </div>
 
             {/* Class Skill (Right-Click) */}
