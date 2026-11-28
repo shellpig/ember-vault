@@ -1,0 +1,17 @@
+{
+  "name": "Embervault 燼窖",
+  "short_name": "Embervault",
+  "description": "3D 等角視角程序化地城探索動作 RPG，單刷或 1–4 人協力。",
+  "lang": "zh-Hant",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#090a0f",
+  "theme_color": "#090a0f",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

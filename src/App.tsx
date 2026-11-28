@@ -27,6 +27,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { TouchControls, useTouchPrimary } from './components/TouchControls';
+import { FullscreenButton, HomeScreenHint } from './components/Fullscreen';
 import { EmbervaultEngine } from './game/engine';
 import { HERO_CLASSES, HeroClassId, UpgradeAccent } from './game/classes';
 import {
@@ -1226,6 +1227,9 @@ export default function App() {
         aria-label="Embervault 3D Dungeon Viewport"
       />
 
+      {/* iPhone Safari: one-time tip to Add to Home Screen (no Fullscreen API there) */}
+      <HomeScreenHint />
+
       {/* Miniature Diorama Framing Vignette */}
       <div className="pointer-events-none absolute inset-0 diorama-vignette z-10" />
       <div className="pointer-events-none absolute top-0 left-0 right-0 h-20 tilt-blur-top z-10" />
@@ -2271,6 +2275,8 @@ export default function App() {
               >
                 <ZoomOut className="w-3.5 h-3.5" />
               </button>
+              {/* Fullscreen toggle (hidden where the browser has no Fullscreen API, e.g. iPhone Safari) */}
+              <FullscreenButton />
             </div>
 
             {/* Class Skill (Right-Click) */}
